@@ -4,17 +4,18 @@
   "private": false,
   "description": "EmbedIDE — Modern Engineering IDE for Embedded Development",
   "author": {
-    "name": "EmbedIDE",
-    "url": "https://github.com/anomalyco/EmbedIDE"
+    "name": "Kirpich-Space",
+    "email": "yamanovaes1982@gmail.com",
+    "url": "https://github.com/Kirpich-Space/EmbedIDE"
   },
   "license": "MIT",
-  "homepage": "https://github.com/anomalyco/EmbedIDE",
+  "homepage": "https://github.com/Kirpich-Space/EmbedIDE",
   "repository": {
     "type": "git",
-    "url": "https://github.com/anomalyco/EmbedIDE.git"
+    "url": "https://github.com/Kirpich-Space/EmbedIDE.git"
   },
   "bugs": {
-    "url": "https://github.com/anomalyco/EmbedIDE/issues"
+    "url": "https://github.com/Kirpich-Space/EmbedIDE/issues"
   },
   "keywords": [
     "embedded",
@@ -64,11 +65,11 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64", "arm64"]
+          "arch": ["x64"]
         },
         {
           "target": "deb",
-          "arch": ["x64", "arm64"]
+          "arch": ["x64"]
         }
       ],
       "category": "Development",

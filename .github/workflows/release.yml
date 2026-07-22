@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    name: Linux (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx electron-builder --linux --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: release/*.AppImage
+
+  build-win:
+    name: Windows (NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/*.exe
+
+  build-mac:
+    name: macOS (DMG)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx electron-builder --mac --x64 --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: release/*.dmg
+
+  create-release:
+    name: Create Release
+    needs: [build-linux, build-win, build-mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+
+      - name: Generate release body
+        run: |
+          echo "## EmbedIDE ${{ github.ref_name }}" > release-notes.md
+          echo "" >> release-notes.md
+          echo "Download the installer for your platform:" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "| Platform | File |" >> release-notes.md
+          echo "|----------|------|" >> release-notes.md
+          echo "| Linux | \`embed-ide-*-x86_64.AppImage\` |" >> release-notes.md
+          echo "| Windows | \`embed-ide-Setup-*.exe\` |" >> release-notes.md
+          echo "| macOS (Intel) | \`embed-ide-*-x64.dmg\` |" >> release-notes.md
+          echo "| macOS (Apple Silicon) | \`embed-ide-*-arm64.dmg\` |" >> release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: EmbedIDE ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            linux-appimage/*.AppImage
+            windows-installer/*.exe
+            macos-dmg/*.dmg
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
