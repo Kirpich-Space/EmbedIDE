@@ -2,7 +2,7 @@
   "name": "embed-ide",
   "version": "0.2.0",
   "private": false,
-  "description": "EmbedIDE — Modern Engineering IDE for Embedded Development",
+  "description": "EmbedIDE \u2014 Modern Engineering IDE for Embedded Development",
   "author": {
     "name": "Kirpich-Space",
     "email": "yamanovaes1982@gmail.com",
@@ -45,7 +45,7 @@
   "build": {
     "appId": "com.embedide.app",
     "productName": "EmbedIDE",
-    "copyright": "Copyright © 2024 EmbedIDE",
+    "copyright": "Copyright \u00a9 2024 EmbedIDE",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -65,11 +65,15 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Development",
@@ -80,7 +84,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icons/icon.ico",
@@ -99,7 +105,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "build/icons/512.png",
