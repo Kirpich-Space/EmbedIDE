@@ -5,6 +5,8 @@ const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial')
 const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, TEMPLATES } = require('./project');
 const fs = require('fs');
 
+app.disableHardwareAcceleration();
+
 let mainWindow;
 let serialConnection = null;
 let contentCache = {};
@@ -20,12 +22,14 @@ function sanitizePath(userPath, projectDir) {
 }
 
 function createWindow() {
+  const isWin = process.platform === 'win32'
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
     minWidth: 1100,
     minHeight: 700,
-    frame: false,
+    frame: true,
+    ...(isWin ? { titleBarStyle: 'hidden' } : { frame: false }),
     show: true,
     backgroundColor: '#0A0A0A',
     backgroundThrottling: false,
