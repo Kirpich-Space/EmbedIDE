@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-linux:
     name: Linux (AppImage)
@@ -19,9 +22,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx electron-builder --linux --x64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx electron-builder --linux --x64 --publish=never
 
       - uses: actions/upload-artifact@v4
         with:
@@ -41,9 +42,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx electron-builder --win --x64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx electron-builder --win --x64 --publish=never
 
       - uses: actions/upload-artifact@v4
         with:
@@ -63,9 +62,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx electron-builder --mac --x64 --arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx electron-builder --mac --x64 --arm64 --publish=never
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,8 +73,6 @@ jobs:
     name: Create Release
     needs: [build-linux, build-win, build-mac]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
