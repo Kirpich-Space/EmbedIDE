@@ -1,0 +1,214 @@
+.project-dialog {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 520px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.project-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.project-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+}
+
+.project-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.project-types {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.project-type-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: var(--bg);
+}
+
+.project-type-card:hover {
+  border-color: var(--accent);
+}
+
+.project-type-active {
+  border-color: var(--accent) !important;
+  background: var(--accent-glow);
+}
+
+.project-type-icon {
+  font-size: 20px;
+}
+
+.project-type-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-type-ext {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  margin-left: auto;
+}
+
+.project-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.project-info code {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+}
+
+.project-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.project-btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid var(--border);
+}
+
+.project-btn-cancel {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.project-btn-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.project-btn-create {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border-color: var(--accent);
+}
+
+.project-btn-create:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.project-btn-create:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ===== FileDialog / ConfirmDialog ===== */
+.dialog-location {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.dialog-location code {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+}
+
+.dialog-extensions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.dialog-ext-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.dialog-ext-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.dialog-ext-active {
+  background: var(--accent);
+  color: var(--button-text);
+  border-color: var(--accent);
+}
+
+.confirm-dialog {
+  width: 400px;
+}
+
+.confirm-message {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.project-btn-danger {
+  background: rgba(232, 17, 35, 0.15);
+  color: #E81123;
+  border-color: rgba(232, 17, 35, 0.3);
+}
+
+.project-btn-danger:hover:not(:disabled) {
+  background: rgba(232, 17, 35, 0.25);
+  color: #FF4444;
+}
+
+.btn-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}

@@ -1,0 +1,158 @@
+.output-panel {
+  background: var(--output-bg);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  min-height: 110px;
+}
+
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.output-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+}
+
+.output-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.output-filters {
+  display: flex;
+  gap: 2px;
+}
+
+.output-filter-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.1s;
+}
+
+.output-filter-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.output-filter-active {
+  color: var(--accent) !important;
+  background: var(--bg-active) !important;
+}
+
+.output-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.output-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: all 0.1s;
+}
+
+.output-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.output-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.output-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.output-body::-webkit-scrollbar-track {
+  background: var(--scrollbar-bg);
+}
+
+.output-body::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+.output-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 2px 14px;
+  min-height: 20px;
+}
+
+.output-line:hover {
+  background: var(--bg-hover);
+}
+
+.output-time {
+  color: var(--text-secondary);
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 68px;
+  opacity: 0.5;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.output-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  min-width: 48px;
+  text-align: center;
+}
+
+.output-info .output-badge {
+  background: rgba(100, 136, 234, 0.15);
+  color: #6488EA;
+}
+
+.output-warn .output-badge {
+  background: rgba(255, 204, 0, 0.12);
+  color: #BF8C00;
+}
+
+.output-error .output-badge {
+  background: rgba(255, 60, 60, 0.12);
+  color: #E03030;
+}
+
+.output-success .output-badge {
+  background: rgba(62, 207, 142, 0.12);
+  color: #2EA073;
+}
+
+.output-text {
+  color: var(--text);
+  flex: 1;
+}

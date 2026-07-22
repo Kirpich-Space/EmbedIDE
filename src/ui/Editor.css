@@ -1,0 +1,200 @@
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--editor-bg);
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.editor-tabs {
+  display: flex;
+  background: var(--tab-inactive-bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 38px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+
+.editor-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor-tabs::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 2px;
+}
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border-radius: 6px 6px 0 0;
+  margin-top: 2px;
+  animation: tabFadeIn 0.15s ease-out;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.editor-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.editor-tab-active {
+  color: var(--text);
+  background: var(--tab-active-bg);
+  border-bottom: 1px solid var(--tab-active-bg);
+  margin-bottom: -1px;
+  margin-top: 0;
+  padding-top: 10px;
+}
+
+.tab-lang-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tab-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.tab-dirty {
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.tab-close {
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 3px;
+  opacity: 0;
+}
+
+.editor-tab:hover .tab-close {
+  opacity: 0.6;
+}
+
+.tab-close:hover {
+  opacity: 1 !important;
+  background: var(--bg-active);
+}
+
+.editor-cm-wrapper {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.editor-cm-wrapper .cm-editor {
+  height: 100%;
+}
+
+.editor-cm-wrapper .cm-scroller {
+  overflow: auto;
+}
+
+.editor-cm-wrapper .cm-gutters {
+  border-right: 1px solid var(--border) !important;
+  background: var(--editor-bg) !important;
+}
+
+.editor-cm-wrapper .cm-lineNumbers .cm-gutterElement {
+  color: var(--text-secondary) !important;
+  opacity: 0.5;
+  padding: 0 12px 0 6px !important;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.editor-cm-wrapper .cm-content {
+  caret-color: var(--accent);
+  padding: 10px 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.editor-cm-wrapper .cm-line {
+  padding: 0 16px;
+}
+
+.editor-cm-wrapper .cm-selectionBackground {
+  background: var(--accent-glow) !important;
+}
+
+.editor-cm-wrapper .cm-activeLine {
+  background: var(--bg-hover) !important;
+}
+
+.editor-cm-wrapper .cm-activeLineGutter {
+  background: var(--bg-hover) !important;
+}
+
+.editor-cm-wrapper .cm-selectionMatch {
+  background: rgba(255,107,0,0.15) !important;
+}
+
+.editor-cm-wrapper .cm-foldPlaceholder {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-secondary);
+}
+
+.editor-cm-wrapper .cm-matchingBracket {
+  background: rgba(255,107,0,0.2) !important;
+  outline: 1px solid var(--accent) !important;
+}
+
+.editor-cm-wrapper .cm-tooltip {
+  border: 1px solid var(--border) !important;
+  background: var(--bg-panel) !important;
+  color: var(--text) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+.editor-ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.editor-ctx-menu {
+  position: fixed;
+  z-index: 1000;
+}
+
+.editor-panel .ctx-menu {
+  position: fixed;
+  z-index: 1000;
+}
+
+.editor-cm-wrapper .cm-tooltip-autocomplete {
+  & > ul > li[aria-selected] {
+    background: var(--accent-glow) !important;
+    color: var(--accent) !important;
+  }
+}
