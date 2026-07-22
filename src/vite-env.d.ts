@@ -63,6 +63,10 @@ interface ElectronAPI {
   onSerialData: (cb: (data: string) => void) => () => void
   onSerialError: (cb: (data: string) => void) => () => void
 
+  getDefaultProjectsDir: () => Promise<string>
+  loadSettings: () => Promise<any>
+  saveSettings: (settings: any) => Promise<boolean>
+
   onMenuNewProject: (cb: () => void) => () => void
   onMenuOpenProject: (cb: () => void) => () => void
   onMenuSave: (cb: () => void) => () => void

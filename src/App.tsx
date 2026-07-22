@@ -19,8 +19,6 @@ import { getFlatTranslations } from './core/translations'
 import type { FileNode, EditorTabData, BuildMessage, EditorSettings, ProjectConfig, MemoryUsage } from './core/types'
 import type { LangCode } from './core/translations'
 
-const PROJECTS_DIR = '/home/kirpich/Projects'
-
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
     super(props)
@@ -63,7 +61,7 @@ function AppContent() {
   const [isBuilding, setIsBuilding] = useState(false)
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(() => {
     try { return JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '') }
-    catch { return { fontSize: 14, tabSize: 4, fontFamily: "'JetBrains Mono', monospace", wordWrap: false, minimap: false, lineNumbers: true, cursorBlinkRate: 1200, smoothScroll: true, bracketMatch: true, language: 'en' } }
+    catch { return { fontSize: 14, tabSize: 4, fontFamily: "'JetBrains Mono', monospace", wordWrap: false, minimap: false, lineNumbers: true, cursorBlinkRate: 1200, smoothScroll: true, bracketMatch: true, language: 'en', theme: 'dark' } }
   })
 
   const t = useMemo(() => {
@@ -99,10 +97,16 @@ function AppContent() {
 
   useEffect(() => {
     window.electronAPI?.detectToolchains().then(setToolchains)
+    window.electronAPI?.loadSettings().then(saved => {
+      if (saved && Object.keys(saved).length > 0 && !localStorage.getItem('embed-ide-editor-settings')) {
+        setEditorSettings(prev => ({ ...prev, ...saved }))
+      }
+    })
   }, [])
 
   useEffect(() => {
     localStorage.setItem('embed-ide-editor-settings', JSON.stringify(editorSettings))
+    window.electronAPI?.saveSettings(editorSettings)
   }, [editorSettings])
 
   // IPC listeners with proper cleanup
@@ -215,7 +219,8 @@ function AppContent() {
   }, [addOutput])
 
   const handleCreateProject = useCallback(async (name: string, type: string) => {
-    const dir = await window.electronAPI!.createProject(PROJECTS_DIR, name, type)
+    const projectsDir = await window.electronAPI!.getDefaultProjectsDir()
+    const dir = await window.electronAPI!.createProject(projectsDir, name, type)
     setProjectDialogOpen(false)
     await loadProject(dir, name, type)
   }, [loadProject])

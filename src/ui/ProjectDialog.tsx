@@ -13,6 +13,7 @@ export function ProjectDialog({ onCreate, onClose }: ProjectDialogProps) {
   const [name, setName] = useState(defaultName)
   const [type, setType] = useState('rust')
   const [templates, setTemplates] = useState<{id: string, name: string, ext: string}[]>([])
+  const [projectsDir, setProjectsDir] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -20,6 +21,7 @@ export function ProjectDialog({ onCreate, onClose }: ProjectDialogProps) {
 
   useEffect(() => {
     window.electronAPI?.getProjectTemplates().then(setTemplates)
+    window.electronAPI?.getDefaultProjectsDir().then(setProjectsDir)
     inputRef.current?.select()
   }, [])
 
@@ -88,7 +90,7 @@ export function ProjectDialog({ onCreate, onClose }: ProjectDialogProps) {
           {error && <div className="project-error">{error}</div>}
 
           <div className="project-info">
-            {t('projectDialog.location', { path: `/home/kirpich/Projects/${name}` })}
+            {t('projectDialog.location', { path: `${projectsDir || '...'}/${name}` })}
           </div>
         </div>
 

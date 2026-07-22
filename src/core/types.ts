@@ -75,6 +75,7 @@ export interface EditorSettings {
   smoothScroll: boolean
   bracketMatch: boolean
   language: string
+  theme: string
 }
 
 export interface ProjectConfig {

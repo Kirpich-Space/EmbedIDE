@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSerialData: (cb) => on('serial:data', cb),
   onSerialError: (cb) => on('serial:error', cb),
 
+  // App info & settings
+  getDefaultProjectsDir: () => ipcRenderer.invoke('app:get-default-projects-dir'),
+  loadSettings: () => ipcRenderer.invoke('settings:load'),
+  saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
+
   // Menu events
   onMenuNewProject: (cb) => on('menu:new-project', cb),
   onMenuOpenProject: (cb) => on('menu:open-project', cb),

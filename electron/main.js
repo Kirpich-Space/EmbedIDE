@@ -12,6 +12,7 @@ let serialConnection = null;
 let contentCache = {};
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
 function sanitizePath(userPath, projectDir) {
   const resolved = path.resolve(projectDir, userPath)
@@ -148,7 +149,7 @@ function buildAppMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About EmbedIDE',
-              message: 'EmbedIDE v0.1.0',
+              message: 'EmbedIDE v0.3.0',
               detail: 'An embedded development IDE for Rust, C, C++, and Assembly.',
             });
           },
@@ -314,4 +315,28 @@ ipcMain.handle('serial:disconnect', () => {
   disconnectSerial();
   serialConnection = null;
   return true;
+});
+
+// App info
+ipcMain.handle('app:get-default-projects-dir', () => {
+  const docs = app.getPath('documents');
+  return path.join(docs, 'EmbedIDE-Projects');
+});
+
+// Settings persistence
+ipcMain.handle('settings:load', () => {
+  try {
+    if (fs.existsSync(SETTINGS_PATH)) {
+      return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    }
+  } catch {}
+  return {};
+});
+
+ipcMain.handle('settings:save', (_e, settings) => {
+  try {
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
+    return true;
+  } catch { return false; }
 });
