@@ -26,15 +26,16 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     frame: false,
+    show: true,
+    backgroundColor: '#0A0A0A',
+    backgroundThrottling: false,
+    title: 'EmbedIDE',
+    icon: path.join(__dirname, '..', 'build', 'icons', '256.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
-    backgroundColor: '#0A0A0A',
-    show: false,
-    title: 'EmbedIDE',
-    icon: path.join(__dirname, '..', 'build', 'icons', '256.png'),
   });
 
   if (VITE_DEV_SERVER_URL) {
@@ -43,7 +44,9 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow.isVisible()) mainWindow.show();
+  });
 
   mainWindow.on('maximize', () => mainWindow.webContents.send('window:maximized-change', true));
   mainWindow.on('unmaximize', () => mainWindow.webContents.send('window:maximized-change', false));
