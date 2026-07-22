@@ -26,8 +26,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: release/*.AppImage
+          name: linux-installers
+          path: |
+            release/*.AppImage
+            release/*.deb
 
   build-win:
     name: Windows (NSIS)
@@ -86,7 +88,8 @@ jobs:
           echo "" >> release-notes.md
           echo "| Platform | File |" >> release-notes.md
           echo "|----------|------|" >> release-notes.md
-          echo "| Linux | \`embed-ide-*-x86_64.AppImage\` |" >> release-notes.md
+          echo "| Linux (AppImage) | \`embed-ide-*-x86_64.AppImage\` |" >> release-notes.md
+          echo "| Linux (Debian) | \`embed-ide-*-amd64.deb\` |" >> release-notes.md
           echo "| Windows | \`embed-ide-Setup-*.exe\` |" >> release-notes.md
           echo "| macOS (Intel) | \`embed-ide-*-x64.dmg\` |" >> release-notes.md
           echo "| macOS (Apple Silicon) | \`embed-ide-*-arm64.dmg\` |" >> release-notes.md
@@ -96,7 +99,8 @@ jobs:
           name: EmbedIDE ${{ github.ref_name }}
           body_path: release-notes.md
           files: |
-            linux-appimage/*.AppImage
+            linux-installers/*.AppImage
+            linux-installers/*.deb
             windows-installer/*.exe
             macos-dmg/*.dmg
           prerelease: true
