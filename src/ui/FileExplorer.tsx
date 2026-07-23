@@ -10,11 +10,11 @@ interface ContextMenuState {
 }
 
 interface FileExplorerProps {
-  files: any[]
+  files: FileNode[]
   projectDir?: string
   projectType?: string
   onFileSelect: (node: FileNode) => void
-  onFilesChange?: (files: any[]) => void
+  onFilesChange?: (files: FileNode[]) => void
   activeFileId: string | null
   onNewFile?: (parentDir?: string) => void
   onNewFolder?: (parentDir?: string) => void

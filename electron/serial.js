@@ -1,6 +1,11 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+
+const PYTHON_CMD = process.platform === 'win32'
+  ? (() => { try { require('child_process').execSync('python --version', { stdio: 'ignore' }); return 'python' } catch { return 'python3' } })()
+  : 'python3'
 
 let pythonScript = '';
 let activeProcess = null;
@@ -8,7 +13,7 @@ let activeProcess = null;
 function getPythonScript() {
   if (pythonScript) return pythonScript;
 
-  pythonScript = path.join(require('os').tmpdir(), 'embedide_serial_mon.py');
+  pythonScript = path.join(os.tmpdir(), 'embedide_serial_mon.py');
   const code = `#!/usr/bin/env python3
 import sys, time, json, threading
 
@@ -78,7 +83,7 @@ if __name__ == "__main__":
 function listSerialPorts() {
   return new Promise((resolve, reject) => {
     const script = getPythonScript();
-    const proc = spawn('python3', [script, 'list']);
+    const proc = spawn(PYTHON_CMD, [script, 'list']);
     let output = '';
     proc.stdout.on('data', d => output += d.toString());
     proc.on('close', code => {
@@ -94,7 +99,7 @@ function listSerialPorts() {
 function connectSerial(port, baud, onData, onError) {
   disconnectSerial();
   const script = getPythonScript();
-  const proc = spawn('python3', [script, port, String(baud)]);
+  const proc = spawn(PYTHON_CMD, [script, port, String(baud)]);
   activeProcess = proc;
 
   proc.stdout.on('data', (data) => {

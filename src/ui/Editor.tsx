@@ -1,7 +1,7 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars, drawSelection, rectangularSelection } from '@codemirror/view'
 import { EditorState, Compartment } from '@codemirror/state'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands'
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
@@ -241,6 +241,8 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
     const view = viewRef.current
     if (!view) return
     view.focus()
+    if (cmd === 'undo') { undo(view); setContextMenu(null); return }
+    if (cmd === 'redo') { redo(view); setContextMenu(null); return }
     document.execCommand(cmd)
     setContextMenu(null)
   }, [])

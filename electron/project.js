@@ -1,6 +1,8 @@
 const path = require('path');
 const fs = require('fs');
 
+const ALLOWED_HIDDEN = new Set(['.cargo', '.gitignore', '.editorconfig', 'rust-toolchain.toml'])
+
 const TEMPLATES = {
   rust: {
     name: 'Rust (Cortex-M)',
@@ -363,7 +365,7 @@ function listProjectFiles(projectDir) {
     for (const entry of entries) {
       const relPath = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.name === 'build' || entry.name === 'target' || entry.name === 'node_modules') continue;
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.') && !ALLOWED_HIDDEN.has(entry.name)) continue;
       if (entry.isDirectory()) {
         result.push({ id: relPath, name: entry.name, type: 'directory' });
         walk(path.join(dir, entry.name), relPath);
@@ -420,7 +422,7 @@ function searchInFiles(projectDir, query) {
   function walk(dir) {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.name === 'target' || entry.name === 'build' || entry.name === 'node_modules') continue;
+      if ((entry.name.startsWith('.') && !ALLOWED_HIDDEN.has(entry.name)) || entry.name === 'target' || entry.name === 'build' || entry.name === 'node_modules') continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);

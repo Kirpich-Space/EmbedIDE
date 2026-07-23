@@ -9,13 +9,11 @@ app.disableHardwareAcceleration();
 
 let mainWindow;
 let serialConnection = null;
-let contentCache = {};
-
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
-function sanitizePath(userPath, projectDir) {
-  const resolved = path.resolve(projectDir, userPath)
+function sanitizePath(projectDir, targetPath) {
+  const resolved = path.resolve(projectDir, targetPath)
   if (!resolved.startsWith(path.resolve(projectDir))) {
     throw new Error('Path traversal denied')
   }
@@ -149,7 +147,7 @@ function buildAppMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About EmbedIDE',
-              message: 'EmbedIDE v0.3.0',
+              message: 'EmbedIDE v1.0.0',
               detail: 'An embedded development IDE for Rust, C, C++, and Assembly.',
             });
           },
@@ -205,8 +203,8 @@ ipcMain.handle('project:write-file', (_e, filePath, content) => {
 });
 
 ipcMain.handle('project:create-file', (_e, dir, name) => {
-  const safeDir = sanitizePath('.', dir)
-  return createProjectFile(safeDir, name);
+  if (name.includes('..') || name.includes('~') || path.isAbsolute(name)) throw new Error('Invalid name')
+  return createProjectFile(dir, name);
 });
 
 ipcMain.handle('project:delete-file', (_e, filePath) => {

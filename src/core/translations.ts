@@ -479,6 +479,10 @@ const zh: DeepRecord = {
     noProject: '没有打开的项目',
     project: '项目',
   },
+  errorBoundary: {
+    title: '出错了',
+    restart: '重新启动',
+  },
   toolbar: {
     title: 'EmbedIDE',
     newProject: '新建项目',
@@ -692,6 +696,10 @@ const ja: DeepRecord = {
     success: '成功',
     noProject: 'プロジェクトが開かれていません',
     project: 'プロジェクト',
+  },
+  errorBoundary: {
+    title: '問題が発生しました',
+    restart: '再起動',
   },
   toolbar: {
     title: 'EmbedIDE',
@@ -907,6 +915,10 @@ const de: DeepRecord = {
     noProject: 'Kein Projekt geöffnet',
     project: 'Projekt',
   },
+  errorBoundary: {
+    title: 'Etwas ist schiefgelaufen',
+    restart: 'Neustarten',
+  },
   toolbar: {
     title: 'EmbedIDE',
     newProject: 'Neues Projekt',
@@ -1120,6 +1132,10 @@ const fr: DeepRecord = {
     success: 'Succès',
     noProject: 'Aucun projet ouvert',
     project: 'Projet',
+  },
+  errorBoundary: {
+    title: 'Quelque chose a mal tourné',
+    restart: 'Redémarrer',
   },
   toolbar: {
     title: 'EmbedIDE',

@@ -15,7 +15,7 @@ import { StatusBar } from './ui/StatusBar'
 import { MemoryAnalyzer } from './ui/MemoryAnalyzer'
 import { PeripheralViewer } from './ui/PeripheralViewer'
 import { TranslationProvider } from './core/TranslationContext'
-import { getFlatTranslations } from './core/translations'
+import { getFlatTranslations, LANG_LABELS } from './core/translations'
 import type { FileNode, EditorTabData, BuildMessage, EditorSettings, ProjectConfig, MemoryUsage } from './core/types'
 import type { LangCode } from './core/translations'
 
@@ -65,7 +65,8 @@ function AppContent() {
   })
 
   const t = useMemo(() => {
-    const dict = getFlatTranslations(editorSettings.language as LangCode)
+    const lang = (Object.keys(LANG_LABELS).includes(editorSettings.language) ? editorSettings.language : 'en') as LangCode
+    const dict = getFlatTranslations(lang)
     return (key: string, params?: Record<string, string | number>) => {
       let val = dict[key] ?? key
       if (params) {
@@ -169,7 +170,8 @@ function AppContent() {
       api.onMenuSaveAll(() => saveAllDirty()),
       api.onMenuSettings(() => setSettingsOpen(true)),
       api.onMenuFind(() => {
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }))
+        const cm = document.querySelector('.cm-editor') as HTMLElement
+        cm?.focus()
       }),
       api.onMenuToggleExplorer(() => setShowLeftPanel(v => !v)),
       api.onMenuToggleAgents(() => setShowRightPanel(v => !v)),
@@ -256,11 +258,8 @@ function AppContent() {
     const proj = projectRef.current
     if (node.type !== 'file' || !proj) return
     const filePath = `${proj.dir}/${node.id}`
-    setOpenTabs(prev => {
-      const existing = prev.find(t => t.id === filePath)
-      if (existing) { setActiveTabId(filePath); return prev }
-      return prev
-    })
+    const existing = openTabsRef.current.find(t => t.id === filePath)
+    if (existing) { setActiveTabId(filePath); return }
     try {
       const content = await window.electronAPI!.readProjectFile(filePath)
       openFileTab({ id: filePath, name: node.name, language: node.language }, content)

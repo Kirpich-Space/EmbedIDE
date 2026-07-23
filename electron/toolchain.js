@@ -108,7 +108,13 @@ function buildProject(projectDir, projectType, onOutput) {
 
 function cancelBuild() {
   if (currentBuildProc) {
-    try { currentBuildProc.kill('SIGTERM') } catch {}
+    try {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(currentBuildProc.pid), '/f', '/t'])
+      } else {
+        currentBuildProc.kill('SIGTERM')
+      }
+    } catch {}
     currentBuildProc = null;
     return true;
   }
@@ -142,7 +148,12 @@ function flashBoard(projectDir, projectType, config, onOutput) {
     }
 
     if (!detectToolchains().openocd) {
-      reject(new Error('OpenOCD not found. Install it: sudo apt install openocd'));
+      const installGuide = process.platform === 'win32'
+        ? 'Download from https://github.com/openocd-org/openocd/releases'
+        : process.platform === 'darwin'
+          ? 'Install with: brew install openocd'
+          : 'Install with: sudo apt install openocd'
+      reject(new Error(`OpenOCD not found. ${installGuide}`));
       return;
     }
 
