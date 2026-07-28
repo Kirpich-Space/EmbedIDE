@@ -1,6 +1,8 @@
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
+const { readProjectMeta } = require('./project');
 
 let currentBuildProc = null;
 
@@ -57,6 +59,32 @@ function spawnProcess(cmd, args, cwd, onOutput) {
   });
 
   return { proc, stdout, stderr };
+}
+
+function readCargoPackageName(projectDir) {
+  try {
+    const toml = fs.readFileSync(path.join(projectDir, 'Cargo.toml'), 'utf8');
+    const m = toml.match(/^\s*name\s*=\s*"([^"]+)"/m);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function readMakefileTarget(projectDir) {
+  try {
+    const mk = fs.readFileSync(path.join(projectDir, 'Makefile'), 'utf8');
+    const m = mk.match(/^\s*TARGET\s*=\s*(\S+)/m);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveBoard(projectDir, config = {}) {
+  const meta = readProjectMeta(projectDir);
+  const boardId = config.boardId || meta?.boardId || DEFAULT_BOARD_ID;
+  return getBoardOrDefault(boardId);
 }
 
 function buildProject(projectDir, projectType, onOutput) {
@@ -121,27 +149,50 @@ function cancelBuild() {
   return false;
 }
 
-function flashBoard(projectDir, projectType, config, onOutput) {
+function detectElf(projectDir, projectType, elfPath) {
+  if (elfPath && fs.existsSync(elfPath)) return elfPath;
+
+  const baseName = path.basename(projectDir);
+  const cargoName = readCargoPackageName(projectDir) || baseName;
+  const makeTarget = readMakefileTarget(projectDir) || baseName;
+  const board = resolveBoard(projectDir);
+  const rustTarget = board.rustTarget;
+
+  const candidates = [];
+
+  if (projectType === 'rust') {
+    candidates.push(
+      path.join(projectDir, 'target', rustTarget, 'release', cargoName),
+      path.join(projectDir, 'target', rustTarget, 'release', cargoName + '.elf'),
+      path.join(projectDir, 'target', 'thumbv7em-none-eabihf', 'release', cargoName),
+      path.join(projectDir, 'target', 'release', cargoName),
+    );
+  } else {
+    candidates.push(
+      path.join(projectDir, 'build', makeTarget + '.elf'),
+      path.join(projectDir, 'build', baseName + '.elf'),
+    );
+  }
+
+  // Fallback scan
+  candidates.push(
+    path.join(projectDir, 'target', rustTarget, 'release', baseName),
+    path.join(projectDir, 'build', path.basename(projectDir) + '.elf'),
+  );
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function flashBoard(projectDir, projectType, config = {}, onOutput) {
   return new Promise((resolve, reject) => {
-    const { adapter = 'stlink', target = 'stm32f4x', elfPath } = config;
+    const board = resolveBoard(projectDir, config);
+    const adapter = config.adapter || board.defaultAdapter || 'stlink';
+    const target = config.target || board.openocdTarget;
 
-    const detectElf = () => {
-      if (elfPath && fs.existsSync(elfPath)) return elfPath;
-      const candidates = [
-        path.join(projectDir, 'target', 'thumbv7em-none-eabihf', 'release', path.basename(projectDir)),
-        path.join(projectDir, 'target', 'release', path.basename(projectDir)),
-        path.join(projectDir, 'build', path.basename(projectDir) + '.elf'),
-      ];
-      for (const c of candidates) {
-        for (const ext of ['', '.elf']) {
-          const p = c + ext;
-          if (fs.existsSync(p)) return p;
-        }
-      }
-      return null;
-    };
-
-    const elf = detectElf();
+    const elf = detectElf(projectDir, projectType, config.elfPath);
     if (!elf) {
       reject(new Error('No ELF file found. Build the project first.'));
       return;
@@ -163,7 +214,7 @@ function flashBoard(projectDir, projectType, config, onOutput) {
       '-c', `program ${elf} verify reset exit`,
     ];
 
-    onOutput?.({ type: 'stdout', text: `Flashing ${elf} via ${adapter}...\n` });
+    onOutput?.({ type: 'stdout', text: `Flashing ${elf} via ${adapter} → ${board.mcu} (${target})...\n` });
 
     const proc = spawn('openocd', openocdArgs, {
       cwd: projectDir,
@@ -175,7 +226,7 @@ function flashBoard(projectDir, projectType, config, onOutput) {
     proc.stderr.on('data', (data) => onOutput?.({ type: 'stderr', text: data.toString() }));
 
     proc.on('close', (code) => {
-      if (code === 0) resolve({ code });
+      if (code === 0) resolve({ code, boardId: board.id });
       else reject(new Error(`Flash failed with code ${code}`));
     });
 
@@ -183,4 +234,4 @@ function flashBoard(projectDir, projectType, config, onOutput) {
   });
 }
 
-module.exports = { detectToolchains, buildProject, flashBoard, cancelBuild };
+module.exports = { detectToolchains, buildProject, flashBoard, cancelBuild, detectElf, resolveBoard };

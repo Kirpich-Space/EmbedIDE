@@ -2,7 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const { detectToolchains, buildProject, flashBoard, cancelBuild } = require('./toolchain');
 const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
-const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, TEMPLATES } = require('./project');
+const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, getTemplateList, readProjectMeta } = require('./project');
+const { listBoards, getBoard, getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const fs = require('fs');
 
 app.disableHardwareAcceleration();
@@ -30,7 +31,7 @@ function createWindow() {
     frame: true,
     ...(isWin ? { titleBarStyle: 'hidden' } : { frame: false }),
     show: true,
-    backgroundColor: '#0A0A0A',
+    backgroundColor: '#000000',
     backgroundThrottling: false,
     title: 'EmbedIDE',
     icon: path.join(__dirname, '..', 'build', 'icons', '256.png'),
@@ -185,9 +186,12 @@ ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 ipcMain.handle('toolchain:detect', () => detectToolchains());
 
 // Project management
-ipcMain.handle('project:create', (_e, rootDir, name, type) => {
-  return createProject(rootDir, name, type);
+ipcMain.handle('project:create', (_e, rootDir, name, type, boardId) => {
+  return createProject(rootDir, name, type, boardId || DEFAULT_BOARD_ID);
 });
+
+ipcMain.handle('boards:list', () => listBoards());
+ipcMain.handle('boards:get', (_e, boardId) => getBoard(boardId));
 
 ipcMain.handle('project:list-files', (_e, projectDir) => {
   return listProjectFiles(projectDir);
@@ -227,23 +231,46 @@ ipcMain.handle('project:open', async () => {
   if (result.canceled || !result.filePaths[0]) return null;
 
   const dir = result.filePaths[0];
-  const name = path.basename(dir);
-  let type = 'c';
+  const meta = readProjectMeta(dir);
+  const name = meta?.name || path.basename(dir);
+  let type = meta?.type || 'c';
+  const boardId = meta?.boardId || DEFAULT_BOARD_ID;
 
-  const files = fs.readdirSync(dir);
-  if (files.includes('Cargo.toml')) type = 'rust';
-  else if (files.some(f => f.endsWith('.cpp'))) type = 'cpp';
-  else if (files.some(f => f.endsWith('.S') || f.endsWith('.s'))) type = 'asm';
+  if (!meta?.type) {
+    const files = fs.readdirSync(dir);
+    if (files.includes('Cargo.toml')) type = 'rust';
+    else if (files.some(f => f.endsWith('.cpp'))) type = 'cpp';
+    else if (files.some(f => f.endsWith('.S') || f.endsWith('.s'))) type = 'asm';
+  }
 
-  return { dir, name, type };
+  const board = getBoardOrDefault(boardId);
+  return {
+    dir,
+    name,
+    type,
+    boardId: board.id,
+    boardName: board.name,
+    flashKb: board.flashKb,
+    ramKb: board.ramKb,
+    peripherals: board.peripherals || [],
+  };
 });
 
-ipcMain.handle('project:get-templates', () => {
-  return Object.entries(TEMPLATES).map(([key, t]) => ({
-    id: key,
-    name: t.name,
-    ext: t.ext,
-  }));
+ipcMain.handle('project:get-templates', () => getTemplateList());
+
+ipcMain.handle('project:get-meta', (_e, dir) => {
+  const meta = readProjectMeta(dir);
+  if (!meta) return null;
+  const board = getBoardOrDefault(meta.boardId);
+  return {
+    ...meta,
+    boardName: board.name,
+    flashKb: board.flashKb,
+    ramKb: board.ramKb,
+    peripherals: board.peripherals || [],
+    openocdTarget: board.openocdTarget,
+    defaultAdapter: board.defaultAdapter,
+  };
 });
 
 // Build

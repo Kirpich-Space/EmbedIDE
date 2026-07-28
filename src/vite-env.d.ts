@@ -21,6 +21,52 @@ interface ProjectTemplate {
   ext: string
 }
 
+interface BoardInfo {
+  id: string
+  name: string
+  family: string
+  mcu: string
+  flashKb: number
+  ramKb: number
+  cpu: string
+}
+
+interface BoardDetail extends BoardInfo {
+  fpu?: string
+  floatAbi?: string
+  flashOrigin?: string
+  ramOrigin?: string
+  cDefine?: string
+  openocdTarget?: string
+  defaultAdapter?: string
+  rustTarget?: string
+  peripherals?: string[]
+}
+
+interface OpenedProject {
+  dir: string
+  name: string
+  type: string
+  boardId?: string
+  boardName?: string
+  flashKb?: number
+  ramKb?: number
+  peripherals?: string[]
+}
+
+interface ProjectMeta {
+  name: string
+  type: string
+  boardId: string
+  boardName?: string
+  flashKb?: number
+  ramKb?: number
+  peripherals?: string[]
+  openocdTarget?: string
+  defaultAdapter?: string
+  version?: number
+}
+
 interface BuildOutput {
   type: 'stdout' | 'stderr'
   text: string
@@ -35,12 +81,15 @@ interface ElectronAPI {
 
   detectToolchains: () => Promise<ToolchainInfo>
 
-  createProject: (rootDir: string, name: string, type: string) => Promise<string>
-  openProject: () => Promise<{dir: string, name: string, type: string} | null>
+  createProject: (rootDir: string, name: string, type: string, boardId?: string) => Promise<string>
+  openProject: () => Promise<OpenedProject | null>
   listProjectFiles: (dir: string) => Promise<{id: string, name: string, type: 'file' | 'directory', language?: string}[]>
   readProjectFile: (path: string) => Promise<string>
   writeProjectFile: (path: string, content: string) => Promise<boolean>
   getProjectTemplates: () => Promise<ProjectTemplate[]>
+  getProjectMeta: (dir: string) => Promise<ProjectMeta | null>
+  listBoards: () => Promise<BoardInfo[]>
+  getBoard: (boardId: string) => Promise<BoardDetail | null>
 
   createProjectFile: (dir: string, name: string) => Promise<boolean>
   deleteProjectFile: (path: string) => Promise<boolean>
@@ -52,7 +101,7 @@ interface ElectronAPI {
   onBuildOutput: (cb: (data: BuildOutput) => void) => () => void
   onBuildComplete: (cb: (data: {code: number, error?: string}) => void) => () => void
 
-  flashProject: (dir: string, type: string, config: any) => Promise<{success: boolean, output: BuildOutput[]}>
+  flashProject: (dir: string, type: string, config: { adapter?: string, target?: string, boardId?: string, elfPath?: string }) => Promise<{success: boolean, output: BuildOutput[]}>
   onFlashOutput: (cb: (data: BuildOutput) => void) => () => void
   onFlashComplete: (cb: (data: {code: number, error?: string}) => void) => () => void
 
@@ -64,8 +113,8 @@ interface ElectronAPI {
   onSerialError: (cb: (data: string) => void) => () => void
 
   getDefaultProjectsDir: () => Promise<string>
-  loadSettings: () => Promise<any>
-  saveSettings: (settings: any) => Promise<boolean>
+  loadSettings: () => Promise<Record<string, unknown>>
+  saveSettings: (settings: Record<string, unknown>) => Promise<boolean>
 
   onMenuNewProject: (cb: () => void) => () => void
   onMenuOpenProject: (cb: () => void) => () => void

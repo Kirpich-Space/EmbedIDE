@@ -19,7 +19,7 @@ const LANGUAGES = [
   { code: 'fr', label: 'Français' },
 ]
 
-type Tab = 'general' | 'editor' | 'themes'
+type Tab = 'general' | 'editor' | 'themes' | 'ai'
 
 export function Settings({ editorSettings, onEditorSettingsChange, onClose }: SettingsProps) {
   const { t } = useTranslation()
@@ -40,6 +40,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
           <button className={`settings-tab ${activeTab === 'general' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('general')}>{t('settings.general')}</button>
           <button className={`settings-tab ${activeTab === 'editor' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('editor')}>{t('settings.editor')}</button>
           <button className={`settings-tab ${activeTab === 'themes' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('themes')}>{t('settings.themes')}</button>
+          <button className={`settings-tab ${activeTab === 'ai' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('ai')}>{t('settings.ai')}</button>
         </div>
 
         <div className="settings-body">
@@ -96,9 +97,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   onChange={e => set({ fontFamily: e.target.value })}
                 >
                   <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
-                  <option value="'Fira Code', monospace">Fira Code</option>
-                  <option value="'Cascadia Code', monospace">Cascadia Code</option>
-                  <option value="'Source Code Pro', monospace">Source Code Pro</option>
+                  <option value="'IBM Plex Mono', monospace">IBM Plex Mono</option>
                   <option value="monospace">Default Monospace</option>
                 </select>
               </div>
@@ -189,6 +188,88 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                     {theme.name === th.name && <div className="settings-theme-check">✓</div>}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'ai' && (
+            <div className="settings-section animate-fade-in">
+              <span className="settings-section-title">{t('settings.aiPrefs')}</span>
+
+              <div className="settings-field">
+                <label className="settings-field-row">
+                  <input type="checkbox"
+                    checked={editorSettings.aiEnabled}
+                    onChange={e => set({ aiEnabled: e.target.checked })} />
+                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.aiEnabled')}</span>
+                </label>
+                <span className="settings-hint">{t('settings.aiEnabledHint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-label">{t('settings.aiMode')}</label>
+                <select
+                  className="settings-select"
+                  value={editorSettings.aiMode}
+                  onChange={e => {
+                    const mode = e.target.value as 'local' | 'cloud'
+                    if (mode === 'local') {
+                      set({
+                        aiMode: mode,
+                        aiEndpoint: editorSettings.aiEndpoint?.includes('127.0.0.1') || editorSettings.aiEndpoint?.includes('localhost')
+                          ? editorSettings.aiEndpoint
+                          : 'http://127.0.0.1:11434/v1',
+                        aiModel: editorSettings.aiMode === 'cloud' ? 'llama3.2' : editorSettings.aiModel,
+                      })
+                    } else {
+                      set({
+                        aiMode: mode,
+                        aiEndpoint: editorSettings.aiEndpoint?.startsWith('https://')
+                          ? editorSettings.aiEndpoint
+                          : 'https://api.openai.com/v1',
+                        aiModel: editorSettings.aiMode === 'local' ? 'gpt-4o' : editorSettings.aiModel,
+                      })
+                    }
+                  }}
+                  disabled={!editorSettings.aiEnabled}
+                >
+                  <option value="local">{t('settings.aiLocal')}</option>
+                  <option value="cloud">{t('settings.aiCloud')}</option>
+                </select>
+                <span className="settings-hint">{t('settings.aiLocalHint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-label">{t('settings.aiEndpoint')}</label>
+                <input
+                  className="settings-select"
+                  value={editorSettings.aiEndpoint}
+                  onChange={e => set({ aiEndpoint: e.target.value })}
+                  disabled={!editorSettings.aiEnabled}
+                />
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-label">{t('settings.aiModel')}</label>
+                <input
+                  className="settings-select"
+                  value={editorSettings.aiModel}
+                  onChange={e => set({ aiModel: e.target.value })}
+                  disabled={!editorSettings.aiEnabled}
+                />
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-label">{t('settings.aiKey')}</label>
+                <input
+                  className="settings-select"
+                  type="password"
+                  value={editorSettings.aiKey}
+                  onChange={e => set({ aiKey: e.target.value })}
+                  disabled={!editorSettings.aiEnabled || editorSettings.aiMode === 'local'}
+                  placeholder={editorSettings.aiMode === 'local' ? '—' : 'sk-...'}
+                />
+                <span className="settings-hint">{t('settings.aiKeyHint')}</span>
               </div>
             </div>
           )}

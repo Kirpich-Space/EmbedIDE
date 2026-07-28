@@ -1,4 +1,3 @@
-import { getLangColor } from '../core/utils'
 import { useTranslation } from '../core/TranslationContext'
 
 interface StatusBarProps {
@@ -6,19 +5,19 @@ interface StatusBarProps {
   col: number
   language: string
   projectType?: string
+  boardName?: string
   toolchains: ToolchainInfo | null
 }
 
-export function StatusBar({ line, col, language, projectType, toolchains }: StatusBarProps) {
+export function StatusBar({ line, col, language, projectType, boardName, toolchains }: StatusBarProps) {
   const { t } = useTranslation()
-  const mcuName = projectType === 'rust' ? t('statusBar.mcu') : projectType === 'asm' ? t('statusBar.arch') : t('statusBar.mcu')
 
   return (
     <div className="statusbar">
       <div className="statusbar-left">
         <span className="statusbar-item statusbar-mcu">
           <span className="statusbar-dot" style={{ background: '#58A6FF' }} />
-          {mcuName}
+          {boardName || t('statusBar.mcu')}
         </span>
         <span className="statusbar-separator" />
         <span className="statusbar-item">
@@ -31,15 +30,12 @@ export function StatusBar({ line, col, language, projectType, toolchains }: Stat
           {toolchains?.openocd ? t('statusBar.openocd') : t('statusBar.noDebugger')}
         </span>
         <span className="statusbar-separator" />
-        <span className="statusbar-item">{t('statusBar.clock')}</span>
-        <span className="statusbar-separator" />
         <span className="statusbar-item">{projectType?.toUpperCase() || ''}</span>
       </div>
 
       <div className="statusbar-right">
         {language && (
           <span className="statusbar-item statusbar-lang">
-            <span className="statusbar-dot" style={{ background: getLangColor(language) }} />
             {language.toUpperCase()}
           </span>
         )}

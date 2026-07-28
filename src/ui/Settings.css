@@ -1,81 +1,92 @@
 .settings-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.78);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   animation: fadeIn 0.12s ease-out;
 }
 
 .settings-modal {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg, 12px);
   width: 680px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: scaleIn 0.2s ease-out;
+  animation: scaleIn 0.2s var(--ease-out, ease);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  padding: 14px 18px;
+  border-bottom: none;
+  background: transparent;
 }
 
 .settings-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
   color: var(--text);
+  letter-spacing: 0.01em;
 }
 
 .settings-close {
-  background: none;
-  border: none;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-secondary);
-  font-size: 22px;
+  font-size: 20px;
   cursor: pointer;
-  padding: 0 4px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 5px);
   line-height: 1;
 }
 
 .settings-close:hover {
   color: var(--text);
   background: var(--bg-hover);
+  border-color: var(--border);
+  transform: translateY(-1px);
+  box-shadow: var(--btn-raise);
+}
+
+.settings-close:active {
+  transform: translateY(1px);
+  box-shadow: var(--btn-press);
 }
 
 .settings-tabs {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  padding: 0 20px;
+  border-bottom: none;
+  padding: 0 12px;
   gap: 0;
+  background: transparent;
 }
 
 .settings-tab {
   background: none;
   border: none;
-  padding: 10px 20px;
+  padding: 10px 18px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 550;
   color: var(--text-secondary);
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  transition: all 0.15s;
   font-family: inherit;
 }
 
 .settings-tab:hover {
   color: var(--text);
+  background: var(--bg-hover);
 }
 
 .settings-tab-active {
@@ -123,23 +134,25 @@
 }
 
 .settings-theme-card {
-  border: 2px solid var(--border);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
   overflow: hidden;
   cursor: pointer;
-  transition: all 0.15s ease;
   position: relative;
+  box-shadow: var(--btn-raise);
+  background: var(--bg);
 }
 
 .settings-theme-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-3px);
-  box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  transform: translateY(-2px);
+  box-shadow: var(--btn-raise-hover);
 }
 
 .settings-theme-active {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 20px var(--accent-glow), 0 4px 12px rgba(0,0,0,0.2);
+  box-shadow: var(--accent-press), 0 0 0 1px var(--accent-glow) !important;
+  transform: none !important;
 }
 
 .settings-theme-preview {

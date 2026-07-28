@@ -1,8 +1,8 @@
 {
   "name": "embed-ide",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": false,
-  "description": "EmbedIDE \u2014 Modern Engineering IDE for Embedded Development",
+  "description": "EmbedIDE — Offline-first engineering IDE for embedded flight computers",
   "author": {
     "name": "Kirpich-Space",
     "email": "yamanovaes1982@gmail.com",
@@ -26,8 +26,9 @@
     "rust",
     "c",
     "cpp",
-    "electronics",
-    "firmware"
+    "avionics",
+    "firmware",
+    "openocd"
   ],
   "main": "electron/main.js",
   "scripts": {
@@ -43,9 +44,9 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
-    "appId": "com.embedide.app",
+    "appId": "com.kirpichspace.embedide",
     "productName": "EmbedIDE",
-    "copyright": "Copyright \u00a9 2024 EmbedIDE",
+    "copyright": "Copyright © 2026 Kirpich Space",
     "directories": {
       "output": "release",
       "buildResources": "build"

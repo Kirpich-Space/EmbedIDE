@@ -1,118 +1,87 @@
 # EmbedIDE
 
-**Modern Engineering IDE for Embedded Development**
+**Offline-first engineering IDE for embedded flight computers**
 
-![EmbedIDE](public/icon.png)
-
-A cross-platform desktop IDE for embedded systems development, built with Electron, React, and CodeMirror. Supports Rust, C, and C++ for ARM Cortex-M microcontrollers.
+Built by [Kirpich Space](https://github.com/Kirpich-Space). Cross-platform desktop IDE (Electron + React + CodeMirror) for ARM Cortex-M firmware — Rust, C, C++, and Assembly. No Arduino, ESP32, or AVR targets.
 
 ## Features
 
-- ✏️ **Multi-language Editor** — Syntax highlighting for Rust, C, C++ with CodeMirror 6
-- 🧩 **Project Templates** — Quick-start projects for STM32 (Rust, C, C++, Assembly)
-- 🔧 **Build & Flash** — One-click build and flash via OpenOCD
-- 📟 **Serial Monitor** — Built-in serial terminal
-- 📊 **Memory Analyzer** — Real-time flash/RAM usage visualization
-- 🎨 **Themes** — 10 built-in themes (dark & light)
-- 🌍 **Multi-language UI** — English, Russian, Chinese, Japanese, German, French
-- 🔍 **File Search** — Full-text search across project files
-- 🖥️ **Frameless Window** — Modern custom title bar with minimize/maximize/close
+- Multi-language editor — Rust, C, C++ (CodeMirror 6)
+- **20 target boards** — STM32 F4 / F7 / H7 / G4 / L4 / U5 flight-class MCUs
+- Build & flash via OpenOCD (board-aware profiles)
+- Serial monitor
+- Memory analyzer (flash/RAM from board profile)
+- Themes (dark & light engineering palettes)
+- UI languages: English, Russian, Chinese, Japanese, German, French
+- File search across the project
+- Optional AI assistants — **off by default**; Local (Ollama) or Cloud when enabled
+- Works fully offline for edit / build / flash / serial (toolchains installed on the host)
+
+## Supported boards (v1.1)
+
+| Family | Boards |
+|--------|--------|
+| STM32F4 | F401RE, F405RG, F407VG, F411CE, F412ZG, F429ZI, F446RE, F469NI |
+| STM32F7 | F722ZE, F746NG, F767ZI |
+| STM32H7 | H743ZI, H750VB, H753ZI, H7A3ZI |
+| STM32G4 | G431CB, G474RE |
+| STM32L4 | L476RG, L4R5ZI |
+| STM32U5 | U575ZI |
 
 ## Requirements
 
-- **Node.js** 18+
-- **npm** or **yarn**
-- Platform: **Linux** (primary), **Windows**, **macOS**
+- Node.js 18+
+- npm
+- Platform: Linux (primary), Windows, macOS
 
-### For Embedded Development
+### Host toolchains (for build/flash)
 
-- `arm-none-eabi-gcc` — ARM GCC toolchain (for C/C++ projects)
-- `rustc` + `cargo` — Rust toolchain (for Rust projects)
-- `openocd` — On-chip debugger/flasher (for flashing)
+- `arm-none-eabi-gcc` — C/C++/ASM
+- `rustc` + `cargo` (+ rustup targets) — Rust
+- `openocd` — flash / debug probe
+- `make`
 
 ## Quick Start
 
 ```bash
-# Clone
-git clone https://github.com/anomalyco/EmbedIDE.git
+git clone https://github.com/Kirpich-Space/EmbedIDE.git
 cd EmbedIDE
-
-# Install dependencies
 npm install
-
-# Development mode
-npm run dev
-
-# Production build
-npm run launch
+npm run dev          # development
+npm run launch       # production build + run
 ```
 
 ## Build Distribution
 
-Build installers for your platform:
-
 ```bash
-# Linux (AppImage + deb)
-npm run dist:linux
-
-# Windows (NSIS installer)
-npm run dist:win
-
-# macOS (DMG)
-npm run dist:mac
-
-# All platforms
-npm run dist:all
+npm run dist:linux   # AppImage + deb
+npm run dist:win     # NSIS
+npm run dist:mac     # DMG
 ```
 
-Outputs will be in the `release/` directory.
+Artifacts are written to `release/`.
 
-### Icon Generation
+## AI (optional)
 
-If you need to regenerate icons from the SVG source:
+Settings → AI:
 
-```bash
-# Requires ImageMagick
-convert -background none -density 512 public/icon.svg -resize 256x256 public/icon.png
-```
+- **Disabled** (default) — no panel, no network calls
+- **Local** — OpenAI-compatible endpoint, default `http://127.0.0.1:11434/v1` (Ollama)
+- **Cloud** — HTTPS endpoint + API key
 
-## Project Structure
+Core IDE features never require AI or internet.
+
+## Project layout
 
 ```
 EmbedIDE/
-├── electron/          # Electron main process
-│   ├── main.js        # Window, menu, IPC
-│   ├── preload.js     # Context bridge API
-│   ├── project.js     # File management
-│   ├── toolchain.js   # Build & flash
-│   └── serial.js      # Serial port
-├── src/               # React frontend
-│   ├── App.tsx        # Main layout
-│   ├── main.tsx       # Entry point
-│   ├── themes/        # Theme system
-│   ├── ui/            # UI components
-│   └── core/          # Types, utils, translations
-├── public/            # Static assets
-├── build/icons        # Icon assets
-├── package.json
-└── vite.config.ts
+├── electron/          # Main process (boards, project, toolchain, serial)
+├── src/               # React UI
+├── public/fonts/      # Offline UI/editor fonts
+├── build/icons        # App icons
+└── package.json
 ```
-
-## Themes
-
-| Theme | Type |
-|-------|------|
-| Dark Engineering | Dark (default) |
-| Light Engineering | Light |
-| Green Engineering | Dark |
-| Burgundy | Dark |
-| Red Alert | Dark |
-| Amber Glow | Dark |
-| Cyberpunk | Dark |
-| Ocean Deep | Dark |
-| Nord | Dark |
-| Catppuccin | Dark |
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

@@ -42,12 +42,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   detectToolchains: () => ipcRenderer.invoke('toolchain:detect'),
 
   // Project
-  createProject: (rootDir, name, type) => ipcRenderer.invoke('project:create', rootDir, name, type),
+  createProject: (rootDir, name, type, boardId) => ipcRenderer.invoke('project:create', rootDir, name, type, boardId),
   openProject: () => ipcRenderer.invoke('project:open'),
   listProjectFiles: (dir) => ipcRenderer.invoke('project:list-files', dir),
   readProjectFile: (p) => ipcRenderer.invoke('project:read-file', p),
   writeProjectFile: (p, c) => ipcRenderer.invoke('project:write-file', p, c),
   getProjectTemplates: () => ipcRenderer.invoke('project:get-templates'),
+  getProjectMeta: (dir) => ipcRenderer.invoke('project:get-meta', dir),
+  listBoards: () => ipcRenderer.invoke('boards:list'),
+  getBoard: (boardId) => ipcRenderer.invoke('boards:get', boardId),
   createProjectFile: (dir, name) => ipcRenderer.invoke('project:create-file', dir, name),
   deleteProjectFile: (p) => ipcRenderer.invoke('project:delete-file', p),
   renameProjectFile: (oldP, newP) => ipcRenderer.invoke('project:rename-file', oldP, newP),

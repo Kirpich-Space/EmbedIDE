@@ -1,6 +1,6 @@
 .output-panel {
   background: var(--output-bg);
-  border-top: 1px solid var(--border);
+  border-top: none;
   display: flex;
   flex-direction: column;
   max-height: 220px;
@@ -12,7 +12,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 14px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   flex-shrink: 0;
 }
 
@@ -36,24 +36,32 @@
 
 .output-filter-btn {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: var(--text-secondary);
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm, 5px);
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.1s;
 }
 
 .output-filter-btn:hover {
   color: var(--text);
   background: var(--bg-hover);
+  border-color: var(--border);
+  transform: translateY(-1px);
+  box-shadow: var(--btn-raise);
+}
+
+.output-filter-btn:active {
+  transform: translateY(1px);
+  box-shadow: var(--btn-press);
 }
 
 .output-filter-active {
   color: var(--accent) !important;
-  background: var(--bg-active) !important;
+  background: var(--accent-glow) !important;
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent) !important;
 }
 
 .output-count {

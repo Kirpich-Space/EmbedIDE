@@ -76,12 +76,32 @@ export interface EditorSettings {
   bracketMatch: boolean
   language: string
   theme: string
+  aiEnabled: boolean
+  aiMode: 'local' | 'cloud'
+  aiEndpoint: string
+  aiModel: string
+  aiKey: string
 }
 
 export interface ProjectConfig {
   dir: string
   name: string
   type: string
+  boardId?: string
+  boardName?: string
+  flashKb?: number
+  ramKb?: number
+  peripherals?: string[]
+}
+
+export interface BoardInfo {
+  id: string
+  name: string
+  family: string
+  mcu: string
+  flashKb: number
+  ramKb: number
+  cpu: string
 }
 
 export interface DropdownItem {

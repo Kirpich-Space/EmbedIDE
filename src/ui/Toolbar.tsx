@@ -12,6 +12,7 @@ interface ToolbarProps {
   onOpenProject: () => void
   leftPanelVisible: boolean
   rightPanelVisible: boolean
+  aiEnabled?: boolean
   onToggleLeftPanel: () => void
   onToggleRightPanel: () => void
   isBuilding: boolean
@@ -19,7 +20,7 @@ interface ToolbarProps {
 
 export function Toolbar({
   projectName, onBuild, onCancelBuild, onFlash, onDebug, onOpenSettings, onNewProject, onSerial,
-  onOpenProject, leftPanelVisible, rightPanelVisible, onToggleLeftPanel, onToggleRightPanel, isBuilding
+  onOpenProject, leftPanelVisible, rightPanelVisible, aiEnabled, onToggleLeftPanel, onToggleRightPanel, isBuilding
 }: ToolbarProps) {
   const handleMinimize = () => window.electronAPI?.minimize()
   const handleMaximize = () => window.electronAPI?.maximize()
@@ -35,7 +36,10 @@ export function Toolbar({
             <path d="M7 8h10M7 12h6M7 16h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             <circle cx="18" cy="16" r="2" fill="var(--accent)" />
           </svg>
-          <span className="toolbar-title">{t('toolbar.title')}</span>
+          <div className="toolbar-brand-text">
+            <span className="toolbar-title">{t('toolbar.title')}</span>
+            <span className="toolbar-org">Kirpich Space</span>
+          </div>
           {projectName && <span className="toolbar-project-name">{projectName}</span>}
         </div>
 
@@ -67,14 +71,16 @@ export function Toolbar({
             </svg>
           </button>
 
-          <button className={`toolbar-btn toolbar-btn-icon ${!rightPanelVisible ? 'toolbar-btn-muted' : ''}`} onClick={onToggleRightPanel} title={`${t('toolbar.toggleAgents')} (Ctrl+Shift+A)`}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="7" />
-              <rect x="14" y="3" width="7" height="7" />
-              <rect x="3" y="14" width="7" height="7" />
-              <rect x="14" y="14" width="7" height="7" />
-            </svg>
-          </button>
+          {aiEnabled && (
+            <button className={`toolbar-btn toolbar-btn-icon ${!rightPanelVisible ? 'toolbar-btn-muted' : ''}`} onClick={onToggleRightPanel} title={`${t('toolbar.toggleAgents')} (Ctrl+Shift+A)`}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+              </svg>
+            </button>
+          )}
 
           <div className="toolbar-separator" />
 

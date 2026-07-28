@@ -1,6 +1,6 @@
 .serial-monitor {
   background: var(--output-bg);
-  border-top: 1px solid var(--border);
+  border-top: none;
   display: flex;
   flex-direction: column;
   max-height: 260px;
@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   flex-shrink: 0;
   gap: 10px;
 }
@@ -144,7 +144,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border-top: 1px solid var(--border);
+  border-top: none;
 }
 
 .serial-input {

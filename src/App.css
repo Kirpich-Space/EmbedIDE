@@ -1,3 +1,35 @@
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -11,7 +43,7 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -164,7 +196,8 @@ body {
   height: 100vh;
   width: 100vw;
   background: var(--bg);
-  transition: background 0.3s;
+  color: var(--text);
+  transition: background 0.25s var(--ease-out, ease), color 0.25s var(--ease-out, ease);
 }
 
 .app-body {
@@ -172,8 +205,9 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  background: var(--bg);
+  gap: 0;
 }
-
 
 .app-center {
   flex: 1;
@@ -181,6 +215,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--editor-bg);
 }
 
 .app-center > .editor-panel {
@@ -192,7 +227,6 @@ body {
   flex-shrink: 0;
 }
 
-
 .app-bottom-panels {
   flex-shrink: 0;
   max-height: 40%;
@@ -200,6 +234,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
+  background: var(--output-bg);
+  border-top: none;
 }
 
 .app-bottom-panels::-webkit-scrollbar {
@@ -207,7 +243,7 @@ body {
 }
 
 .app-bottom-panels::-webkit-scrollbar-track {
-  background: var(--scrollbar-bg);
+  background: transparent;
 }
 
 .app-bottom-panels::-webkit-scrollbar-thumb {
@@ -217,31 +253,66 @@ body {
 
 ::selection {
   background: var(--accent-glow);
+  color: var(--text);
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-radius: 4px;
+  outline-offset: 1px;
+  border-radius: var(--radius-sm, 5px);
 }
 
-/* Smooth theme transitions for all color/background/border properties */
+/* Color transitions only — motion for interactive elements is explicit */
 *, *::before, *::after {
-  transition: background 0.2s, background-color 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s;
+  transition-property: background, background-color, border-color, color, box-shadow, opacity;
+  transition-duration: 0.15s;
+  transition-timing-function: var(--ease-out, ease);
 }
 
-/* But restrict to hover/active for interactive elements to avoid lag */
-button, select, input, .file-item, .editor-tab, .settings-theme-card, .project-btn, .panel-icon-btn, .output-filter-btn, .ctx-item {
-  transition: all 0.12s ease !important;
+/* ===== Tactile press system ===== */
+.ui-press,
+button.toolbar-btn,
+button.project-btn,
+button.agent-api-btn,
+button.agent-send-btn,
+button.panel-icon-btn,
+button.win-btn,
+.board-chip,
+.project-type-card,
+.settings-tab,
+.file-item,
+.editor-tab,
+.output-filter-btn,
+.ctx-item,
+.dialog-ext-btn,
+.agent-tab,
+.agent-suggestion,
+.settings-theme-card {
+  transition:
+    background 0.12s var(--ease-out, ease),
+    border-color 0.12s var(--ease-out, ease),
+    color 0.12s var(--ease-out, ease),
+    box-shadow 0.12s var(--ease-press, ease),
+    transform 0.1s var(--ease-press, ease),
+    filter 0.12s var(--ease-out, ease) !important;
+  transform: translateY(0);
+  will-change: transform;
 }
 
-button:hover, select:hover {
-  filter: brightness(1.15);
-}
-
-button:active, select:active {
-  filter: brightness(0.95);
-  transform: scale(0.98);
+button.toolbar-btn:active,
+button.project-btn:active,
+button.agent-api-btn:active,
+button.agent-send-btn:active,
+button.panel-icon-btn:active,
+.board-chip:active,
+.project-type-card:active,
+.file-item:active,
+.editor-tab:active,
+.dialog-ext-btn:active,
+.agent-tab:active,
+.agent-suggestion:active,
+.settings-theme-card:active {
+  transform: translateY(1px) scale(0.985) !important;
 }
 
 @media (max-width: 1100px) {
@@ -263,10 +334,10 @@ button:active, select:active {
 .dirty-dialog {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg, 12px);
   width: 380px;
   box-shadow: var(--shadow-lg);
-  animation: scaleIn 0.2s ease-out;
+  animation: scaleIn 0.2s var(--ease-out, ease);
 }
 
 .dirty-body {

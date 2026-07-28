@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { AgentMessage, ProjectConfig, FileNode } from '../core/types'
+import type { AgentMessage, ProjectConfig, FileNode, EditorSettings } from '../core/types'
 import { useTranslation } from '../core/TranslationContext'
 
 interface AIAgentsProps {
   project: ProjectConfig | null
   files: FileNode[]
+  settings: EditorSettings
+  onSettingsChange: (s: EditorSettings) => void
 }
 
 type AgentDef = { id: string; icon: string; label: string; description: string; systemPrompt: string }
@@ -14,7 +16,6 @@ function renderContent(text: string) {
   return parts.map((part, i) => {
     if (part.startsWith('```')) {
       const lines = part.split('\n')
-      const header = lines[0].slice(3).trim()
       const code = lines.slice(1, -1).join('\n')
       return <pre key={i}><code>{code}</code></pre>
     }
@@ -50,34 +51,38 @@ function parseFileOps(text: string): { file: string; content: string }[] {
   return ops
 }
 
-export function AIAgents({ project, files }: AIAgentsProps) {
+export function AIAgents({ project, files, settings, onSettingsChange }: AIAgentsProps) {
   const { t } = useTranslation()
+  const isLocal = settings.aiMode === 'local'
+  const endpoint = settings.aiEndpoint || (isLocal ? 'http://127.0.0.1:11434/v1' : 'https://api.openai.com/v1')
+  const model = settings.aiModel || (isLocal ? 'llama3.2' : 'gpt-4o')
+  const apiKey = settings.aiKey || (isLocal ? 'ollama' : '')
 
   const agents: AgentDef[] = [
     {
-      id: 'chat', icon: '💬', label: t('aiAgents.agents.chat.label'),
+      id: 'chat', icon: '◇', label: t('aiAgents.agents.chat.label'),
       description: t('aiAgents.agents.chat.desc'),
-      systemPrompt: 'You are an embedded-systems expert. Help the user with code, debugging, and architecture questions.',
+      systemPrompt: 'You are an embedded-systems expert for flight computers and avionics. Help with ARM Cortex-M firmware, STM32, linkers, and OpenOCD.',
     },
     {
-      id: 'build', icon: '🔧', label: t('aiAgents.agents.build.label'),
+      id: 'build', icon: '▣', label: t('aiAgents.agents.build.label'),
       description: t('aiAgents.agents.build.desc'),
-      systemPrompt: 'You are a build-system expert. Analyze compiler and linker errors, suggest fixes for embedded C/C++/Rust projects.',
+      systemPrompt: 'You are a build-system expert. Analyze compiler and linker errors for embedded C/C++/Rust Cortex-M projects.',
     },
     {
-      id: 'debug', icon: '🐞', label: t('aiAgents.agents.debug.label'),
+      id: 'debug', icon: '◎', label: t('aiAgents.agents.debug.label'),
       description: t('aiAgents.agents.debug.desc'),
       systemPrompt: 'You are a debug expert. Analyze crash dumps, stack traces, and register states for ARM Cortex-M devices.',
     },
     {
       id: 'hardware', icon: '⚡', label: t('aiAgents.agents.hardware.label'),
       description: t('aiAgents.agents.hardware.desc'),
-      systemPrompt: 'You are an embedded hardware expert. Know STM32, ESP32, ARM Cortex, AVR, peripherals (GPIO, UART, SPI, I2C, TIM, ADC).',
+      systemPrompt: 'You are an embedded hardware expert for STM32 flight/avionics MCUs: GPIO, UART, SPI, I2C, TIM, ADC, CAN, ETH. Do not suggest Arduino, ESP32, or AVR platforms.',
     },
     {
-      id: 'docs', icon: '📚', label: t('aiAgents.agents.docs.label'),
+      id: 'docs', icon: '☰', label: t('aiAgents.agents.docs.label'),
       description: t('aiAgents.agents.docs.desc'),
-      systemPrompt: 'You are a technical writer. Generate clear documentation, code comments, and wiring diagrams for embedded projects.',
+      systemPrompt: 'You are a technical writer. Generate clear documentation and code comments for embedded flight-computer projects.',
     },
   ]
 
@@ -93,10 +98,6 @@ export function AIAgents({ project, files }: AIAgentsProps) {
   const [messages, setMessages] = useState<Record<string, AgentMessage[]>>({})
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [showApiSetup, setShowApiSetup] = useState(false)
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('embed-ide-api-key') || '')
-  const [apiEndpoint, setApiEndpoint] = useState(() => localStorage.getItem('embed-ide-api-endpoint') || 'https://api.openai.com/v1')
-  const [apiModel, setApiModel] = useState(() => localStorage.getItem('embed-ide-api-model') || 'gpt-4o')
   const [fileOps, setFileOps] = useState<{ file: string; content: string }[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -104,53 +105,25 @@ export function AIAgents({ project, files }: AIAgentsProps) {
 
   const activeMessages = messages[activeAgent] || []
   const agent = agents.find(a => a.id === activeAgent)
+  const needsCloudKey = !isLocal && !apiKey.trim()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [activeMessages])
 
-  useEffect(() => {
-    if (!apiKey) setShowApiSetup(true)
-  }, [apiKey])
-
-  const saveApiConfig = useCallback(() => {
-    localStorage.setItem('embed-ide-api-key', apiKey)
-    localStorage.setItem('embed-ide-api-endpoint', apiEndpoint)
-    localStorage.setItem('embed-ide-api-model', apiModel)
-    setShowApiSetup(false)
-  }, [apiKey, apiEndpoint, apiModel])
-
-  const clearApiConfig = useCallback(() => {
-    localStorage.removeItem('embed-ide-api-key')
-    localStorage.removeItem('embed-ide-api-endpoint')
-    localStorage.removeItem('embed-ide-api-model')
-    setApiKey('')
-    setApiEndpoint('https://api.openai.com/v1')
-    setApiModel('gpt-4o')
-    setMessages({})
-  }, [])
-
-  const clearConversation = useCallback(() => {
-    setMessages(prev => ({ ...prev, [activeAgent]: [] }))
-  }, [activeAgent])
-
-  const cancelRequest = useCallback(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
-    setLoading(false)
-  }, [])
-
   const buildContext = useCallback((): string => {
     if (!project) return t('aiAgents.noProject')
     const fileList = files.map(f => {
-      const prefix = f.type === 'directory' ? '📁' : '📄'
+      const prefix = f.type === 'directory' ? '[dir]' : '[file]'
       return `${prefix} ${f.id}${f.language ? ` (${f.language})` : ''}`
     }).join('\n')
-    return `Project: ${project.name} (${project.type})\nDirectory: ${project.dir}\n\nFiles:\n${fileList}`
-  }, [project, files])
+    const board = project.boardName ? `\nBoard: ${project.boardName} (${project.boardId || ''})` : ''
+    return `Project: ${project.name} (${project.type})${board}\nDirectory: ${project.dir}\n\nFiles:\n${fileList}`
+  }, [project, files, t])
 
   const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || loading || !apiKey) return
+    if (!text.trim() || loading) return
+    if (needsCloudKey) return
 
     const userMsg: AgentMessage = { role: 'user', content: text, timestamp: Date.now() }
     setMessages(prev => ({
@@ -168,20 +141,23 @@ export function AIAgents({ project, files }: AIAgentsProps) {
       const context = buildContext()
       const history = (messages[activeAgent] || []).slice(-20)
       const conversation = [
-        { role: 'system', content: `${agent?.systemPrompt}\n\nProject context:\n${context}\n\nIMPORTANT: If you want to write code to a file, put a comment like "// File: path/file.rs" or "# File: path/file.py" on the first line of the code block, then the file content after it. Always return the COMPLETE file content, not just the changed parts.` },
+        {
+          role: 'system',
+          content: `${agent?.systemPrompt}\n\nProject context:\n${context}\n\nIMPORTANT: If you want to write code to a file, put a comment like "// File: path/file.rs" on the first line of the code block, then the complete file content.`,
+        },
         ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
         { role: 'user', content: text },
       ]
 
-      const url = `${apiEndpoint.replace(/\/+$/, '')}/chat/completions`
+      const url = `${endpoint.replace(/\/+$/, '')}/chat/completions`
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
-          model: apiModel,
+          model,
           messages: conversation,
           temperature: 0.3,
         }),
@@ -190,6 +166,9 @@ export function AIAgents({ project, files }: AIAgentsProps) {
 
       if (!res.ok) {
         const errBody = await res.text().catch(() => '')
+        if (isLocal && (res.status === 0 || res.status >= 500 || res.status === 404)) {
+          throw new Error(t('aiAgents.localUnreachable'))
+        }
         throw new Error(`API ${res.status}: ${errBody || res.statusText}`)
       }
 
@@ -204,12 +183,10 @@ export function AIAgents({ project, files }: AIAgentsProps) {
           const fullPath = op.file.startsWith('/') ? op.file : `${project.dir}/${op.file}`
           try {
             const dir = op.file.includes('/') ? op.file.substring(0, op.file.lastIndexOf('/')) : ''
-            if (dir) {
-              await api.createProjectFile(project.dir, dir + '/')
-            }
+            if (dir) await api.createProjectFile(project.dir, dir + '/')
             await api.writeProjectFile(fullPath, op.content)
-          } catch (e: any) {
-            console.error('Failed to write file:', e)
+          } catch {
+            /* ignore write errors in agent apply */
           }
         }
         setFileOps(ops)
@@ -220,27 +197,36 @@ export function AIAgents({ project, files }: AIAgentsProps) {
         ...prev,
         [activeAgent]: [...(prev[activeAgent] || []), assistantMsg],
       }))
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
+    } catch (e: unknown) {
+      const err = e as { name?: string; message?: string }
+      if (err.name === 'AbortError') {
         const cancelledMsg: AgentMessage = { role: 'assistant', content: t('aiAgents.requestCancelled'), timestamp: Date.now() }
-        setMessages(prev => ({
-          ...prev,
-          [activeAgent]: [...(prev[activeAgent] || []), cancelledMsg],
-        }))
+        setMessages(prev => ({ ...prev, [activeAgent]: [...(prev[activeAgent] || []), cancelledMsg] }))
       } else {
-        const errorMsg: AgentMessage = { role: 'assistant', content: `**Error**: ${e.message}`, timestamp: Date.now() }
-        setMessages(prev => ({
-          ...prev,
-          [activeAgent]: [...(prev[activeAgent] || []), errorMsg],
-        }))
+        const msg = err.message || String(e)
+        const friendly = isLocal && /Failed to fetch|NetworkError|ECONNREFUSED/i.test(msg)
+          ? t('aiAgents.localUnreachable')
+          : msg
+        const errorMsg: AgentMessage = { role: 'assistant', content: `**Error**: ${friendly}`, timestamp: Date.now() }
+        setMessages(prev => ({ ...prev, [activeAgent]: [...(prev[activeAgent] || []), errorMsg] }))
       }
     } finally {
       setLoading(false)
       abortRef.current = null
     }
-  }, [activeAgent, agent, apiKey, apiEndpoint, apiModel, loading, messages, buildContext, project])
+  }, [activeAgent, agent, apiKey, endpoint, model, loading, messages, buildContext, project, needsCloudKey, isLocal, t])
 
-  if (showApiSetup) {
+  const cancelRequest = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setLoading(false)
+  }, [])
+
+  const clearConversation = useCallback(() => {
+    setMessages(prev => ({ ...prev, [activeAgent]: [] }))
+  }, [activeAgent])
+
+  if (needsCloudKey) {
     return (
       <div className="ai-agents">
         <div className="panel-header">
@@ -248,40 +234,23 @@ export function AIAgents({ project, files }: AIAgentsProps) {
         </div>
         <div className="agent-api-setup">
           <div className="agent-api-title">{t('aiAgents.configure')}</div>
-          <div className="agent-api-desc">
-            {t('aiAgents.apiDesc')}
-          </div>
-          <div className="agent-api-field">
-            <label className="agent-api-label">{t('aiAgents.apiEndpoint')}</label>
-            <input
-              className="agent-api-input"
-              value={apiEndpoint}
-              onChange={e => setApiEndpoint(e.target.value)}
-              placeholder="https://api.openai.com/v1"
-            />
-          </div>
-          <div className="agent-api-field">
-            <label className="agent-api-label">{t('aiAgents.model')}</label>
-            <input
-              className="agent-api-input"
-              value={apiModel}
-              onChange={e => setApiModel(e.target.value)}
-              placeholder="gpt-4o"
-            />
-          </div>
+          <div className="agent-api-desc">{t('aiAgents.cloudKeyRequired')}</div>
           <div className="agent-api-field">
             <label className="agent-api-label">{t('aiAgents.apiKey')}</label>
             <input
               className="agent-api-input"
               type="password"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
+              value={settings.aiKey}
+              onChange={e => onSettingsChange({ ...settings, aiKey: e.target.value })}
               placeholder="sk-..."
-              onKeyDown={e => { if (e.key === 'Enter') saveApiConfig() }}
               autoFocus
             />
           </div>
-          <button className="agent-api-btn" onClick={saveApiConfig} disabled={!apiKey.trim()}>
+          <button
+            className="agent-api-btn"
+            disabled={!settings.aiKey.trim()}
+            onClick={() => onSettingsChange({ ...settings, aiKey: settings.aiKey.trim() })}
+          >
             {t('aiAgents.saveStart')}
           </button>
         </div>
@@ -294,8 +263,8 @@ export function AIAgents({ project, files }: AIAgentsProps) {
       <div className="panel-header">
         <span className="panel-title">{t('aiAgents.title')}</span>
         <div className="panel-header-actions">
+          <span className="agent-mode-badge">{isLocal ? t('settings.aiLocal') : t('settings.aiCloud')}</span>
           <button className="agent-clear-btn" onClick={clearConversation} title={t('aiAgents.clear')}>{t('aiAgents.clear')}</button>
-          <button className="agent-clear-btn" onClick={clearApiConfig} title={t('aiAgents.key')}>{t('aiAgents.key')}</button>
         </div>
       </div>
 
@@ -317,8 +286,9 @@ export function AIAgents({ project, files }: AIAgentsProps) {
         {activeMessages.length === 0 && (
           <div className="agent-welcome">
             <div className="agent-welcome-icon">{agent?.icon}</div>
-            <div className="agent-welcome-title">{agent?.label} Agent</div>
+            <div className="agent-welcome-title">{agent?.label}</div>
             <div className="agent-welcome-desc">{agent?.description}</div>
+            {isLocal && <div className="agent-welcome-desc">{t('aiAgents.localHint', { endpoint })}</div>}
             <div className="agent-suggestions">
               {suggestions[activeAgent]?.map(s => (
                 <div key={s} className="agent-suggestion" onClick={() => sendMessage(s)}>

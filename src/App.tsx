@@ -56,12 +56,33 @@ function AppContent() {
   const [toolchains, setToolchains] = useState<ToolchainInfo | null>(null)
   const [memoryUsage, setMemoryUsage] = useState<MemoryUsage>({ flashUsed: 0, flashTotal: 1048576, ramUsed: 0, ramTotal: 131072 })
   const [showLeftPanel, setShowLeftPanel] = useState(true)
-  const [showRightPanel, setShowRightPanel] = useState(true)
+  const [showRightPanel, setShowRightPanel] = useState(false)
   const [dirtyConfirm, setDirtyConfirm] = useState<{ tabId: string; callback: () => void } | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(() => {
-    try { return JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '') }
-    catch { return { fontSize: 14, tabSize: 4, fontFamily: "'JetBrains Mono', monospace", wordWrap: false, minimap: false, lineNumbers: true, cursorBlinkRate: 1200, smoothScroll: true, bracketMatch: true, language: 'en', theme: 'dark' } }
+    const defaults: EditorSettings = {
+      fontSize: 14,
+      tabSize: 4,
+      fontFamily: "'JetBrains Mono', monospace",
+      wordWrap: false,
+      minimap: false,
+      lineNumbers: true,
+      cursorBlinkRate: 1200,
+      smoothScroll: true,
+      bracketMatch: true,
+      language: 'en',
+      theme: 'dark',
+      aiEnabled: false,
+      aiMode: 'local',
+      aiEndpoint: 'http://127.0.0.1:11434/v1',
+      aiModel: 'llama3.2',
+      aiKey: '',
+    }
+    try {
+      return { ...defaults, ...JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '') }
+    } catch {
+      return defaults
+    }
   })
 
   const t = useMemo(() => {
@@ -106,9 +127,23 @@ function AppContent() {
   }, [])
 
   useEffect(() => {
+    if (!editorSettings.aiEnabled) setShowRightPanel(false)
+  }, [editorSettings.aiEnabled])
+
+  useEffect(() => {
     localStorage.setItem('embed-ide-editor-settings', JSON.stringify(editorSettings))
     window.electronAPI?.saveSettings(editorSettings)
   }, [editorSettings])
+
+  useEffect(() => {
+    const kb = project?.flashKb ?? 1024
+    const ram = project?.ramKb ?? 128
+    setMemoryUsage(prev => ({
+      ...prev,
+      flashTotal: kb * 1024,
+      ramTotal: ram * 1024,
+    }))
+  }, [project?.flashKb, project?.ramKb])
 
   // IPC listeners with proper cleanup
   useEffect(() => {
@@ -174,7 +209,9 @@ function AppContent() {
         cm?.focus()
       }),
       api.onMenuToggleExplorer(() => setShowLeftPanel(v => !v)),
-      api.onMenuToggleAgents(() => setShowRightPanel(v => !v)),
+      api.onMenuToggleAgents(() => {
+        if (editorSettings.aiEnabled) setShowRightPanel(v => !v)
+      }),
       api.onMenuBuild(() => handleBuild()),
       api.onMenuFlash(() => handleFlash()),
     ]
@@ -211,27 +248,63 @@ function AppContent() {
     }
   }, [saveTab])
 
-  const loadProject = useCallback(async (dir: string, name: string, type: string) => {
-    setProject({ dir, name, type })
+  const loadProject = useCallback(async (
+    dir: string,
+    name: string,
+    type: string,
+    extra?: Partial<ProjectConfig>,
+  ) => {
+    let boardExtra = extra || {}
+    if (!boardExtra.boardId) {
+      const meta = await window.electronAPI?.getProjectMeta(dir)
+      if (meta) {
+        boardExtra = {
+          boardId: meta.boardId,
+          boardName: meta.boardName,
+          flashKb: meta.flashKb,
+          ramKb: meta.ramKb,
+          peripherals: meta.peripherals,
+        }
+      }
+    }
+    setProject({ dir, name, type, ...boardExtra })
     const files = await window.electronAPI!.listProjectFiles(dir)
     setProjectFiles(files)
     setOpenTabs([])
     setActiveTabId('')
-    setOutputMessages(prev => [...prev, { type: 'info', text: tRef.current('fileOps.opened', { name, type }), timestamp: Date.now(), source: 'build' }])
-  }, [addOutput])
+    setOutputMessages(prev => [...prev, {
+      type: 'info',
+      text: tRef.current('fileOps.opened', { name, type }) + (boardExtra.boardName ? ` · ${boardExtra.boardName}` : ''),
+      timestamp: Date.now(),
+      source: 'build',
+    }])
+  }, [])
 
-  const handleCreateProject = useCallback(async (name: string, type: string) => {
+  const handleCreateProject = useCallback(async (name: string, type: string, boardId: string) => {
     const projectsDir = await window.electronAPI!.getDefaultProjectsDir()
-    const dir = await window.electronAPI!.createProject(projectsDir, name, type)
+    const dir = await window.electronAPI!.createProject(projectsDir, name, type, boardId)
     setProjectDialogOpen(false)
-    await loadProject(dir, name, type)
+    const board = await window.electronAPI!.getBoard(boardId)
+    await loadProject(dir, name, type, {
+      boardId,
+      boardName: board?.name,
+      flashKb: board?.flashKb,
+      ramKb: board?.ramKb,
+      peripherals: board?.peripherals,
+    })
   }, [loadProject])
 
   const handleOpenProject = useCallback(async () => {
     const result = await window.electronAPI!.openProject()
     if (!result) return
     await saveAllDirty()
-    await loadProject(result.dir, result.name, result.type)
+    await loadProject(result.dir, result.name, result.type, {
+      boardId: result.boardId,
+      boardName: result.boardName,
+      flashKb: result.flashKb,
+      ramKb: result.ramKb,
+      peripherals: result.peripherals,
+    })
   }, [loadProject, saveAllDirty])
 
   const refreshFiles = useCallback(async () => {
@@ -401,8 +474,14 @@ function AppContent() {
     setOutputVisible(true)
     setSerialVisible(false)
     addOutput({ type: 'info', text: tRef.current('flash.starting'), timestamp: Date.now(), source: 'flash' })
-    try { await window.electronAPI!.flashProject(proj.dir, proj.type, { adapter: 'stlink', target: 'stm32f4x' }) }
-    catch (e: any) { addOutput({ type: 'error', text: tRef.current('flash.error', { msg: e.message }), timestamp: Date.now(), source: 'flash' }) }
+    try {
+      await window.electronAPI!.flashProject(proj.dir, proj.type, {
+        boardId: proj.boardId,
+      })
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      addOutput({ type: 'error', text: tRef.current('flash.error', { msg }), timestamp: Date.now(), source: 'flash' })
+    }
   }, [addOutput, saveAllDirty])
 
   const handleSave = useCallback(async (tabId?: string) => {
@@ -446,7 +525,10 @@ function AppContent() {
       if (c && e.key === 'm') { e.preventDefault(); setMemoryVisible(v => !v) }
       if (c && e.key === 'p') { e.preventDefault(); setPeripheralVisible(v => !v) }
       if (c && e.shiftKey && e.key === 'E') { e.preventDefault(); setShowLeftPanel(v => !v) }
-      if (c && e.shiftKey && e.key === 'A') { e.preventDefault(); setShowRightPanel(v => !v) }
+      if (c && e.shiftKey && e.key === 'A') {
+        e.preventDefault()
+        if (editorSettings.aiEnabled) setShowRightPanel(v => !v)
+      }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
@@ -471,8 +553,12 @@ function AppContent() {
             onOpenProject={handleOpenProject}
             leftPanelVisible={showLeftPanel}
             rightPanelVisible={showRightPanel}
+            aiEnabled={editorSettings.aiEnabled}
             onToggleLeftPanel={() => setShowLeftPanel(v => !v)}
-            onToggleRightPanel={() => setShowRightPanel(v => !v)}
+            onToggleRightPanel={() => {
+              if (editorSettings.aiEnabled) setShowRightPanel(v => !v)
+              else setSettingsOpen(true)
+            }}
           />
           <div className="app-body">
             <SlidePanel visible={showLeftPanel} side="left" width={260}>
@@ -511,7 +597,12 @@ function AppContent() {
                       ramTotal={memoryUsage.ramTotal}
                     />
                   )}
-                  {peripheralVisible && <PeripheralViewer peripherals={[]} />}
+                  {peripheralVisible && (
+                    <PeripheralViewer
+                      boardName={project?.boardName}
+                      peripheralNames={project?.peripherals || []}
+                    />
+                  )}
                   {serialVisible && <SerialMonitor />}
                   {outputVisible && !serialVisible && (
                     <OutputPanel messages={outputMessages} onClose={() => setOutputVisible(false)} />
@@ -519,15 +610,18 @@ function AppContent() {
                 </div>
               </SlidePanel>
             </div>
-            <SlidePanel visible={showRightPanel} side="right" width={320}>
-              <AIAgents project={project} files={projectFiles} />
-            </SlidePanel>
+            {editorSettings.aiEnabled && (
+              <SlidePanel visible={showRightPanel} side="right" width={320}>
+                <AIAgents project={project} files={projectFiles} settings={editorSettings} onSettingsChange={setEditorSettings} />
+              </SlidePanel>
+            )}
           </div>
           <StatusBar
             line={openTabs.find(t => t.id === activeTabId)?.cursorLine ?? 1}
             col={openTabs.find(t => t.id === activeTabId)?.cursorCol ?? 1}
             language={openTabs.find(t => t.id === activeTabId)?.language ?? ''}
             projectType={project?.type}
+            boardName={project?.boardName}
             toolchains={toolchains}
           />
           {settingsOpen && <Settings editorSettings={editorSettings} onEditorSettingsChange={setEditorSettings} onClose={() => setSettingsOpen(false)} />}
