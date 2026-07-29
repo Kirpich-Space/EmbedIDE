@@ -9,7 +9,7 @@
 
 .memory-analyzer .panel-header {
   padding: 10px 14px;
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
 }
 
 .memory-content {
@@ -53,7 +53,7 @@
 .memory-details {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: none;
+  border-top: var(--panel-edge);
 }
 
 .memory-detail-row {
@@ -84,7 +84,7 @@
 
 .peripheral-viewer .panel-header {
   padding: 10px 14px;
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
 }
 
 .peripheral-content {
@@ -92,7 +92,7 @@
 }
 
 .peripheral-group {
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
 }
 
 .peripheral-group:last-child {

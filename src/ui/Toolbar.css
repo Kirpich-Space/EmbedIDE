@@ -4,7 +4,7 @@
   justify-content: space-between;
   height: 42px;
   background: var(--toolbar-bg);
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
   padding: 0 8px 0 6px;
   user-select: none;
   flex-shrink: 0;
@@ -53,7 +53,6 @@
 .toolbar-logo-svg {
   color: var(--accent);
   flex-shrink: 0;
-  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 
 .toolbar-project-name {
@@ -79,7 +78,12 @@
 }
 
 .toolbar-separator {
-  display: none;
+  display: block;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: color-mix(in srgb, var(--border) 90%, #fff);
+  flex-shrink: 0;
 }
 
 .toolbar-btn {

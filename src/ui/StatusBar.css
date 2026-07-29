@@ -4,7 +4,7 @@
   justify-content: space-between;
   height: 26px;
   background: var(--statusbar-bg);
-  border-top: none;
+  border-top: var(--panel-edge);
   padding: 0 10px;
   font-size: 11px;
   user-select: none;
@@ -61,9 +61,13 @@
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  box-shadow: 0 0 6px currentColor;
 }
 
 .statusbar-separator {
-  display: none;
+  display: inline-block;
+  width: 1px;
+  height: 12px;
+  margin: 0 4px;
+  background: color-mix(in srgb, var(--border) 90%, #fff);
+  flex-shrink: 0;
 }

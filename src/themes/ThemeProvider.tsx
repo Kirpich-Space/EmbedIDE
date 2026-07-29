@@ -67,7 +67,11 @@ function applyTheme(theme: Theme) {
   set('--accent-press', dark
     ? 'inset 0 2px 8px rgba(0,0,0,0.55)'
     : 'inset 0 2px 6px rgba(0,0,0,0.28)')
-  set('--panel-edge', 'none')
+  // VS Code / JetBrains-style chrome: hairlines separate absolute-black zones
+  set('--panel-edge', `1px solid ${c.border}`)
+  set('--chrome-sep', dark
+    ? `1px solid color-mix(in srgb, ${c.border} 85%, #fff)`
+    : `1px solid ${c.border}`)
   set('--radius-sm', '5px')
   set('--radius-md', '8px')
   set('--radius-lg', '12px')

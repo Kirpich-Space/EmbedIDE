@@ -235,7 +235,7 @@ body {
   flex-direction: column;
   gap: 0;
   background: var(--output-bg);
-  border-top: none;
+  border-top: var(--panel-edge);
 }
 
 .app-bottom-panels::-webkit-scrollbar {

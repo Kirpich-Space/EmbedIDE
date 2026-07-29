@@ -1,6 +1,6 @@
 .serial-monitor {
   background: var(--output-bg);
-  border-top: none;
+  border-top: var(--panel-edge);
   display: flex;
   flex-direction: column;
   max-height: 260px;
@@ -13,16 +13,17 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
   flex-shrink: 0;
   gap: 10px;
 }
 
 .serial-title {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-secondary);
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   flex-shrink: 0;
 }
 
@@ -144,7 +145,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border-top: none;
+  border-top: var(--panel-edge);
 }
 
 .serial-input {

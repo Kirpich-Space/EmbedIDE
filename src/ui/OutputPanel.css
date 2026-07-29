@@ -1,6 +1,6 @@
 .output-panel {
   background: var(--output-bg);
-  border-top: none;
+  border-top: var(--panel-edge);
   display: flex;
   flex-direction: column;
   max-height: 220px;
@@ -12,15 +12,16 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 14px;
-  border-bottom: none;
+  border-bottom: var(--panel-edge);
   flex-shrink: 0;
 }
 
 .output-title {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-secondary);
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .output-actions {
