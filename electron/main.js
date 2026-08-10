@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
 const { detectToolchains, buildProject, flashBoard, cancelBuild } = require('./toolchain');
 const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
@@ -378,6 +378,14 @@ ipcMain.handle('app:get-default-projects-dir', () => {
 });
 
 // Settings persistence
+ipcMain.handle('shell:open-external', async (_e, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    throw new Error('Only http(s) URLs are allowed')
+  }
+  await shell.openExternal(url)
+  return true
+})
+
 ipcMain.handle('settings:load', () => {
   try {
     if (fs.existsSync(SETTINGS_PATH)) {
@@ -387,11 +395,11 @@ ipcMain.handle('settings:load', () => {
   return {};
 });
 
-ipcMain.handle('settings:save', (_e, settings) => {
+ipcMain.handle('settings:save', async (_e, settings) => {
   try {
-    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-    // Persist full settings (including aiKey) only in userData, not renderer localStorage
-    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
+    await fs.promises.mkdir(path.dirname(SETTINGS_PATH), { recursive: true });
+    // Compact JSON — fewer bytes, faster writes on every settings change
+    await fs.promises.writeFile(SETTINGS_PATH, JSON.stringify(settings), 'utf8');
     return true;
   } catch { return false; }
 });

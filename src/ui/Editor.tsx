@@ -367,29 +367,27 @@ export function Editor({
     view.focus()
   }, [activeTabId])
 
-  // Sync externally updated tab content (e.g. AI apply) into the editor cache/view
+  // Sync externally updated active tab content (e.g. AI apply) into the editor
+  const activeTabCleanContent = !activeTab?.dirty ? activeTab?.content : undefined
   useEffect(() => {
     const view = viewRef.current
-    for (const tab of tabs) {
-      if (tab.dirty) continue
-      const cached = tabContentRef.current.get(tab.id)
-      if (cached === tab.content) continue
-      tabContentRef.current.set(tab.id, tab.content)
-      if (view && tab.id === activeTabIdRef.current && view.state.doc.toString() !== tab.content) {
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: tab.content },
-        })
-      }
+    if (!view || activeTabCleanContent === undefined) return
+    const id = activeTabIdRef.current
+    tabContentRef.current.set(id, activeTabCleanContent)
+    if (view.state.doc.toString() !== activeTabCleanContent) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: activeTabCleanContent },
+      })
     }
-  }, [tabs])
+  }, [activeTabId, activeTabCleanContent])
 
-  // Apply build diagnostics to the open buffer
+  // Apply build diagnostics to the open buffer (do not re-run on every keystroke)
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const diags = toCmDiagnostics(view.state.doc, fileDiagnostics)
     view.dispatch(setDiagnostics(view.state, diags))
-  }, [fileDiagnostics, activeTabId, tabs])
+  }, [fileDiagnostics, activeTabId])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

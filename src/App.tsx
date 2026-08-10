@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo, Component, type ReactNode } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, startTransition, Component, type ReactNode } from 'react'
 import { ThemeProvider, useTheme, applyTheme } from './themes/ThemeProvider'
 import { Toolbar } from './ui/Toolbar'
 import { FileExplorer } from './ui/FileExplorer'
@@ -63,6 +63,7 @@ function AppContent() {
   const [dirtyConfirm, setDirtyConfirm] = useState<{ tabId: string; callback: () => void } | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
   const [settingsReady, setSettingsReady] = useState(false)
+  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 })
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(() => {
     try {
       const parsed = JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '')
@@ -162,12 +163,16 @@ function AppContent() {
 
   // Never persist API keys in localStorage; wait until disk settings loaded
   // so we don't wipe aiKey with the empty default on first mount.
+  // Debounce disk writes — Settings/AI keystrokes used to thrash IPC + fs.
   useEffect(() => {
     if (!settingsReady) return
     const { aiKey: _omit, ...safe } = editorSettings
     localStorage.setItem('embed-ide-editor-settings', JSON.stringify(safe))
     const persist: Record<string, unknown> = { ...editorSettings }
-    window.electronAPI?.saveSettings(persist)
+    const timer = window.setTimeout(() => {
+      window.electronAPI?.saveSettings(persist)
+    }, 400)
+    return () => window.clearTimeout(timer)
   }, [editorSettings, settingsReady])
 
   useEffect(() => {
@@ -409,7 +414,13 @@ function AppContent() {
   }, [])
 
   const handleContentChange = useCallback((tabId: string, content: string) => {
-    setOpenTabs(prev => prev.map(t => t.id === tabId ? { ...t, content, dirty: true } : t))
+    startTransition(() => {
+      setOpenTabs(prev => prev.map(t => t.id === tabId ? { ...t, content, dirty: true } : t))
+    })
+  }, [])
+
+  const handleCursorChange = useCallback((_tabId: string, line: number, col: number) => {
+    setCursorPos(prev => (prev.line === line && prev.col === col ? prev : { line, col }))
   }, [])
 
   // File dialog handlers
@@ -589,10 +600,6 @@ function AppContent() {
     callback()
   }, [dirtyConfirm])
 
-  const handleCursorChange = useCallback((tabId: string, line: number, col: number) => {
-    setOpenTabs(prev => prev.map(t => t.id === tabId ? { ...t, cursorLine: line, cursorCol: col } : t))
-  }, [])
-
   // Keep action refs in sync for menu/keyboard handlers
   useEffect(() => { handleOpenProjectRef.current = handleOpenProject }, [handleOpenProject])
   useEffect(() => { handleSaveRef.current = handleSave }, [handleSave])
@@ -740,8 +747,8 @@ function AppContent() {
           </div>
           {editorSettings.showStatusBar !== false && (
             <StatusBar
-              line={openTabs.find(t => t.id === activeTabId)?.cursorLine ?? 1}
-              col={openTabs.find(t => t.id === activeTabId)?.cursorCol ?? 1}
+              line={cursorPos.line}
+              col={cursorPos.col}
               language={openTabs.find(t => t.id === activeTabId)?.language ?? ''}
               projectType={project?.type}
               boardName={project?.boardName}

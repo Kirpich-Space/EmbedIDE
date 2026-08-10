@@ -283,9 +283,10 @@ Do not use absolute paths. Only relative paths inside the project.`,
         setMessages(prev => ({ ...prev, [activeAgent]: [...(prev[activeAgent] || []), cancelledMsg] }))
       } else {
         const msg = err.message || String(e)
-        const friendly = isLocal && /Failed to fetch|NetworkError|ECONNREFUSED/i.test(msg)
-          ? t('aiAgents.localUnreachable')
-          : msg
+        let friendly = msg
+        if (msg === 'ANTHROPIC_OAUTH_REJECTED') friendly = t('settings.aiOAuthTokenRejected')
+        else if (msg === 'AI_KEY_LOOKS_INVALID') friendly = t('settings.aiKeyLooksInvalid')
+        else if (isLocal && /Failed to fetch|NetworkError|ECONNREFUSED/i.test(msg)) friendly = t('aiAgents.localUnreachable')
         const errorMsg: AgentMessage = { role: 'assistant', content: `**Error**: ${friendly}`, timestamp: Date.now() }
         setMessages(prev => ({ ...prev, [activeAgent]: [...(prev[activeAgent] || []), errorMsg] }))
       }

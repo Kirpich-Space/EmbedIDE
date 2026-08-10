@@ -1,6 +1,6 @@
 {
   "name": "embed-ide",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": false,
   "description": "EmbedIDE — Offline-first engineering IDE for embedded flight computers",
   "author": {
@@ -134,14 +134,14 @@
       "artifactName": "${name}-${version}-macos-${arch}.${ext}"
     }
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-rust": "^6.0.2",
     "@codemirror/language": "^6.12.4",
-    "@codemirror/language-data": "^6.5.2",
     "@codemirror/lint": "^6.9.7",
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
@@ -149,9 +149,7 @@
     "@codemirror/view": "^6.43.6",
     "codemirror": "^6.0.2",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
+    "react-dom": "^18.3.1",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",

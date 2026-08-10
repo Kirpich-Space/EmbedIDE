@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDefaultProjectsDir: () => ipcRenderer.invoke('app:get-default-projects-dir'),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // Menu events
   onMenuNewProject: (cb) => on('menu:new-project', cb),

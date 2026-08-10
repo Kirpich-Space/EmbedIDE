@@ -1,36 +1,46 @@
-const { execSync, spawn, spawnSync } = require('child_process');
+const { execFile, execSync, spawn, spawnSync } = require('child_process');
+const { promisify } = require('util');
 const path = require('path');
 const fs = require('fs');
 const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { readProjectMeta } = require('./project');
+const execFileAsync = promisify(execFile);
 
 let currentBuildProc = null;
 let buildWasCancelled = false;
 
 const RUST_TARGET_RE = /^[a-zA-Z0-9._-]+$/;
 
-function detectToolchains() {
+async function detectToolchains() {
   const result = { rust: false, armGcc: false, openocd: false, make: false, python: false, zig: false };
 
-  const check = (cmd, key, versionFlag = '--version') => {
+  const check = async (cmd, key, args = ['--version']) => {
     try {
-      const out = execSync(`${cmd} ${versionFlag}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const { stdout } = await execFileAsync(cmd, args, {
+        timeout: 4000,
+        maxBuffer: 64 * 1024,
+      });
       result[key] = true;
-      result[key + 'Version'] = out.split('\n')[0].trim();
+      result[key + 'Version'] = String(stdout).split('\n')[0].trim();
     } catch {}
   };
 
-  check('make', 'make')
-  check('python3', 'python')
-  check('rustc', 'rust')
-  check('arm-none-eabi-gcc', 'armGcc')
-  check('openocd', 'openocd')
-  check('zig', 'zig', 'version')
+  await Promise.all([
+    check('make', 'make'),
+    check('python3', 'python'),
+    check('rustc', 'rust'),
+    check('arm-none-eabi-gcc', 'armGcc'),
+    check('openocd', 'openocd'),
+    check('zig', 'zig', ['version']),
+  ]);
 
   if (result.rust) {
     try {
-      const targets = execSync('rustup target list --installed', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      result.rustEmbeddedTargets = targets
+      const { stdout } = await execFileAsync('rustup', ['target', 'list', '--installed'], {
+        timeout: 5000,
+        maxBuffer: 256 * 1024,
+      });
+      result.rustEmbeddedTargets = String(stdout)
         .split('\n')
         .map(l => l.trim())
         .filter(l => l.includes('thumb') || l.includes('cortex'));

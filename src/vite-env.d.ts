@@ -120,6 +120,7 @@ interface ElectronAPI {
   getDefaultProjectsDir: () => Promise<string>
   loadSettings: () => Promise<Record<string, unknown>>
   saveSettings: (settings: Record<string, unknown>) => Promise<boolean>
+  openExternal: (url: string) => Promise<boolean>
 
   onMenuNewProject: (cb: () => void) => () => void
   onMenuOpenProject: (cb: () => void) => () => void

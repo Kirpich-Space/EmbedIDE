@@ -1,9 +1,9 @@
-; EmbedIDE 2.0.0 Windows installer (built with linux makensis)
+; EmbedIDE 2.0.1 Windows installer (built with linux makensis)
 !include "MUI2.nsh"
 !include "x64.nsh"
 
 Name "EmbedIDE"
-OutFile "embed-ide-2.0.0-windows-x64-setup.exe"
+OutFile "embed-ide-2.0.1-windows-x64-setup.exe"
 Unicode true
 InstallDir "$LOCALAPPDATA\Programs\EmbedIDE"
 InstallDirRegKey HKCU "Software\KirpichSpace\EmbedIDE" "InstallDir"

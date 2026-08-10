@@ -5,6 +5,7 @@ import type { EditorSettings } from '../core/types'
 import { useTranslation } from '../core/TranslationContext'
 import { fetchOllamaModels, pingOllama, ollamaBaseUrl } from '../core/ollama'
 import { AI_PROVIDERS, getAiProvider, migrateAiProvider } from '../core/aiProviders'
+import { inspectAiCredential } from '../core/aiCredentials'
 import { AiProviderIcon } from './AiProviderIcons'
 import { FancySelect } from './FancySelect'
 import { SelectionMark } from './CheckIcon'
@@ -99,6 +100,12 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
 
   const providerId = migrateAiProvider(editorSettings)
   const provider = getAiProvider(providerId)
+  const keyIssue = inspectAiCredential(providerId, editorSettings.aiKey || '')
+  const subscriptionNote =
+    provider.subscriptionNote === 'openai' ? t('settings.aiSubscriptionNoteOpenAI')
+    : provider.subscriptionNote === 'claude' ? t('settings.aiSubscriptionNoteClaude')
+    : provider.subscriptionNote === 'gemini' ? t('settings.aiSubscriptionNoteGemini')
+    : null
   const set = (partial: Partial<EditorSettings>) => onEditorSettingsChange({ ...editorSettings, ...partial })
 
   const languageOptions = useMemo(() => LANGUAGE_META.map(l => ({
@@ -559,6 +566,30 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 <span className="settings-hint">{provider.hint || t('settings.aiProviderHint')}</span>
               </div>
 
+              {(subscriptionNote || provider.consoleUrl) && editorSettings.aiEnabled && (
+                <div className="settings-ai-callout">
+                  {subscriptionNote && (
+                    <p className="settings-ai-callout-text">{subscriptionNote}</p>
+                  )}
+                  {provider.consoleUrl && (
+                    <a
+                      className="settings-ai-callout-link"
+                      href={provider.consoleUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={e => {
+                        e.preventDefault()
+                        const url = provider.consoleUrl!
+                        if (window.electronAPI?.openExternal) void window.electronAPI.openExternal(url)
+                        else window.open(url, '_blank', 'noopener,noreferrer')
+                      }}
+                    >
+                      {t('settings.aiGetKey')}
+                    </a>
+                  )}
+                </div>
+              )}
+
               <div className="settings-field">
                 <label className="settings-label">{t('settings.aiEndpoint')}</label>
                 <input
@@ -638,9 +669,17 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   value={editorSettings.aiKey}
                   onChange={e => set({ aiKey: e.target.value })}
                   disabled={!editorSettings.aiEnabled || !provider.needsKey}
-                  placeholder={provider.needsKey ? 'sk-... / or-...' : '—'}
+                  placeholder={provider.needsKey ? (provider.keyPlaceholder || 'sk-…') : '—'}
                 />
-                <span className="settings-hint">{t('settings.aiKeyHint')}</span>
+                {keyIssue === 'anthropic_oauth' && (
+                  <span className="settings-hint settings-hint-warn">{t('settings.aiOAuthTokenRejected')}</span>
+                )}
+                {keyIssue === 'looks_invalid' && (
+                  <span className="settings-hint settings-hint-warn">{t('settings.aiKeyLooksInvalid')}</span>
+                )}
+                {!keyIssue && (
+                  <span className="settings-hint">{t('settings.aiKeyHint')}</span>
+                )}
               </div>
             </div>
           )}

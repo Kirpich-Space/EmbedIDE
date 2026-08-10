@@ -1,3 +1,16 @@
+## 2.0.1 — 2026-08-10
+
+Patch update on the 2.0 line: AI API onboarding + performance.
+
+### Added
+- **Gemini** and **xAI (Grok)** cloud providers
+- Clear Settings callouts: ChatGPT Plus / Claude Pro / Google AI Pro ≠ developer API keys
+- Console “Get API key” links; reject Claude OAuth (`sk-ant-oat…`) and cookie/JWT pastes
+
+### Changed
+- OpenAI / Claude model presets refreshed (GPT-5.6, Claude Sonnet 5, …)
+- **Performance:** renderer packages not double-packed into asar; settings disk writes debounced; cursor updates no longer re-render the whole IDE; diagnostics sync no longer runs on every keystroke; toolchain detection runs in parallel
+
 ## 2.0.0 — 2026-08-10
 
 Major UX and editor release: richer settings, multi-provider AI that can edit project files, build diagnostics in the editor, CJK fonts, and cross-distro packaging.

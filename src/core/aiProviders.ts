@@ -1,9 +1,13 @@
 /** Presets for chat providers (OpenAI-compatible + Anthropic Messages) */
 
+import { assertUsableAiCredential } from './aiCredentials'
+
 export type AiProviderId =
   | 'ollama'
   | 'openai'
   | 'claude'
+  | 'gemini'
+  | 'xai'
   | 'openrouter'
   | 'groq'
   | 'deepseek'
@@ -15,6 +19,9 @@ export type AiProviderId =
   | 'custom'
 
 export type AiApiStyle = 'openai' | 'anthropic'
+
+/** Maps to i18n keys settings.aiSubscriptionNote* */
+export type AiSubscriptionNoteId = 'openai' | 'claude' | 'gemini'
 
 export interface AiProviderPreset {
   id: AiProviderId
@@ -34,6 +41,12 @@ export interface AiProviderPreset {
   hint?: string
   /** Accent used on the provider card */
   accent: string
+  /** Developer console to create an API key */
+  consoleUrl?: string
+  /** Placeholder for the API key field */
+  keyPlaceholder?: string
+  /** Consumer plan ≠ API note (i18n) */
+  subscriptionNote?: AiSubscriptionNoteId
 }
 
 export const AI_PROVIDERS: AiProviderPreset[] = [
@@ -54,28 +67,67 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     name: 'OpenAI',
     shortName: 'GPT',
     endpoint: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o',
+    defaultModel: 'gpt-5.6',
     needsKey: true,
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o4-mini', 'o3-mini'],
+    models: ['gpt-5.6', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-4.1', 'gpt-4o', 'o4-mini'],
+    hint: 'Official OpenAI API — not ChatGPT Plus. Create a key at platform.openai.com',
     accent: '#10A37F',
+    consoleUrl: 'https://platform.openai.com/api-keys',
+    keyPlaceholder: 'sk-… / sk-proj-…',
+    subscriptionNote: 'openai',
   },
   {
     id: 'claude',
     name: 'Claude',
     shortName: 'Anthropic',
     endpoint: 'https://api.anthropic.com/v1',
-    defaultModel: 'claude-sonnet-4-5',
+    defaultModel: 'claude-sonnet-5',
     needsKey: true,
     apiStyle: 'anthropic',
     models: [
-      'claude-sonnet-4-5',
-      'claude-opus-4-5',
+      'claude-sonnet-5',
+      'claude-opus-4-8',
+      'claude-fable-5',
       'claude-haiku-4-5',
-      'claude-sonnet-4-20250514',
-      'claude-3-5-haiku-latest',
+      'claude-sonnet-4-5',
     ],
-    hint: 'Anthropic Messages API (x-api-key). Get a key at console.anthropic.com',
+    hint: 'Anthropic Messages API (Console key sk-ant-api…). Pro/Max OAuth is not supported',
     accent: '#D97757',
+    consoleUrl: 'https://console.anthropic.com/settings/keys',
+    keyPlaceholder: 'sk-ant-api…',
+    subscriptionNote: 'claude',
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    shortName: 'Google',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-3.5-flash',
+    needsKey: true,
+    models: [
+      'gemini-3.5-flash',
+      'gemini-3.1-pro-preview',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+    ],
+    hint: 'Google AI Studio API — Google AI Pro/Advanced chat plans do not include this key',
+    accent: '#4285F4',
+    consoleUrl: 'https://aistudio.google.com/apikey',
+    keyPlaceholder: 'AIza…',
+    subscriptionNote: 'gemini',
+  },
+  {
+    id: 'xai',
+    name: 'xAI',
+    shortName: 'Grok',
+    endpoint: 'https://api.x.ai/v1',
+    defaultModel: 'grok-4.5',
+    needsKey: true,
+    models: ['grok-4.5', 'grok-3', 'grok-3-mini'],
+    hint: 'xAI Grok API (OpenAI-compatible). Key from console.x.ai',
+    accent: '#E8E8E8',
+    consoleUrl: 'https://console.x.ai/',
+    keyPlaceholder: 'xai-…',
   },
   {
     id: 'openrouter',
@@ -99,6 +151,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     },
     hint: 'One key for many models (Claude, GPT, Gemini, Llama…)',
     accent: '#A78BFA',
+    consoleUrl: 'https://openrouter.ai/keys',
+    keyPlaceholder: 'sk-or-…',
   },
   {
     id: 'groq',
@@ -109,6 +163,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     needsKey: true,
     models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
     accent: '#F55036',
+    consoleUrl: 'https://console.groq.com/keys',
+    keyPlaceholder: 'gsk_…',
   },
   {
     id: 'deepseek',
@@ -119,6 +175,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     needsKey: true,
     models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder'],
     accent: '#4D6BFE',
+    consoleUrl: 'https://platform.deepseek.com/api_keys',
+    keyPlaceholder: 'sk-…',
   },
   {
     id: 'qwen',
@@ -136,6 +194,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     ],
     hint: 'DashScope OpenAI-compatible (intl). CN: dashscope.aliyuncs.com/compatible-mode/v1',
     accent: '#615CED',
+    consoleUrl: 'https://dashscope.console.aliyun.com/',
+    keyPlaceholder: 'sk-…',
   },
   {
     id: 'kimi',
@@ -153,6 +213,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     ],
     hint: 'Moonshot AI OpenAI-compatible. CN: api.moonshot.cn/v1',
     accent: '#1783FF',
+    consoleUrl: 'https://platform.moonshot.ai/',
+    keyPlaceholder: 'sk-…',
   },
   {
     id: 'together',
@@ -167,6 +229,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
       'Qwen/Qwen2.5-Coder-32B-Instruct',
     ],
     accent: '#0EA5E9',
+    consoleUrl: 'https://api.together.xyz/settings/api-keys',
+    keyPlaceholder: '…',
   },
   {
     id: 'mistral',
@@ -177,6 +241,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     needsKey: true,
     models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'pixtral-large-latest'],
     accent: '#FF7000',
+    consoleUrl: 'https://console.mistral.ai/api-keys/',
+    keyPlaceholder: '…',
   },
   {
     id: 'fireworks',
@@ -190,6 +256,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
       'accounts/fireworks/models/qwen2p5-coder-32b-instruct',
     ],
     accent: '#FF4D8D',
+    consoleUrl: 'https://fireworks.ai/account/api-keys',
+    keyPlaceholder: '…',
   },
   {
     id: 'custom',
@@ -200,6 +268,7 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     needsKey: false,
     hint: 'Any /v1/chat/completions compatible endpoint (LM Studio, vLLM, LiteLLM…)',
     accent: '#94A3B8',
+    keyPlaceholder: 'optional',
   },
 ]
 
@@ -234,6 +303,10 @@ export async function chatCompletion(opts: {
   const { provider, endpoint, model, apiKey, messages, signal, temperature = 0.3 } = opts
   const base = endpoint.replace(/\/+$/, '')
   const style = provider.apiStyle || 'openai'
+
+  if (provider.needsKey || apiKey.trim()) {
+    assertUsableAiCredential(provider.id, apiKey)
+  }
 
   if (style === 'anthropic') {
     const system = messages.find(m => m.role === 'system')?.content

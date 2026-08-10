@@ -4,6 +4,8 @@ const LOGOS: Record<string, string> = {
   ollama: './ai-providers/ollama.svg',
   openai: './ai-providers/openai.svg',
   claude: './ai-providers/claude.svg',
+  gemini: './ai-providers/gemini.svg',
+  xai: './ai-providers/xai.svg',
   openrouter: './ai-providers/openrouter.svg',
   groq: './ai-providers/groq.svg',
   deepseek: './ai-providers/deepseek.svg',

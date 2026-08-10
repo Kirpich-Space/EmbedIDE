@@ -339,6 +339,41 @@
   opacity: 0.7;
 }
 
+.settings-hint-warn {
+  color: #e8a45a;
+  opacity: 1;
+}
+
+.settings-ai-callout {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-ai-callout-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.settings-ai-callout-link {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-ai-callout-link:hover {
+  text-decoration: underline;
+}
+
 .settings-divider {
   height: 1px;
   background: var(--border);
