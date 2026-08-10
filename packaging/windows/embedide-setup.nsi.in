@@ -1,0 +1,50 @@
+; EmbedIDE 2.0.0 Windows installer (built with linux makensis)
+!include "MUI2.nsh"
+!include "x64.nsh"
+
+Name "EmbedIDE"
+OutFile "embed-ide-2.0.0-windows-x64-setup.exe"
+Unicode true
+InstallDir "$LOCALAPPDATA\Programs\EmbedIDE"
+InstallDirRegKey HKCU "Software\KirpichSpace\EmbedIDE" "InstallDir"
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+
+!define MUI_ABORTWARNING
+!define MUI_ICON "ICON_PATH"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+!insertmacro MUI_LANGUAGE "English"
+
+Section "EmbedIDE" SecApp
+  SetOutPath "$INSTDIR"
+  File /r "WIN_UNPACKED_PATH\*.*"
+
+  CreateDirectory "$SMPROGRAMS\EmbedIDE"
+  CreateShortCut "$SMPROGRAMS\EmbedIDE\EmbedIDE.lnk" "$INSTDIR\EmbedIDE.exe"
+  CreateShortCut "$DESKTOP\EmbedIDE.lnk" "$INSTDIR\EmbedIDE.exe"
+
+  WriteRegStr HKCU "Software\KirpichSpace\EmbedIDE" "InstallDir" "$INSTDIR"
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "DisplayName" "EmbedIDE"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "UninstallString" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "DisplayVersion" "2.0.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "Publisher" "Kirpich Space"
+SectionEnd
+
+Section "Uninstall"
+  Delete "$DESKTOP\EmbedIDE.lnk"
+  Delete "$SMPROGRAMS\EmbedIDE\EmbedIDE.lnk"
+  RMDir "$SMPROGRAMS\EmbedIDE"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir /r "$INSTDIR"
+  DeleteRegKey HKCU "Software\KirpichSpace\EmbedIDE"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE"
+SectionEnd

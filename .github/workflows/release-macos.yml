@@ -2,21 +2,66 @@ name: Release macOS
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach builds to (e.g. v2.0.0)'
+        required: true
+        default: 'v2.0.0'
   push:
     tags: ['v*']
+  release:
+    types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   macos:
     runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # unsigned CI builds; avoid electron-builder trying to publish
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+
       - run: npm ci
-      - run: npm run dist:mac
-      - uses: actions/upload-artifact@v4
+
+      - name: Build macOS DMG + ZIP
+        run: npx vite build && npx electron-builder --mac dmg zip --publish never
+
+      - name: Upload macOS artifacts to workflow
+        uses: actions/upload-artifact@v4
         with:
           name: embedide-macos
-          path: release/*.{dmg,zip,yml,yaml,json,blockmap}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.yml
+            release/*.yaml
+            release/*.blockmap
+          if-no-files-found: error
+
+      - name: Attach macOS builds to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag || github.ref_name }}"
+          shopt -s nullglob
+          files=(release/*.dmg release/*macos*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No macOS artifacts found"
+            ls -la release || true
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
+          echo "Attached to release $TAG:"
+          printf ' - %s\n' "${files[@]}"
