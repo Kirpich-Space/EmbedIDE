@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=EmbedIDE
+GenericName=Embedded IDE
+Comment=Offline-first IDE for embedded flight computers (STM32 / ARM Cortex-M)
+Comment[ru]=IDE для встроенных полётных компьютеров (STM32 / ARM Cortex-M)
+Exec=/home/kirpich/EmbedIDE/launch-desktop.sh
+Icon=embedide
+Path=/home/kirpich/EmbedIDE
+Terminal=false
+Categories=Development;IDE;Electronics;
+Keywords=embedded;stm32;arm;ide;firmware;rust;c;
+StartupNotify=true
+StartupWMClass=embed-ide
+MimeType=

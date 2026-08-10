@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=EmbedIDE
+GenericName=Embedded IDE
+Comment=Offline-first IDE for Cortex-M firmware
+Exec=embedide %U
+Icon=embedide
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=embed-ide

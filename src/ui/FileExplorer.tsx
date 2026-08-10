@@ -37,10 +37,21 @@ export function FileExplorer({
   const ctxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (projectDir && expandedDirs.size === 0) {
-      setExpandedDirs(new Set([projectDir.split('/').pop() || 'project']))
-    }
+    setExpandedDirs(new Set())
   }, [projectDir])
+
+  useEffect(() => {
+    if (!projectDir) return
+    setExpandedDirs(prev => {
+      if (prev.size > 0) return prev
+      const roots = new Set<string>()
+      for (const f of files) {
+        if (!f.id.includes('/') && f.type === 'directory') roots.add(f.id)
+      }
+      if (roots.size === 0) roots.add('src')
+      return roots
+    })
+  }, [projectDir, files])
 
   useEffect(() => {
     const close = () => setContextMenu(null)
@@ -153,8 +164,16 @@ export function FileExplorer({
       ]
     }
     return [
-      { label: t('fileExplorer.newFile'), action: () => { onNewFile?.(node.type === 'directory' ? node.id : undefined); setContextMenu(null) } },
-      { label: t('fileExplorer.newFolder'), action: () => { onNewFolder?.(node.type === 'directory' ? node.id : undefined); setContextMenu(null) } },
+      { label: t('fileExplorer.newFile'), action: () => {
+        const parent = node.type === 'directory' ? node.id : (node.id.includes('/') ? node.id.substring(0, node.id.lastIndexOf('/')) : undefined)
+        onNewFile?.(parent)
+        setContextMenu(null)
+      } },
+      { label: t('fileExplorer.newFolder'), action: () => {
+        const parent = node.type === 'directory' ? node.id : (node.id.includes('/') ? node.id.substring(0, node.id.lastIndexOf('/')) : undefined)
+        onNewFolder?.(parent)
+        setContextMenu(null)
+      } },
       { label: '', action: () => {}, separator: true },
       { label: t('fileExplorer.rename'), shortcut: 'F2', action: () => { onRename?.(node); setContextMenu(null) } },
       { label: t('fileExplorer.delete'), shortcut: 'Del', action: () => { onDelete?.(node); setContextMenu(null) } },

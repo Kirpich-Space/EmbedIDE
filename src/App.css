@@ -30,6 +30,25 @@
   font-display: swap;
 }
 
+/* Bundled CJK — IBM Plex / JetBrains have no Han glyphs (tofu otherwise) */
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('/fonts/NotoSansSC-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+4E00-9FFF, U+3400-4DBF, U+F900-FAFF, U+3000-303F, U+FF00-FFEF;
+}
+
+@font-face {
+  font-family: 'Noto Sans JP';
+  src: url('/fonts/NotoSansJP-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+3040-30FF, U+31F0-31FF, U+4E00-9FFF, U+3400-4DBF, U+F900-FAFF, U+3000-303F, U+FF00-FFEF;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -43,12 +62,36 @@ html, body, #root {
 }
 
 body {
-  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  font-family: var(
+    --ui-font,
+    'IBM Plex Sans',
+    'Noto Sans SC',
+    'Noto Sans JP',
+    'Segoe UI',
+    'PingFang SC',
+    'Hiragino Sans',
+    'Microsoft YaHei',
+    'Yu Gothic',
+    sans-serif
+  );
+  font-weight: 500;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: background 0.3s, color 0.3s;
+}
+
+html[data-lang='zh'] {
+  --ui-font: 'IBM Plex Sans', 'Noto Sans SC', 'Noto Sans JP', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+html[data-lang='ja'] {
+  --ui-font: 'IBM Plex Sans', 'Noto Sans JP', 'Noto Sans SC', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', sans-serif;
+}
+
+button, input, select, textarea, label, .panel-title, .toolbar-title, .settings-label {
+  font-weight: 500;
 }
 
 /* ===== Animations ===== */
@@ -121,16 +164,45 @@ body {
   to { opacity: 1; transform: scale(1); }
 }
 
+@keyframes islandIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes accentSweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes softGlow {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+}
+
+@keyframes fileAccentIn {
+  from { transform: scaleY(0); opacity: 0; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
 .animate-fade-in {
-  animation: fadeIn 0.15s ease-out;
+  animation: fadeIn var(--dur-fast, 120ms) var(--ease-out, ease-out);
 }
 
 .animate-scale-in {
-  animation: scaleIn 0.2s ease-out;
+  animation: scaleIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .animate-slide-up {
-  animation: slideInUp 0.2s ease-out;
+  animation: slideInUp var(--dur-med, 220ms) var(--ease-spring, ease-out);
+}
+
+.animate-island-in {
+  animation: islandIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .animate-pulse {
@@ -144,23 +216,27 @@ body {
 /* ===== Slide Panel ===== */
 .slide-panel {
   overflow: hidden;
+  height: 100%;
 }
 
-.slide-panel-left {
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
+.slide-panel-left,
 .slide-panel-right {
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width var(--dur-med, 220ms) var(--ease-spring, ease);
 }
 
 .slide-panel-bottom {
-  transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: height var(--dur-med, 220ms) var(--ease-spring, ease);
 }
 
 .slide-panel-content {
   width: 100%;
   height: 100%;
+  min-width: 0;
+}
+
+.slide-panel-left .slide-panel-content,
+.slide-panel-right .slide-panel-content {
+  min-width: 200px;
 }
 
 /* ===== Scrollbar ===== */
@@ -197,7 +273,7 @@ body {
   width: 100vw;
   background: var(--bg);
   color: var(--text);
-  transition: background 0.25s var(--ease-out, ease), color 0.25s var(--ease-out, ease);
+  transition: background 0.3s var(--ease-out, ease), color 0.3s var(--ease-out, ease);
 }
 
 .app-body {
@@ -206,9 +282,12 @@ body {
   overflow: hidden;
   position: relative;
   background: var(--bg);
-  gap: 0;
+  gap: var(--island-gap, 6px);
+  padding: var(--island-gap, 6px);
+  min-height: 0;
 }
 
+/* Floating editor island */
 .app-center {
   flex: 1;
   min-width: 0;
@@ -216,6 +295,10 @@ body {
   flex-direction: column;
   overflow: hidden;
   background: var(--editor-bg);
+  border-radius: var(--island-radius, 10px);
+  border: var(--panel-edge);
+  box-shadow: var(--island-shadow), var(--island-rim);
+  animation: islandIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .app-center > .editor-panel {
@@ -236,6 +319,62 @@ body {
   gap: 0;
   background: var(--output-bg);
   border-top: var(--panel-edge);
+}
+
+.app-bottom-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+}
+
+.app-bottom-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
+  position: relative;
+  transition:
+    color var(--dur-fast, 120ms) var(--ease-out, ease),
+    background var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+
+.app-bottom-tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform var(--dur-med, 220ms) var(--ease-spring, ease);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.app-bottom-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.app-bottom-tab.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-glow) 35%, transparent);
+}
+
+.app-bottom-tab.active::after {
+  transform: scaleX(1);
 }
 
 .app-bottom-panels::-webkit-scrollbar {
@@ -259,13 +398,25 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm, 6px);
 }
 
-/* Color transitions only — motion for interactive elements is explicit */
-*, *::before, *::after {
-  transition-property: background, background-color, border-color, color, box-shadow, opacity;
-  transition-duration: 0.15s;
+/* Prefer explicit transitions — avoid global * animation tax */
+button,
+input,
+select,
+textarea,
+.file-item,
+.editor-tab,
+.agent-tab,
+.agent-message,
+.settings-tab,
+.settings-theme-card,
+.project-type-card,
+.board-chip,
+.statusbar-item {
+  transition-property: background, background-color, border-color, color, box-shadow, opacity, transform, filter;
+  transition-duration: var(--dur-fast, 120ms);
   transition-timing-function: var(--ease-out, ease);
 }
 
@@ -321,6 +472,15 @@ button.panel-icon-btn:active,
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Dirty confirm dialog */
 .error-boundary {
   display: flex;
@@ -336,8 +496,8 @@ button.panel-icon-btn:active,
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
   width: 380px;
-  box-shadow: var(--shadow-lg);
-  animation: scaleIn 0.2s var(--ease-out, ease);
+  box-shadow: var(--shadow-lg), var(--island-rim);
+  animation: scaleIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .dirty-body {
@@ -362,4 +522,62 @@ button.panel-icon-btn:active,
   gap: 8px;
   padding: 12px 24px;
   border-top: 1px solid var(--border);
+}
+
+/* ===== UI chrome from settings ===== */
+html {
+  font-size: calc(16px * var(--ui-scale, 1));
+}
+
+html.ui-compact .app-toolbar,
+html.ui-compact .status-bar,
+html.ui-compact .settings-tab {
+  padding-top: 0.35em;
+  padding-bottom: 0.35em;
+}
+
+html.ui-compact .app-island-gap,
+html.ui-compact .slide-panel {
+  --island-gap: 4px;
+}
+
+html.ui-reduce-motion *,
+html.ui-reduce-motion *::before,
+html.ui-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0ms !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.ui-no-glass .settings-overlay,
+html.ui-no-glass .fancy-select-dropdown {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Selection mark container — muted gray disc, accent check */
+.selection-mark {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 999px;
+  flex-shrink: 0;
+  line-height: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 1 !important;
+  color: var(--accent, #f5a524);
+  background: color-mix(in srgb, var(--text) 16%, var(--bg-panel, #1a1a1a));
+  border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border));
+  box-shadow: none;
+}
+
+.selection-mark svg {
+  display: block;
+  flex-shrink: 0;
+  color: inherit;
 }

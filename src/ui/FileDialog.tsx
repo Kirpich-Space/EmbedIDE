@@ -15,6 +15,19 @@ const EXTENSIONS: Record<string, string[]> = {
   c: ['.c', '.h'],
   cpp: ['.cpp', '.hpp', '.h'],
   asm: ['.S', '.s'],
+  zig: ['.zig'],
+  'driver-c': ['.c', '.h'],
+  'driver-cpp': ['.cpp', '.hpp', '.h'],
+  'driver-rust': ['.rs'],
+  'driver-asm': ['.S', '.s'],
+  'driver-zig': ['.zig'],
+  'os-c': ['.c', '.h'],
+  'os-cpp': ['.cpp', '.hpp', '.h'],
+  'os-rust': ['.rs'],
+  'os-asm': ['.S', '.s'],
+  'os-zig': ['.zig'],
+  driver: ['.c', '.h'],
+  os: ['.c', '.h'],
 }
 
 export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit, onClose }: FileDialogProps) {
@@ -25,7 +38,10 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
   const inputRef = useRef<HTMLInputElement>(null)
   const loadingRef = useRef(false)
 
-  const title = t('fileDialog.' + mode)
+  const titleKey = mode === 'create-file' ? 'fileDialog.newFile'
+    : mode === 'create-folder' ? 'fileDialog.newFolder'
+    : 'fileDialog.rename'
+  const title = t(titleKey)
 
   const placeholder = mode === 'create-file' ? t('fileDialog.filePlaceholder')
     : mode === 'create-folder' ? t('fileDialog.folderPlaceholder')

@@ -23,7 +23,11 @@ export function StatusBar({ line, col, language, projectType, boardName, toolcha
         <span className="statusbar-item">
           {toolchains?.armGcc
             ? `${t('statusBar.armGcc')} ${toolchains.armGccVersion?.match(/\d+\.\d+\.\d+/)?.[0] || ''}`
-            : toolchains?.rust ? `${t('statusBar.rust')} ${toolchains.rustVersion?.match(/\d+\.\d+/)?.[0] || ''}` : t('statusBar.noCompiler')}
+            : toolchains?.zig
+              ? `Zig ${toolchains.zigVersion || ''}`
+              : toolchains?.rust
+                ? `${t('statusBar.rust')} ${toolchains.rustVersion?.match(/\d+\.\d+/)?.[0] || ''}`
+                : t('statusBar.noCompiler')}
         </span>
         <span className="statusbar-separator" />
         <span className="statusbar-item">

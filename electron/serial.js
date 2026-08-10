@@ -99,29 +99,69 @@ function listSerialPorts() {
 function connectSerial(port, baud, onData, onError) {
   disconnectSerial();
   const script = getPythonScript();
-  const proc = spawn(PYTHON_CMD, [script, port, String(baud)]);
-  activeProcess = proc;
 
-  proc.stdout.on('data', (data) => {
-    const lines = data.toString().trim().split('\n');
-    for (const line of lines) {
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === 'data') onData?.(msg.text);
-        else if (msg.type === 'connected') onData?.(`Connected to ${msg.port} @ ${msg.baud} baud`);
-        else if (msg.type === 'error') onError?.(msg.msg);
-      } catch {}
-    }
+  return new Promise((resolve, reject) => {
+    const proc = spawn(PYTHON_CMD, [script, port, String(baud)]);
+    activeProcess = proc;
+    let settled = false;
+
+    const settleOk = () => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        send: (text) => { if (activeProcess) activeProcess.stdin.write(text + '\n'); },
+        disconnect: () => { if (activeProcess) { try { activeProcess.stdin.write('__close__\n'); } catch {} activeProcess = null; } },
+      });
+    };
+
+    const settleErr = (msg) => {
+      if (settled) return;
+      settled = true;
+      try { proc.kill(); } catch {}
+      activeProcess = null;
+      reject(new Error(msg));
+    };
+
+    const timeout = setTimeout(() => {
+      settleErr('Serial connect timed out');
+    }, 5000);
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().trim().split('\n');
+      for (const line of lines) {
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'connected') {
+            clearTimeout(timeout);
+            onData?.(`Connected to ${msg.port} @ ${msg.baud} baud`);
+            settleOk();
+          } else if (msg.type === 'data') {
+            onData?.(msg.text);
+          } else if (msg.type === 'error') {
+            clearTimeout(timeout);
+            onError?.(msg.msg);
+            settleErr(msg.msg);
+          }
+        } catch {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => onError?.(data.toString()));
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      settleErr(err.message);
+    });
+    proc.on('close', () => {
+      activeProcess = null;
+      if (!settled) {
+        clearTimeout(timeout);
+        settleErr('Serial process exited before connect');
+      } else {
+        onData?.('Disconnected');
+      }
+    });
   });
-
-  proc.stderr.on('data', (data) => onError?.(data.toString()));
-  proc.on('error', (err) => onError?.(err.message));
-  proc.on('close', () => { activeProcess = null; onData?.('Disconnected'); });
-
-  return {
-    send: (text) => { if (activeProcess) activeProcess.stdin.write(text + '\n'); },
-    disconnect: () => { if (activeProcess) { activeProcess.stdin.write('__close__\n'); activeProcess = null; } },
-  };
 }
 
 function disconnectSerial() {

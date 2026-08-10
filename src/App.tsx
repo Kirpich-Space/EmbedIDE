@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component, type ReactNode } from 'react'
-import { ThemeProvider } from './themes/ThemeProvider'
+import { ThemeProvider, useTheme, applyTheme } from './themes/ThemeProvider'
 import { Toolbar } from './ui/Toolbar'
 import { FileExplorer } from './ui/FileExplorer'
 import { Editor } from './ui/Editor'
@@ -17,7 +17,9 @@ import { PeripheralViewer } from './ui/PeripheralViewer'
 import { TranslationProvider } from './core/TranslationContext'
 import { getFlatTranslations, LANG_LABELS } from './core/translations'
 import type { FileNode, EditorTabData, BuildMessage, EditorSettings, ProjectConfig, MemoryUsage } from './core/types'
+import { parseBuildDiagnostics, diagnosticMatchesTab } from './core/parseDiagnostics'
 import type { LangCode } from './core/translations'
+import { DEFAULT_EDITOR_SETTINGS, normalizeEditorSettings, applyAccentOverride, applyUiChrome } from './core/defaultSettings'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -42,6 +44,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 function AppContent() {
+  const { theme } = useTheme()
   const [project, setProject] = useState<ProjectConfig | null>(null)
   const [projectFiles, setProjectFiles] = useState<FileNode[]>([])
   const [openTabs, setOpenTabs] = useState<EditorTabData[]>([])
@@ -59,29 +62,13 @@ function AppContent() {
   const [showRightPanel, setShowRightPanel] = useState(false)
   const [dirtyConfirm, setDirtyConfirm] = useState<{ tabId: string; callback: () => void } | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
+  const [settingsReady, setSettingsReady] = useState(false)
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(() => {
-    const defaults: EditorSettings = {
-      fontSize: 14,
-      tabSize: 4,
-      fontFamily: "'JetBrains Mono', monospace",
-      wordWrap: false,
-      minimap: false,
-      lineNumbers: true,
-      cursorBlinkRate: 1200,
-      smoothScroll: true,
-      bracketMatch: true,
-      language: 'en',
-      theme: 'dark',
-      aiEnabled: false,
-      aiMode: 'local',
-      aiEndpoint: 'http://127.0.0.1:11434/v1',
-      aiModel: 'llama3.2',
-      aiKey: '',
-    }
     try {
-      return { ...defaults, ...JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '') }
+      const parsed = JSON.parse(localStorage.getItem('embed-ide-editor-settings') || '')
+      return normalizeEditorSettings(parsed)
     } catch {
-      return defaults
+      return { ...DEFAULT_EDITOR_SETTINGS }
     }
   })
 
@@ -98,6 +85,12 @@ function AppContent() {
       return val
     }
   }, [editorSettings.language])
+
+  const activeFileDiagnostics = useMemo(() => {
+    const all = parseBuildDiagnostics(outputMessages.map(m => m.text))
+    if (!activeTabId) return []
+    return all.filter(d => diagnosticMatchesTab(d.file, activeTabId, project?.dir))
+  }, [outputMessages, activeTabId, project?.dir])
   const tRef = useRef(t)
 
   // File dialog state
@@ -113,27 +106,69 @@ function AppContent() {
   const openTabsRef = useRef(openTabs)
   const activeTabIdRef = useRef(activeTabId)
   const projectRef = useRef(project)
+  const editorSettingsRef = useRef(editorSettings)
+  const buildCancelRef = useRef(false)
   openTabsRef.current = openTabs
   activeTabIdRef.current = activeTabId
   projectRef.current = project
+  editorSettingsRef.current = editorSettings
 
   useEffect(() => {
     window.electronAPI?.detectToolchains().then(setToolchains)
-    window.electronAPI?.loadSettings().then(saved => {
+    if (!window.electronAPI?.loadSettings) {
+      setSettingsReady(true)
+      return
+    }
+    window.electronAPI.loadSettings().then(saved => {
       if (saved && Object.keys(saved).length > 0 && !localStorage.getItem('embed-ide-editor-settings')) {
-        setEditorSettings(prev => ({ ...prev, ...saved }))
+        setEditorSettings(normalizeEditorSettings(saved as Partial<EditorSettings>))
+      } else if (saved && typeof saved === 'object' && 'aiKey' in saved) {
+        // Restore API key from userData only (not stored in localStorage)
+        setEditorSettings(prev => normalizeEditorSettings({
+          ...prev,
+          aiKey: String((saved as { aiKey?: string }).aiKey || ''),
+        }))
       }
+      setSettingsReady(true)
+    }).catch(() => {
+      setSettingsReady(true)
     })
   }, [])
+
+  useEffect(() => {
+    document.documentElement.lang = editorSettings.language || 'en'
+    document.documentElement.dataset.lang = editorSettings.language || 'en'
+  }, [editorSettings.language])
 
   useEffect(() => {
     if (!editorSettings.aiEnabled) setShowRightPanel(false)
   }, [editorSettings.aiEnabled])
 
   useEffect(() => {
-    localStorage.setItem('embed-ide-editor-settings', JSON.stringify(editorSettings))
-    window.electronAPI?.saveSettings(editorSettings)
-  }, [editorSettings])
+    applyUiChrome(editorSettings)
+    if (editorSettings.customAccent) {
+      applyAccentOverride(editorSettings.customAccent)
+    } else {
+      applyTheme(theme)
+    }
+  }, [
+    theme,
+    editorSettings.customAccent,
+    editorSettings.uiScale,
+    editorSettings.compactUi,
+    editorSettings.reduceMotion,
+    editorSettings.glassEffects,
+  ])
+
+  // Never persist API keys in localStorage; wait until disk settings loaded
+  // so we don't wipe aiKey with the empty default on first mount.
+  useEffect(() => {
+    if (!settingsReady) return
+    const { aiKey: _omit, ...safe } = editorSettings
+    localStorage.setItem('embed-ide-editor-settings', JSON.stringify(safe))
+    const persist: Record<string, unknown> = { ...editorSettings }
+    window.electronAPI?.saveSettings(persist)
+  }, [editorSettings, settingsReady])
 
   useEffect(() => {
     const kb = project?.flashKb ?? 1024
@@ -167,11 +202,15 @@ function AppContent() {
 
     const unsubBuildComplete = api.onBuildComplete((data) => {
       setIsBuilding(false)
+      if (data.cancelled || buildCancelRef.current) {
+        buildCancelRef.current = false
+        return
+      }
       if (data.code === 0) {
         setOutputMessages(prev => [...prev, { type: 'success', text: tRef.current('build.success'), timestamp: Date.now(), source: 'build' }])
         setMemoryVisible(true)
       } else {
-        setOutputMessages(prev => [...prev, { type: 'error', text: data.error || tRef.current('build.failed', { code: data.code }), timestamp: Date.now(), source: 'build' }])
+        setOutputMessages(prev => [...prev, { type: 'error', text: data.error || tRef.current('build.failed', { code: data.code ?? -1 }), timestamp: Date.now(), source: 'build' }])
       }
     })
 
@@ -182,7 +221,7 @@ function AppContent() {
     const unsubFlashComplete = api.onFlashComplete((data) => {
       setOutputMessages(prev => [...prev, data.code === 0
         ? { type: 'success', text: tRef.current('flash.success'), timestamp: Date.now(), source: 'flash' }
-        : { type: 'error', text: data.error || tRef.current('flash.failed', { code: data.code }), timestamp: Date.now(), source: 'flash' }
+        : { type: 'error', text: data.error || tRef.current('flash.failed', { code: data.code ?? -1 }), timestamp: Date.now(), source: 'flash' }
       ])
     })
 
@@ -194,15 +233,22 @@ function AppContent() {
     }
   }, [])
 
-  // Menu events
+  // Menu events — use refs so handlers stay fresh without resubscribing
+  const handleOpenProjectRef = useRef<() => void>(() => {})
+  const handleSaveRef = useRef<() => void>(() => {})
+  const saveAllDirtyRef = useRef<() => void>(() => {})
+  const handleBuildRef = useRef<() => void>(() => {})
+  const handleFlashRef = useRef<() => void>(() => {})
+  const handleTabCloseRef = useRef<(id: string) => void>(() => {})
+
   useEffect(() => {
     const api = window.electronAPI
     if (!api) return
     const unsubs = [
       api.onMenuNewProject(() => setProjectDialogOpen(true)),
-      api.onMenuOpenProject(() => handleOpenProject()),
-      api.onMenuSave(() => handleSave()),
-      api.onMenuSaveAll(() => saveAllDirty()),
+      api.onMenuOpenProject(() => handleOpenProjectRef.current()),
+      api.onMenuSave(() => handleSaveRef.current()),
+      api.onMenuSaveAll(() => saveAllDirtyRef.current()),
       api.onMenuSettings(() => setSettingsOpen(true)),
       api.onMenuFind(() => {
         const cm = document.querySelector('.cm-editor') as HTMLElement
@@ -210,10 +256,10 @@ function AppContent() {
       }),
       api.onMenuToggleExplorer(() => setShowLeftPanel(v => !v)),
       api.onMenuToggleAgents(() => {
-        if (editorSettings.aiEnabled) setShowRightPanel(v => !v)
+        if (editorSettingsRef.current.aiEnabled) setShowRightPanel(v => !v)
       }),
-      api.onMenuBuild(() => handleBuild()),
-      api.onMenuFlash(() => handleFlash()),
+      api.onMenuBuild(() => handleBuildRef.current()),
+      api.onMenuFlash(() => handleFlashRef.current()),
     ]
     return () => unsubs.forEach(u => u())
   }, [])
@@ -229,7 +275,7 @@ function AppContent() {
     const tab = tabs.find(t => t.id === tabId)
     if (!tab || !tab.dirty || !proj) return false
     try {
-      await window.electronAPI!.writeProjectFile(tabId, tab.content)
+      await window.electronAPI!.writeProjectFile(proj.dir, tabId, tab.content)
       setOpenTabs(prev => prev.map(t => t.id === tabId ? { ...t, dirty: false } : t))
       addOutput({ type: 'info', text: tRef.current('fileOps.saved', { name: tab.name }), timestamp: Date.now(), source: 'build' })
       return true
@@ -281,6 +327,7 @@ function AppContent() {
   }, [])
 
   const handleCreateProject = useCallback(async (name: string, type: string, boardId: string) => {
+    await saveAllDirty()
     const projectsDir = await window.electronAPI!.getDefaultProjectsDir()
     const dir = await window.electronAPI!.createProject(projectsDir, name, type, boardId)
     setProjectDialogOpen(false)
@@ -292,7 +339,7 @@ function AppContent() {
       ramKb: board?.ramKb,
       peripherals: board?.peripherals,
     })
-  }, [loadProject])
+  }, [loadProject, saveAllDirty])
 
   const handleOpenProject = useCallback(async () => {
     const result = await window.electronAPI!.openProject()
@@ -334,7 +381,7 @@ function AppContent() {
     const existing = openTabsRef.current.find(t => t.id === filePath)
     if (existing) { setActiveTabId(filePath); return }
     try {
-      const content = await window.electronAPI!.readProjectFile(filePath)
+      const content = await window.electronAPI!.readProjectFile(proj.dir, filePath)
       openFileTab({ id: filePath, name: node.name, language: node.language }, content)
     } catch {
       openFileTab({ id: filePath, name: node.name, language: node.language }, `// ${node.name}\n`)
@@ -394,11 +441,19 @@ function AppContent() {
       const parentDir = node.id.includes('/') ? node.id.substring(0, node.id.lastIndexOf('/')) : ''
       const newRelPath = parentDir ? `${parentDir}/${name}` : name
       const newPath = `${proj.dir}/${newRelPath}`
-      const ok = await window.electronAPI!.renameProjectFile(oldPath, newPath)
+      const ok = await window.electronAPI!.renameProjectFile(proj.dir, oldPath, newPath)
       if (!ok) throw new Error(`${newRelPath} already exists`)
 
-      setOpenTabs(prev => prev.map(t => t.id === oldPath ? { ...t, id: newPath, name } : t))
-      if (active === oldPath) setActiveTabId(newPath)
+      setOpenTabs(prev => prev.map(t => {
+        if (t.id === oldPath) return { ...t, id: newPath, name }
+        if (t.id.startsWith(oldPath + '/')) {
+          return { ...t, id: newPath + t.id.slice(oldPath.length) }
+        }
+        return t
+      }))
+      if (active === oldPath || active.startsWith(oldPath + '/')) {
+        setActiveTabId(active === oldPath ? newPath : newPath + active.slice(oldPath.length))
+      }
       setFileDialog(null)
       await refreshFiles()
       addOutput({ type: 'info', text: tRef.current('fileOps.renamed', { name: newRelPath }), timestamp: Date.now(), source: 'build' })
@@ -423,33 +478,41 @@ function AppContent() {
     addOutput({ type: 'info', text: tRef.current('fileOps.created', { name: relPath }), timestamp: Date.now(), source: 'build' })
   }, [projectRef, fileDialog, refreshFiles, openFileTab, addOutput])
 
-  const handleDelete = useCallback((node: FileNode) => {
-    setConfirmDelete(node)
-  }, [])
-
-  const handleDeleteConfirm = useCallback(async () => {
-    const node = confirmDelete
+  const performDelete = useCallback(async (node: FileNode) => {
     const proj = projectRef.current
     const active = activeTabIdRef.current
-    if (!node || !proj) return
+    if (!proj) return
     const fullPath = `${proj.dir}/${node.id}`
-    await window.electronAPI!.deleteProjectFile(fullPath)
+    await window.electronAPI!.deleteProjectFile(proj.dir, fullPath)
     setOpenTabs(prev => {
-      const next = prev.filter(t => t.id !== fullPath)
+      const next = prev.filter(t => t.id !== fullPath && !t.id.startsWith(fullPath + '/'))
       if (next.length === 0) { setActiveTabId(''); return [] }
-      if (active === fullPath) setActiveTabId(next[next.length - 1].id)
+      if (active === fullPath || active.startsWith(fullPath + '/')) setActiveTabId(next[next.length - 1].id)
       return next
     })
     setConfirmDelete(null)
     await refreshFiles()
     addOutput({ type: 'info', text: tRef.current('fileOps.deleted', { name: node.name }), timestamp: Date.now(), source: 'build' })
-  }, [confirmDelete, refreshFiles, addOutput])
+  }, [refreshFiles, addOutput])
+
+  const handleDelete = useCallback((node: FileNode) => {
+    if (editorSettingsRef.current.confirmDelete === false) {
+      void performDelete(node)
+      return
+    }
+    setConfirmDelete(node)
+  }, [performDelete])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!confirmDelete) return
+    await performDelete(confirmDelete)
+  }, [confirmDelete, performDelete])
 
   const handleBuild = useCallback(async () => {
     const proj = projectRef.current
     if (!proj) { addOutput({ type: 'warn', text: tRef.current('build.noProject'), timestamp: Date.now(), source: 'build' }); return }
     await saveAllDirty()
-    setOutputMessages(prev => [...prev, { type: 'info', text: `Building ${proj.name}...`, timestamp: Date.now(), source: 'build' }])
+    setOutputMessages([{ type: 'info', text: `Building ${proj.name}...`, timestamp: Date.now(), source: 'build' }])
     setOutputVisible(true)
     setMemoryVisible(false)
     setIsBuilding(true)
@@ -462,6 +525,7 @@ function AppContent() {
   }, [addOutput, saveAllDirty])
 
   const handleCancelBuild = useCallback(async () => {
+    buildCancelRef.current = true
     await window.electronAPI?.cancelBuild()
     setIsBuilding(false)
     addOutput({ type: 'warn', text: tRef.current('build.cancelled'), timestamp: Date.now(), source: 'build' })
@@ -492,24 +556,72 @@ function AppContent() {
 
   const handleSaveDirtyConfirm = useCallback(async () => {
     if (!dirtyConfirm) return
-    await saveTab(dirtyConfirm.tabId)
-    dirtyConfirm.callback()
+    const { tabId, callback } = dirtyConfirm
+    const ok = await saveTab(tabId)
+    if (!ok) return
+    setDirtyConfirm(null)
+    callback()
   }, [dirtyConfirm, saveTab])
 
+  const handleAiFilesApplied = useCallback(async (relPaths: string[]) => {
+    const proj = projectRef.current
+    if (!proj || relPaths.length === 0) return
+    await refreshFiles()
+    for (const rel of relPaths) {
+      const fullPath = `${proj.dir}/${rel}`
+      try {
+        const content = await window.electronAPI!.readProjectFile(proj.dir, fullPath)
+        setOpenTabs(prev => {
+          const existing = prev.find(t => t.id === fullPath)
+          if (existing) {
+            return prev.map(t => t.id === fullPath ? { ...t, content, dirty: false } : t)
+          }
+          return prev
+        })
+      } catch { /* ignore missing */ }
+    }
+  }, [refreshFiles])
+
   const handleDiscardDirtyConfirm = useCallback(() => {
-    dirtyConfirm?.callback()
+    if (!dirtyConfirm) return
+    const { callback } = dirtyConfirm
+    setDirtyConfirm(null)
+    callback()
   }, [dirtyConfirm])
+
+  const handleCursorChange = useCallback((tabId: string, line: number, col: number) => {
+    setOpenTabs(prev => prev.map(t => t.id === tabId ? { ...t, cursorLine: line, cursorCol: col } : t))
+  }, [])
+
+  // Keep action refs in sync for menu/keyboard handlers
+  useEffect(() => { handleOpenProjectRef.current = handleOpenProject }, [handleOpenProject])
+  useEffect(() => { handleSaveRef.current = handleSave }, [handleSave])
+  useEffect(() => { saveAllDirtyRef.current = saveAllDirty }, [saveAllDirty])
+  useEffect(() => { handleBuildRef.current = handleBuild }, [handleBuild])
+  useEffect(() => { handleFlashRef.current = handleFlash }, [handleFlash])
+  useEffect(() => { handleTabCloseRef.current = handleTabClose }, [handleTabClose])
+
+  // Auto-save dirty tabs
+  useEffect(() => {
+    if (!editorSettings.autoSave || !projectRef.current) return
+    const dirty = openTabs.filter(t => t.dirty)
+    if (dirty.length === 0) return
+    const timer = window.setTimeout(() => {
+      void saveAllDirtyRef.current()
+    }, editorSettings.autoSaveDelayMs)
+    return () => window.clearTimeout(timer)
+  }, [openTabs, editorSettings.autoSave, editorSettings.autoSaveDelayMs])
 
   // Stable keyboard handler using refs
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const c = e.ctrlKey || e.metaKey
-      if (c && e.key === 's') { e.preventDefault(); handleSave() }
-      if (c && e.key === 'b' && !e.shiftKey) { e.preventDefault(); handleBuild() }
-      if (c && e.shiftKey && e.key === 'B') { e.preventDefault(); handleFlash() }
+      if (c && e.key === 's') { e.preventDefault(); handleSaveRef.current() }
+      if (c && e.key === 'b' && !e.shiftKey) { e.preventDefault(); handleBuildRef.current() }
+      if (c && e.shiftKey && e.key === 'B') { e.preventDefault(); handleFlashRef.current() }
       if (c && e.key === 'w' && activeTabIdRef.current) {
         e.preventDefault()
-        handleTabClose(activeTabIdRef.current)
+        handleTabCloseRef.current(activeTabIdRef.current)
       }
       if (c && e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault()
@@ -521,13 +633,13 @@ function AppContent() {
       }
       if (c && e.key === ',') { e.preventDefault(); setSettingsOpen(true) }
       if (c && e.key === 'n') { e.preventDefault(); setProjectDialogOpen(true) }
-      if (c && e.key === 'o') { e.preventDefault(); handleOpenProject() }
+      if (c && e.key === 'o') { e.preventDefault(); handleOpenProjectRef.current() }
       if (c && e.key === 'm') { e.preventDefault(); setMemoryVisible(v => !v) }
       if (c && e.key === 'p') { e.preventDefault(); setPeripheralVisible(v => !v) }
       if (c && e.shiftKey && e.key === 'E') { e.preventDefault(); setShowLeftPanel(v => !v) }
       if (c && e.shiftKey && e.key === 'A') {
         e.preventDefault()
-        if (editorSettings.aiEnabled) setShowRightPanel(v => !v)
+        if (editorSettingsRef.current.aiEnabled) setShowRightPanel(v => !v)
       }
     }
     window.addEventListener('keydown', h)
@@ -584,11 +696,19 @@ function AppContent() {
                 onTabSelect={setActiveTabId}
                 onTabClose={handleTabClose}
                 onContentChange={handleContentChange}
+                onCursorChange={handleCursorChange}
                 onSave={handleSave}
                 editorSettings={editorSettings}
+                fileDiagnostics={activeFileDiagnostics}
               />
-              <SlidePanel visible={memoryVisible || peripheralVisible || serialVisible || outputVisible} side="bottom" height={200}>
+              <SlidePanel visible={memoryVisible || peripheralVisible || serialVisible || outputVisible} side="bottom" height={220}>
                 <div className="app-bottom-panels">
+                  <div className="app-bottom-tabs">
+                    <button className={`app-bottom-tab ${outputVisible ? 'active' : ''}`} onClick={() => { setOutputVisible(true); setSerialVisible(false) }}>{t('output.title')}</button>
+                    <button className={`app-bottom-tab ${serialVisible ? 'active' : ''}`} onClick={() => { setSerialVisible(true); setOutputVisible(false) }}>{t('serial.title')}</button>
+                    <button className={`app-bottom-tab ${memoryVisible ? 'active' : ''}`} onClick={() => setMemoryVisible(v => !v)}>{t('memory.title')}</button>
+                    <button className={`app-bottom-tab ${peripheralVisible ? 'active' : ''}`} onClick={() => setPeripheralVisible(v => !v)}>{t('peripheral.title')}</button>
+                  </div>
                   {memoryVisible && (
                     <MemoryAnalyzer
                       flashUsed={memoryUsage.flashUsed}
@@ -603,8 +723,10 @@ function AppContent() {
                       peripheralNames={project?.peripherals || []}
                     />
                   )}
-                  {serialVisible && <SerialMonitor />}
-                  {outputVisible && !serialVisible && (
+                  <div className="app-bottom-serial" style={{ display: serialVisible ? undefined : 'none' }}>
+                    <SerialMonitor defaultBaud={editorSettings.defaultBaud} />
+                  </div>
+                  {outputVisible && (
                     <OutputPanel messages={outputMessages} onClose={() => setOutputVisible(false)} />
                   )}
                 </div>
@@ -612,19 +734,27 @@ function AppContent() {
             </div>
             {editorSettings.aiEnabled && (
               <SlidePanel visible={showRightPanel} side="right" width={320}>
-                <AIAgents project={project} files={projectFiles} settings={editorSettings} onSettingsChange={setEditorSettings} />
+                <AIAgents project={project} files={projectFiles} settings={editorSettings} onSettingsChange={setEditorSettings} onFilesApplied={handleAiFilesApplied} />
               </SlidePanel>
             )}
           </div>
-          <StatusBar
-            line={openTabs.find(t => t.id === activeTabId)?.cursorLine ?? 1}
-            col={openTabs.find(t => t.id === activeTabId)?.cursorCol ?? 1}
-            language={openTabs.find(t => t.id === activeTabId)?.language ?? ''}
-            projectType={project?.type}
-            boardName={project?.boardName}
-            toolchains={toolchains}
-          />
-          {settingsOpen && <Settings editorSettings={editorSettings} onEditorSettingsChange={setEditorSettings} onClose={() => setSettingsOpen(false)} />}
+          {editorSettings.showStatusBar !== false && (
+            <StatusBar
+              line={openTabs.find(t => t.id === activeTabId)?.cursorLine ?? 1}
+              col={openTabs.find(t => t.id === activeTabId)?.cursorCol ?? 1}
+              language={openTabs.find(t => t.id === activeTabId)?.language ?? ''}
+              projectType={project?.type}
+              boardName={project?.boardName}
+              toolchains={toolchains}
+            />
+          )}
+          {settingsOpen && (
+            <Settings
+              editorSettings={editorSettings}
+              onEditorSettingsChange={s => setEditorSettings(normalizeEditorSettings(s))}
+              onClose={() => setSettingsOpen(false)}
+            />
+          )}
           {projectDialogOpen && <ProjectDialog onCreate={handleCreateProject} onClose={() => setProjectDialogOpen(false)} />}
 
           {fileDialog && (

@@ -69,6 +69,7 @@ export interface EditorSettings {
   tabSize: number
   fontFamily: string
   wordWrap: boolean
+  /** Reserved — no CodeMirror minimap bundled yet */
   minimap: boolean
   lineNumbers: boolean
   cursorBlinkRate: number
@@ -77,10 +78,38 @@ export interface EditorSettings {
   language: string
   theme: string
   aiEnabled: boolean
-  aiMode: 'local' | 'cloud'
+  /** @deprecated migrated to aiProvider */
+  aiMode?: 'local' | 'cloud'
+  aiProvider: string
   aiEndpoint: string
   aiModel: string
   aiKey: string
+
+  // Editor extras
+  lineHeight: number
+  insertSpaces: boolean
+  highlightActiveLine: boolean
+  foldGutter: boolean
+  autoComplete: boolean
+  showWhitespace: boolean
+  caretWidth: number
+
+  // Appearance / UI
+  /** Empty = use theme accent; otherwise #RRGGBB */
+  customAccent: string
+  uiScale: number
+  compactUi: boolean
+  reduceMotion: boolean
+  showStatusBar: boolean
+  glassEffects: boolean
+
+  // Workflow
+  autoSave: boolean
+  autoSaveDelayMs: number
+  confirmDelete: boolean
+  defaultBaud: number
+  /** When true, AI agent applies proposed file writes automatically (local + cloud) */
+  aiAutoApplyFiles: boolean
 }
 
 export interface ProjectConfig {

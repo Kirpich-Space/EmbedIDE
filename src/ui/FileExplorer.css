@@ -1,12 +1,15 @@
 .file-explorer {
   background: var(--sidebar-bg);
-  border-right: var(--panel-edge);
+  border: var(--panel-edge);
+  border-radius: var(--island-radius, 10px);
+  box-shadow: var(--island-shadow), var(--island-rim);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
   height: 100%;
   z-index: 1;
+  animation: islandIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .panel-header {
@@ -226,7 +229,9 @@
   width: 2px;
   background: var(--accent);
   border-radius: 2px;
-  box-shadow: 0 0 8px var(--accent-glow);
+  box-shadow: 0 0 10px var(--accent-glow);
+  transform-origin: center top;
+  animation: fileAccentIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .file-icon {

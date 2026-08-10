@@ -1,0 +1,45 @@
+# Maintainer: Kirpich Space <yamanovaes1982@gmail.com>
+pkgname=embed-ide
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="Offline-first engineering IDE for Cortex-M firmware"
+arch=('x86_64')
+url="https://github.com/Kirpich-Space/EmbedIDE"
+license=('MIT')
+depends=('libx11' 'libxrandr' 'libxdamage' 'libxcomposite' 'libxcursor' 'libxfixes' 'libxi' 'mesa' 'nss' 'alsa-lib' 'gtk3')
+options=('!strip' '!emptydirs')
+source=("${pkgname}-${pkgver}-linux-x64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  install -d "${pkgdir}/opt/${pkgname}"
+  cp -a "${srcdir}"/* "${pkgdir}/opt/${pkgname}/" 2>/dev/null || true
+  # electron-builder pacman layout already places files; for tar.gz:
+  if [[ -d "${srcdir}/${pkgname}-${pkgver}" ]]; then
+    cp -a "${srcdir}/${pkgname}-${pkgver}/." "${pkgdir}/opt/${pkgname}/"
+  fi
+
+  install -d "${pkgdir}/usr/bin"
+  cat > "${pkgdir}/usr/bin/embedide" << 'EOF'
+#!/bin/sh
+exec /opt/embed-ide/embed-ide "$@"
+EOF
+  chmod 755 "${pkgdir}/usr/bin/embedide"
+
+  install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/embedide.desktop" << 'EOF'
+[Desktop Entry]
+Name=EmbedIDE
+GenericName=Embedded IDE
+Comment=Offline-first IDE for Cortex-M firmware
+Exec=embedide %U
+Icon=embedide
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=embed-ide
+EOF
+
+  if [[ -f "${srcdir}/512.png" ]]; then
+    install -Dm644 "${srcdir}/512.png" "${pkgdir}/usr/share/pixmaps/embedide.png"
+  fi
+}

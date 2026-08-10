@@ -8,6 +8,7 @@
   padding: 0 8px 0 6px;
   user-select: none;
   flex-shrink: 0;
+  box-shadow: var(--island-rim);
 }
 
 .toolbar-drag {
@@ -53,6 +54,7 @@
 .toolbar-logo-svg {
   color: var(--accent);
   flex-shrink: 0;
+  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 
 .toolbar-project-name {

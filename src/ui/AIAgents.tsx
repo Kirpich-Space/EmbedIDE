@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { AgentMessage, ProjectConfig, FileNode, EditorSettings } from '../core/types'
 import { useTranslation } from '../core/TranslationContext'
+import { openAiCompatibleUrl } from '../core/ollama'
+import { chatCompletion, getAiProvider, migrateAiProvider, type ChatMessage } from '../core/aiProviders'
 
 interface AIAgentsProps {
   project: ProjectConfig | null
   files: FileNode[]
   settings: EditorSettings
   onSettingsChange: (s: EditorSettings) => void
+  onFilesApplied?: (paths: string[]) => void
 }
 
 type AgentDef = { id: string; icon: string; label: string; description: string; systemPrompt: string }
@@ -31,58 +34,92 @@ function renderContent(text: string) {
 
 function parseFileOps(text: string): { file: string; content: string }[] {
   const ops: { file: string; content: string }[] = []
-  const blockRegex = /```[\w]*\s*\n(.*?)\n```/gs
-  let match
-  while ((match = blockRegex.exec(text)) !== null) {
-    const block = match[1]
-    const lines = block.split('\n')
-    const fileLine = lines.find(l =>
-      /^(?:\/\/|#|--)\s*File:\s*(.+)/i.test(l.trim())
-    )
-    if (fileLine) {
-      const fileMatch = fileLine.match(/^(?:\/\/|#|--)\s*File:\s*(.+)/i)
-      if (fileMatch) {
-        const filePath = fileMatch[1].trim()
-        const contentLines = lines.filter(l => l !== fileLine)
-        ops.push({ file: filePath, content: contentLines.join('\n') })
-      }
+  const seen = new Set<string>()
+
+  const push = (file: string, content: string) => {
+    const f = file.replace(/\\/g, '/').replace(/^\.\//, '').trim()
+    if (!f || seen.has(f)) return
+    seen.add(f)
+    // Drop leading file marker lines from content
+    const lines = content.replace(/^\uFEFF/, '').split('\n')
+    while (lines.length && /^(?:\/\/|#|--|;)\s*File:\s*/i.test(lines[0].trim())) lines.shift()
+    while (lines.length && lines[0].trim() === '') lines.shift()
+    ops.push({ file: f, content: lines.join('\n') })
+  }
+
+  // ```lang\n// File: path\n...\n```  OR  ```path/to/file.ext\n...\n```
+  const fenceRe = /```([^\n`]*)\n([\s\S]*?)```/g
+  let m: RegExpExecArray | null
+  while ((m = fenceRe.exec(text)) !== null) {
+    const header = (m[1] || '').trim()
+    const body = m[2] || ''
+    const bodyLines = body.split('\n')
+    const marker = bodyLines.find(l => /^(?:\/\/|#|--|;)\s*File:\s*(.+)/i.test(l.trim()))
+    if (marker) {
+      const fm = marker.trim().match(/^(?:\/\/|#|--|;)\s*File:\s*(.+)/i)
+      if (fm) push(fm[1], body)
+      continue
+    }
+    // Fence info string looks like a path (has slash or known extension)
+    if (/[./]/.test(header) && /\.(c|cc|cpp|h|hpp|rs|zig|s|S|asm|ld|toml|json|md|txt|cmake|mak|py)$/i.test(header)) {
+      push(header.replace(/^.*\s+/, ''), body)
+      continue
+    }
+    if (/^(?:[\w./-]+\/)+[\w./-]+\.\w+$/.test(header) || /^[\w.-]+\.(c|cc|cpp|h|hpp|rs|zig|s|S|asm)$/i.test(header)) {
+      push(header, body)
     }
   }
+
+  // File: path immediately before a fence
+  const beforeRe = /(?:^|\n)(?:\*\*)?(?:File|Файл)\s*:\s*([^\n*`]+)(?:\*\*)?\s*\n\s*```[^\n]*\n([\s\S]*?)```/gi
+  while ((m = beforeRe.exec(text)) !== null) {
+    push(m[1], m[2])
+  }
+
   return ops
 }
 
-export function AIAgents({ project, files, settings, onSettingsChange }: AIAgentsProps) {
+function isSafeProjectPath(file: string): boolean {
+  const f = file.replace(/\\/g, '/')
+  if (!f || f.startsWith('/') || f.includes('..') || /^[A-Za-z]:/.test(f)) return false
+  return true
+}
+
+export function AIAgents({ project, files, settings, onSettingsChange, onFilesApplied }: AIAgentsProps) {
   const { t } = useTranslation()
-  const isLocal = settings.aiMode === 'local'
-  const endpoint = settings.aiEndpoint || (isLocal ? 'http://127.0.0.1:11434/v1' : 'https://api.openai.com/v1')
-  const model = settings.aiModel || (isLocal ? 'llama3.2' : 'gpt-4o')
+  const provider = getAiProvider(migrateAiProvider(settings))
+  const isLocal = !!provider.local
+  const endpoint = openAiCompatibleUrl(
+    settings.aiEndpoint || provider.endpoint || 'http://127.0.0.1:11434',
+  )
+  const model = settings.aiModel || provider.defaultModel || 'llama3.2'
   const apiKey = settings.aiKey || (isLocal ? 'ollama' : '')
 
   const agents: AgentDef[] = [
     {
       id: 'chat', icon: '◇', label: t('aiAgents.agents.chat.label'),
       description: t('aiAgents.agents.chat.desc'),
-      systemPrompt: 'You are an embedded-systems expert for flight computers and avionics. Help with ARM Cortex-M firmware, STM32, linkers, and OpenOCD.',
+      systemPrompt: 'You are an embedded-systems expert for firmware, device drivers, minimal OS/kernels, ARM Cortex-M, STM32, Zig, Rust, C/C++, Assembly, linkers, and OpenOCD.',
     },
     {
       id: 'build', icon: '▣', label: t('aiAgents.agents.build.label'),
       description: t('aiAgents.agents.build.desc'),
-      systemPrompt: 'You are a build-system expert. Analyze compiler and linker errors for embedded C/C++/Rust Cortex-M projects.',
+      systemPrompt: 'You are a build-system expert. Analyze compiler and linker errors for embedded C/C++/Rust/Zig/ASM, Make, and Cargo (firmware, drivers, kernels).',
     },
     {
       id: 'debug', icon: '◎', label: t('aiAgents.agents.debug.label'),
       description: t('aiAgents.agents.debug.desc'),
-      systemPrompt: 'You are a debug expert. Analyze crash dumps, stack traces, and register states for ARM Cortex-M devices.',
+      systemPrompt: 'You are a debug expert. Analyze crash dumps, stack traces, and register states for ARM Cortex-M devices and bare-metal kernels.',
     },
     {
       id: 'hardware', icon: '⚡', label: t('aiAgents.agents.hardware.label'),
       description: t('aiAgents.agents.hardware.desc'),
-      systemPrompt: 'You are an embedded hardware expert for STM32 flight/avionics MCUs: GPIO, UART, SPI, I2C, TIM, ADC, CAN, ETH. Do not suggest Arduino, ESP32, or AVR platforms.',
+      systemPrompt: 'You are an embedded hardware and driver expert for STM32 flight/avionics MCUs: GPIO, UART, SPI, I2C, TIM, ADC, CAN, ETH. Help design HAL drivers and OS primitives. Do not suggest Arduino, ESP32, or AVR platforms.',
     },
     {
       id: 'docs', icon: '☰', label: t('aiAgents.agents.docs.label'),
       description: t('aiAgents.agents.docs.desc'),
-      systemPrompt: 'You are a technical writer. Generate clear documentation and code comments for embedded flight-computer projects.',
+      systemPrompt: 'You are a technical writer. Generate clear documentation and code comments for firmware, drivers, kernels, and automation scripts.',
     },
   ]
 
@@ -105,7 +142,7 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
 
   const activeMessages = messages[activeAgent] || []
   const agent = agents.find(a => a.id === activeAgent)
-  const needsCloudKey = !isLocal && !apiKey.trim()
+  const needsCloudKey = provider.needsKey && !apiKey.trim()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -120,6 +157,40 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
     const board = project.boardName ? `\nBoard: ${project.boardName} (${project.boardId || ''})` : ''
     return `Project: ${project.name} (${project.type})${board}\nDirectory: ${project.dir}\n\nFiles:\n${fileList}`
   }, [project, files, t])
+
+  const writeFileOps = useCallback(async (ops: { file: string; content: string }[]) => {
+    const api = window.electronAPI
+    if (!api || !project || ops.length === 0) return []
+    const applied: string[] = []
+    for (const op of ops) {
+      const rel = op.file.replace(/\\/g, '/')
+      if (!isSafeProjectPath(rel)) continue
+      try {
+        const dir = rel.includes('/') ? rel.substring(0, rel.lastIndexOf('/')) : ''
+        if (dir) await api.createProjectFile(project.dir, dir + '/')
+        await api.writeProjectFile(project.dir, `${project.dir}/${rel}`, op.content)
+        applied.push(rel)
+      } catch {
+        /* skip failed writes */
+      }
+    }
+    return applied
+  }, [project])
+
+  const finishApplied = useCallback((applied: string[]) => {
+    setFileOps([])
+    if (applied.length === 0) return
+    onFilesApplied?.(applied)
+    const msg: AgentMessage = {
+      role: 'assistant',
+      content: t('aiAgents.written', { files: applied.join(', ') }),
+      timestamp: Date.now(),
+    }
+    setMessages(prev => ({
+      ...prev,
+      [activeAgent]: [...(prev[activeAgent] || []), msg],
+    }))
+  }, [activeAgent, onFilesApplied, t])
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || loading) return
@@ -140,63 +211,71 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
     try {
       const context = buildContext()
       const history = (messages[activeAgent] || []).slice(-20)
-      const conversation = [
+      const conversation: ChatMessage[] = [
         {
           role: 'system',
-          content: `${agent?.systemPrompt}\n\nProject context:\n${context}\n\nIMPORTANT: If you want to write code to a file, put a comment like "// File: path/file.rs" on the first line of the code block, then the complete file content.`,
+          content: `${agent?.systemPrompt}
+
+Project context:
+${context}
+
+FILE EDITS (local and cloud models — both may change project files):
+When you need to create or overwrite a project file, output ONE fenced code block per file.
+Put this as the first line inside the fence (language comment style):
+  // File: relative/path/from/project/root.ext
+For Zig/ASM you may use: // File: …  or  # File: …  or  ; File: …
+Then the FULL file contents. Example:
+
+\`\`\`c
+// File: src/main.c
+#include <stdint.h>
+int main(void) { return 0; }
+\`\`\`
+
+Do not use absolute paths. Only relative paths inside the project.`,
         },
-        ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        ...history.map((m): ChatMessage => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content,
+        })),
         { role: 'user', content: text },
       ]
 
-      const url = `${endpoint.replace(/\/+$/, '')}/chat/completions`
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
+      let reply: string
+      try {
+        reply = await chatCompletion({
+          provider,
+          endpoint,
           model,
+          apiKey,
           messages: conversation,
+          signal: controller.signal,
           temperature: 0.3,
-        }),
-        signal: controller.signal,
-      })
-
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => '')
-        if (isLocal && (res.status === 0 || res.status >= 500 || res.status === 404)) {
+        })
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (isLocal && (/API (0|5\d\d|404):/.test(msg) || /Failed to fetch|NetworkError|ECONNREFUSED/i.test(msg))) {
           throw new Error(t('aiAgents.localUnreachable'))
         }
-        throw new Error(`API ${res.status}: ${errBody || res.statusText}`)
+        throw e
       }
-
-      const data = await res.json()
-      const reply = data.choices?.[0]?.message?.content || t('aiAgents.noResponse')
-      const ops = parseFileOps(reply)
-
-      if (ops.length > 0) {
-        for (const op of ops) {
-          const api = window.electronAPI
-          if (!api || !project) continue
-          const fullPath = op.file.startsWith('/') ? op.file : `${project.dir}/${op.file}`
-          try {
-            const dir = op.file.includes('/') ? op.file.substring(0, op.file.lastIndexOf('/')) : ''
-            if (dir) await api.createProjectFile(project.dir, dir + '/')
-            await api.writeProjectFile(fullPath, op.content)
-          } catch {
-            /* ignore write errors in agent apply */
-          }
-        }
-        setFileOps(ops)
-      }
+      if (!reply) reply = t('aiAgents.noResponse')
 
       const assistantMsg: AgentMessage = { role: 'assistant', content: reply, timestamp: Date.now() }
       setMessages(prev => ({
         ...prev,
         [activeAgent]: [...(prev[activeAgent] || []), assistantMsg],
       }))
+
+      const safeOps = parseFileOps(reply).filter(op => isSafeProjectPath(op.file))
+      if (safeOps.length > 0) {
+        if (settings.aiAutoApplyFiles !== false) {
+          const applied = await writeFileOps(safeOps)
+          finishApplied(applied)
+        } else {
+          setFileOps(safeOps)
+        }
+      }
     } catch (e: unknown) {
       const err = e as { name?: string; message?: string }
       if (err.name === 'AbortError') {
@@ -214,7 +293,7 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
       setLoading(false)
       abortRef.current = null
     }
-  }, [activeAgent, agent, apiKey, endpoint, model, loading, messages, buildContext, project, needsCloudKey, isLocal, t])
+  }, [activeAgent, agent, apiKey, endpoint, model, loading, messages, buildContext, needsCloudKey, isLocal, provider, t, settings.aiAutoApplyFiles, writeFileOps, finishApplied])
 
   const cancelRequest = useCallback(() => {
     abortRef.current?.abort()
@@ -224,7 +303,15 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
 
   const clearConversation = useCallback(() => {
     setMessages(prev => ({ ...prev, [activeAgent]: [] }))
+    setFileOps([])
   }, [activeAgent])
+
+  const applyFileOps = useCallback(async () => {
+    const applied = await writeFileOps(fileOps)
+    finishApplied(applied)
+  }, [fileOps, writeFileOps, finishApplied])
+
+  const discardFileOps = useCallback(() => setFileOps([]), [])
 
   if (needsCloudKey) {
     return (
@@ -263,7 +350,7 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
       <div className="panel-header">
         <span className="panel-title">{t('aiAgents.title')}</span>
         <div className="panel-header-actions">
-          <span className="agent-mode-badge">{isLocal ? t('settings.aiLocal') : t('settings.aiCloud')}</span>
+          <span className="agent-mode-badge">{isLocal ? t('settings.aiLocalOllama') : t('settings.aiCloud')}</span>
           <button className="agent-clear-btn" onClick={clearConversation} title={t('aiAgents.clear')}>{t('aiAgents.clear')}</button>
         </div>
       </div>
@@ -315,7 +402,11 @@ export function AIAgents({ project, files, settings, onSettingsChange }: AIAgent
         )}
         {fileOps.length > 0 && !loading && (
           <div className="agent-file-write">
-            {t('aiAgents.written', { files: fileOps.map(o => o.file).join(', ') })}
+            <div>{t('aiAgents.applyPending', { count: fileOps.length, files: fileOps.map(o => o.file).join(', ') })}</div>
+            <div className="agent-file-write-actions">
+              <button className="agent-api-btn" onClick={applyFileOps}>{t('aiAgents.apply')}</button>
+              <button className="agent-clear-btn" onClick={discardFileOps}>{t('aiAgents.discard')}</button>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />

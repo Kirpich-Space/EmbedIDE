@@ -5,6 +5,7 @@
   flex-direction: column;
   max-height: 220px;
   min-height: 110px;
+  animation: slideInUp var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .output-header {

@@ -9,11 +9,63 @@
 
 .editor-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   flex: 1;
+  gap: 10px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
+  text-align: center;
+  padding: 32px;
+  animation: islandIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
+  user-select: none;
+}
+
+.editor-empty-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-glow) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 0 28px var(--accent-glow), var(--island-rim);
+  animation: softGlow 2.8s ease-in-out infinite;
+}
+
+.editor-empty-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.editor-empty-hint {
+  max-width: 280px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.editor-empty-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.editor-empty-key {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  box-shadow: var(--btn-raise);
 }
 
 .editor-tabs {
@@ -24,7 +76,7 @@
   min-height: 36px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 4px;
+  padding: 0 6px;
   gap: 2px;
 }
 
@@ -54,10 +106,11 @@
   user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
-  border-radius: var(--radius-sm, 5px) var(--radius-sm, 5px) 0 0;
+  border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
   margin-top: 4px;
   animation: tabFadeIn 0.15s ease-out;
   background: transparent;
+  position: relative;
 }
 
 .editor-tab:hover {
@@ -76,8 +129,20 @@
   border-color: var(--border);
   border-bottom: 1px solid var(--tab-active-bg);
   margin-bottom: -1px;
-  box-shadow: inset 0 2px 0 var(--accent);
   z-index: 1;
+}
+
+.editor-tab-active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  animation: accentSweep var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .tab-lang-indicator {
@@ -85,6 +150,7 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
 }
 
 .tab-name {
@@ -95,6 +161,7 @@
 .tab-dirty {
   font-size: 10px;
   color: var(--accent);
+  animation: softGlow 1.6s ease-in-out infinite;
 }
 
 .tab-close {
@@ -103,10 +170,12 @@
   padding: 0 2px;
   border-radius: 3px;
   opacity: 0;
+  transition: opacity var(--dur-fast, 120ms) var(--ease-out, ease), background var(--dur-fast, 120ms) var(--ease-out, ease);
 }
 
-.editor-tab:hover .tab-close {
-  opacity: 0.6;
+.editor-tab:hover .tab-close,
+.editor-tab-active .tab-close {
+  opacity: 0.55;
 }
 
 .tab-close:hover {
@@ -129,7 +198,7 @@
 }
 
 .editor-cm-wrapper .cm-gutters {
-  border-right: 1px solid var(--border) !important;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent) !important;
   background: var(--editor-bg) !important;
 }
 
@@ -182,6 +251,9 @@
   background: var(--bg-panel) !important;
   color: var(--text) !important;
   font-family: 'JetBrains Mono', monospace !important;
+  border-radius: var(--radius-md, 8px) !important;
+  box-shadow: var(--shadow-md) !important;
+  animation: scaleIn var(--dur-fast, 120ms) var(--ease-out, ease-out);
 }
 
 .editor-ctx-overlay {

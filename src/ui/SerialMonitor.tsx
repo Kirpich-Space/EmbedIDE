@@ -1,15 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from '../core/TranslationContext'
 
-export function SerialMonitor() {
+export function SerialMonitor({ defaultBaud = 115200 }: { defaultBaud?: number }) {
   const { t } = useTranslation()
   const [ports, setPorts] = useState<{device: string, description: string}[]>([])
   const [selectedPort, setSelectedPort] = useState('')
-  const [baud, setBaud] = useState(115200)
+  const [baud, setBaud] = useState(defaultBaud)
   const [connected, setConnected] = useState(false)
   const [lines, setLines] = useState<string[]>([])
   const [input, setInput] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setBaud(defaultBaud)
+  }, [defaultBaud])
 
   useEffect(() => {
     const fetch = () => window.electronAPI?.listSerialPorts().then(setPorts)
@@ -26,6 +30,7 @@ export function SerialMonitor() {
     return () => {
       unsubData?.()
       unsubErr?.()
+      window.electronAPI?.disconnectSerial()
     }
   }, [])
 
@@ -40,10 +45,15 @@ export function SerialMonitor() {
       setConnected(false)
       setLines(prev => [...prev, t('serial.disconnected')])
     } else {
-      await window.electronAPI?.connectSerial(selectedPort, baud)
-      setConnected(true)
+      const result = await window.electronAPI?.connectSerial(selectedPort, baud)
+      if (result?.connected) {
+        setConnected(true)
+      } else {
+        setConnected(false)
+        setLines(prev => [...prev, `[ERROR] ${result?.error || t('serial.connectFailed')}`])
+      }
     }
-  }, [selectedPort, baud, connected])
+  }, [selectedPort, baud, connected, t])
 
   const handleSend = useCallback(() => {
     if (!input || !connected) return

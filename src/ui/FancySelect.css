@@ -1,0 +1,378 @@
+/* ===== Fancy select (language / fonts / models) ===== */
+
+.fancy-select-cards {
+  display: grid;
+  grid-template-columns: repeat(var(--fancy-cols, 3), minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fancy-select-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 11px 28px 11px 12px;
+  min-height: 52px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  box-shadow: var(--btn-raise);
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  animation: fancyCardIn var(--dur-med, 220ms) var(--ease-spring, ease-out) both;
+  transition:
+    border-color var(--dur-fast, 120ms) var(--ease-out, ease),
+    background var(--dur-fast, 120ms) var(--ease-out, ease),
+    transform var(--dur-fast, 120ms) var(--ease-press, ease),
+    box-shadow var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+
+@keyframes fancyCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.fancy-select-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  transform: translateY(-2px);
+  box-shadow: var(--btn-raise-hover);
+}
+
+.fancy-select-card:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: var(--btn-press);
+}
+
+.fancy-select-card-active {
+  border-color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg)) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 0 16px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  transform: none !important;
+}
+
+.fancy-select-card-preview {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.fancy-select-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fancy-select-card-label {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'IBM Plex Sans', 'Noto Sans SC', 'Noto Sans JP', 'Segoe UI', sans-serif;
+}
+
+.fancy-select-card-label:lang(zh),
+.fancy-select-card-label[lang='zh'] {
+  font-family: 'Noto Sans SC', 'IBM Plex Sans', sans-serif;
+}
+
+.fancy-select-card-label:lang(ja),
+.fancy-select-card-label[lang='ja'] {
+  font-family: 'Noto Sans JP', 'IBM Plex Sans', sans-serif;
+}
+
+.fancy-select-card-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.fancy-select-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--text) 10%, var(--bg-panel));
+  border: 1.5px solid color-mix(in srgb, var(--text) 18%, var(--border));
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.fancy-select-card-mark {
+  position: absolute !important;
+  top: 7px;
+  right: 7px;
+}
+
+.fancy-select-card-preview.fancy-preview-accent {
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.fancy-select-card-preview.fancy-preview-accent .settings-accent-swatch {
+  width: 22px;
+  height: 22px;
+}
+
+.settings-accent-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: block;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 0 0 2px color-mix(in srgb, var(--bg-panel) 80%, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.settings-accent-swatch-theme {
+  background:
+    conic-gradient(
+      from 210deg,
+      var(--accent),
+      color-mix(in srgb, var(--accent) 40%, #fff),
+      var(--accent-hover, var(--accent)),
+      var(--accent)
+    ) !important;
+}
+
+.settings-accent-swatch-custom {
+  background:
+    conic-gradient(from 0deg, #ff4d4d, #ffd24d, #5dff7a, #4dc3ff, #b06bff, #ff4d4d) !important;
+}
+
+.fancy-select-menu {
+  position: relative;
+  width: 100%;
+}
+
+.fancy-select-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--btn-raise);
+  transition:
+    border-color var(--dur-fast, 120ms) ease,
+    background var(--dur-fast, 120ms) ease,
+    box-shadow var(--dur-fast, 120ms) ease,
+    transform var(--dur-fast, 120ms) ease;
+}
+
+.fancy-select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: var(--btn-raise-hover);
+}
+
+.fancy-select-open .fancy-select-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.fancy-select-trigger-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fancy-select-trigger-preview {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  flex-shrink: 0;
+}
+
+.fancy-select-trigger-label {
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fancy-select-trigger-placeholder {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.fancy-select-chevron {
+  color: var(--text-secondary);
+  font-size: 11px;
+  transition: transform var(--dur-fast, 120ms) var(--ease-spring, ease);
+  flex-shrink: 0;
+}
+
+.fancy-select-chevron-up {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+.fancy-select-dropdown {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(12px) saturate(1.15);
+  -webkit-backdrop-filter: blur(12px) saturate(1.15);
+  box-shadow: var(--shadow-lg), var(--island-rim);
+  animation: fancyDropIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
+}
+
+@keyframes fancyDropIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.fancy-select-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(-4px);
+  animation: fancyOptIn 160ms var(--ease-out, ease) forwards;
+  transition: background var(--dur-fast, 120ms) ease;
+}
+
+@keyframes fancyOptIn {
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.fancy-select-option:hover {
+  background: var(--bg-hover);
+}
+
+.fancy-select-option-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.fancy-select-option-preview {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  flex-shrink: 0;
+}
+
+.fancy-select-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fancy-select-option-label {
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fancy-select-option-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.fancy-select-option-mark {
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.fancy-select-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.fancy-select-dropdown::-webkit-scrollbar {
+  width: 5px;
+}
+
+.fancy-select-dropdown::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+@media (max-width: 720px) {
+  .fancy-select-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

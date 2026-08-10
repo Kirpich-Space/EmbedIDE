@@ -1,13 +1,16 @@
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { readProjectMeta } = require('./project');
 
 let currentBuildProc = null;
+let buildWasCancelled = false;
+
+const RUST_TARGET_RE = /^[a-zA-Z0-9._-]+$/;
 
 function detectToolchains() {
-  const result = { rust: false, armGcc: false, openocd: false, make: false, python: false };
+  const result = { rust: false, armGcc: false, openocd: false, make: false, python: false, zig: false };
 
   const check = (cmd, key, versionFlag = '--version') => {
     try {
@@ -22,6 +25,7 @@ function detectToolchains() {
   check('rustc', 'rust')
   check('arm-none-eabi-gcc', 'armGcc')
   check('openocd', 'openocd')
+  check('zig', 'zig', 'version')
 
   if (result.rust) {
     try {
@@ -39,7 +43,7 @@ function detectToolchains() {
 function spawnProcess(cmd, args, cwd, onOutput) {
   const proc = spawn(cmd, args, {
     cwd,
-    shell: true,
+    shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -58,7 +62,7 @@ function spawnProcess(cmd, args, cwd, onOutput) {
     onOutput?.({ type: 'stderr', text });
   });
 
-  return { proc, stdout, stderr };
+  return { proc, getStdout: () => stdout, getStderr: () => stderr };
 }
 
 function readCargoPackageName(projectDir) {
@@ -87,11 +91,64 @@ function resolveBoard(projectDir, config = {}) {
   return getBoardOrDefault(boardId);
 }
 
-function buildProject(projectDir, projectType, onOutput) {
-  return new Promise((resolve, reject) => {
-    let cmd, args;
+/** Parse arm-none-eabi-size / GNU size columnar output → flash/RAM bytes */
+function parseSizeOutput(text) {
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (/^\s*text\b/i.test(line)) continue;
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/);
+    if (m) {
+      const textSize = parseInt(m[1], 10);
+      const data = parseInt(m[2], 10);
+      const bss = parseInt(m[3], 10);
+      return {
+        flashUsed: textSize + data,
+        ramUsed: data + bss,
+        text: textSize,
+        data,
+        bss,
+      };
+    }
+  }
+  return null;
+}
 
-    if (projectType === 'rust') {
+function reportElfSize(projectDir, projectType, onOutput) {
+  try {
+    const elf = detectElf(projectDir, projectType);
+    if (!elf) return null;
+    const result = spawnSync('arm-none-eabi-size', [elf], {
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    const out = (result.stdout || '') + (result.stderr || '');
+    if (out) onOutput?.({ type: 'stdout', text: out });
+    return parseSizeOutput(out);
+  } catch {
+    return null;
+  }
+}
+
+function isRustProject(projectType) {
+  return projectType === 'rust' || projectType === 'driver-rust' || projectType === 'os-rust';
+}
+
+function isMakeProject(projectType) {
+  return (
+    projectType === 'c' || projectType === 'cpp' || projectType === 'asm' || projectType === 'zig' ||
+    projectType === 'driver-c' || projectType === 'driver-cpp' || projectType === 'driver-asm' || projectType === 'driver-zig' ||
+    projectType === 'os-c' || projectType === 'os-cpp' || projectType === 'os-asm' || projectType === 'os-zig' ||
+    // legacy single-language ids
+    projectType === 'driver' || projectType === 'os'
+  );
+}
+
+function buildProject(projectDir, projectType, onOutput) {
+  return new Promise(async (resolve, reject) => {
+    let cmd, args;
+    buildWasCancelled = false;
+
+    if (isRustProject(projectType)) {
       cmd = 'cargo';
       args = ['build', '--release'];
 
@@ -102,15 +159,28 @@ function buildProject(projectDir, projectType, onOutput) {
           const match = cfg.match(/target\s*=\s*"([^"]+)"/);
           if (match) {
             const target = match[1];
+            if (!RUST_TARGET_RE.test(target)) {
+              reject(new Error(`Invalid rust target: ${target}`));
+              return;
+            }
             const installed = execSync('rustup target list --installed', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-            if (!installed.includes(target)) {
+            const installedTargets = installed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            if (!installedTargets.includes(target)) {
               onOutput?.({ type: 'stdout', text: `Installing target ${target}...\n` });
-              execSync(`rustup target add ${target}`, { stdio: 'ignore', timeout: 120000 });
+              const add = spawnSync('rustup', ['target', 'add', target], { stdio: 'ignore', timeout: 120000 });
+              if (add.status !== 0) {
+                onOutput?.({ type: 'stderr', text: `Failed to install rustup target ${target}\n` });
+              }
             }
           }
         }
-      } catch {}
-    } else if (projectType === 'c' || projectType === 'cpp' || projectType === 'asm') {
+      } catch (err) {
+        if (err.message?.includes('Invalid rust target')) {
+          reject(err);
+          return;
+        }
+      }
+    } else if (isMakeProject(projectType)) {
       cmd = 'make';
       args = ['-j4'];
     } else {
@@ -118,24 +188,66 @@ function buildProject(projectDir, projectType, onOutput) {
       return;
     }
 
-    const { proc, stdout, stderr } = spawnProcess(cmd, args, projectDir, onOutput);
-    currentBuildProc = proc;
+    try {
+      const proc = spawn(cmd, args, {
+        cwd: projectDir,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      currentBuildProc = proc;
 
-    proc.on('close', (code) => {
-      currentBuildProc = null;
-      if (code === 0) resolve({ code, stdout, stderr });
-      else reject(new Error(`Build failed with code ${code}`));
-    });
+      let stdout = '';
+      let stderr = '';
 
-    proc.on('error', (err) => {
+      proc.stdout.on('data', (data) => {
+        const text = data.toString();
+        stdout += text;
+        onOutput?.({ type: 'stdout', text });
+      });
+
+      proc.stderr.on('data', (data) => {
+        const text = data.toString();
+        stderr += text;
+        onOutput?.({ type: 'stderr', text });
+      });
+
+      proc.on('close', (code) => {
+        currentBuildProc = null;
+        if (buildWasCancelled) {
+          buildWasCancelled = false;
+          resolve({ code: code ?? null, cancelled: true, stdout, stderr });
+          return;
+        }
+        if (code === 0) {
+          const fromLog = parseSizeOutput(stdout + '\n' + stderr);
+          const fromElf = reportElfSize(projectDir, projectType, onOutput);
+          const size = fromElf || fromLog;
+          if (size) {
+            onOutput?.({
+              type: 'stdout',
+              text: `FLASH: ${size.flashUsed} bytes\nRAM: ${size.ramUsed} bytes\n`,
+            });
+          }
+          resolve({ code, stdout, stderr });
+        } else {
+          reject(new Error(`Build failed with code ${code}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        currentBuildProc = null;
+        reject(err);
+      });
+    } catch (err) {
       currentBuildProc = null;
       reject(err);
-    });
+    }
   });
 }
 
 function cancelBuild() {
   if (currentBuildProc) {
+    buildWasCancelled = true;
     try {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(currentBuildProc.pid), '/f', '/t'])
@@ -160,12 +272,19 @@ function detectElf(projectDir, projectType, elfPath) {
 
   const candidates = [];
 
-  if (projectType === 'rust') {
+  if (isRustProject(projectType)) {
     candidates.push(
       path.join(projectDir, 'target', rustTarget, 'release', cargoName),
       path.join(projectDir, 'target', rustTarget, 'release', cargoName + '.elf'),
       path.join(projectDir, 'target', 'thumbv7em-none-eabihf', 'release', cargoName),
       path.join(projectDir, 'target', 'release', cargoName),
+    );
+  } else if (projectType === 'zig' || projectType === 'driver-zig' || projectType === 'os-zig') {
+    candidates.push(
+      path.join(projectDir, 'build', makeTarget + '.elf'),
+      path.join(projectDir, 'build', baseName + '.elf'),
+      path.join(projectDir, makeTarget),
+      path.join(projectDir, makeTarget + '.elf'),
     );
   } else {
     candidates.push(
@@ -192,6 +311,11 @@ function flashBoard(projectDir, projectType, config = {}, onOutput) {
     const adapter = config.adapter || board.defaultAdapter || 'stlink';
     const target = config.target || board.openocdTarget;
 
+    if (!/^[a-zA-Z0-9._-]+$/.test(adapter) || !/^[a-zA-Z0-9._-]+$/.test(target)) {
+      reject(new Error('Invalid OpenOCD adapter or target name'));
+      return;
+    }
+
     const elf = detectElf(projectDir, projectType, config.elfPath);
     if (!elf) {
       reject(new Error('No ELF file found. Build the project first.'));
@@ -208,10 +332,12 @@ function flashBoard(projectDir, projectType, config = {}, onOutput) {
       return;
     }
 
+    // OpenOCD expects forward slashes; quote path for spaces
+    const elfArg = elf.replace(/\\/g, '/');
     const openocdArgs = [
       '-f', `interface/${adapter}.cfg`,
       '-f', `target/${target}.cfg`,
-      '-c', `program ${elf} verify reset exit`,
+      '-c', `program "${elfArg}" verify reset exit`,
     ];
 
     onOutput?.({ type: 'stdout', text: `Flashing ${elf} via ${adapter} → ${board.mcu} (${target})...\n` });
@@ -234,4 +360,4 @@ function flashBoard(projectDir, projectType, config = {}, onOutput) {
   });
 }
 
-module.exports = { detectToolchains, buildProject, flashBoard, cancelBuild, detectElf, resolveBoard };
+module.exports = { detectToolchains, buildProject, flashBoard, cancelBuild, detectElf, resolveBoard, parseSizeOutput };

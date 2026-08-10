@@ -1,0 +1,32 @@
+# Template file for void-packages
+# https://github.com/void-linux/void-packages
+#
+# Usage (after placing under srcpkgs/embed-ide/template):
+#   ./xbps-src pkg embed-ide
+
+pkgname=embed-ide
+version=2.0.0
+revision=1
+archs="x86_64"
+short_desc="Offline-first engineering IDE for Cortex-M firmware"
+maintainer="Kirpich Space <yamanovaes1982@gmail.com>"
+license="MIT"
+homepage="https://github.com/Kirpich-Space/EmbedIDE"
+distfiles="https://github.com/Kirpich-Space/EmbedIDE/releases/download/v${version}/embed-ide-${version}-linux-x64.tar.gz"
+checksum=badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb
+nocross=yes
+nostrip=yes
+
+depends="libX11 libXrandr libXdamage libXcomposite libXcursor libXfixes libXi Mesa libglvnd nss alsa-lib gtk+3"
+
+do_install() {
+	vmkdir usr/lib/embed-ide
+	vcopy "*" usr/lib/embed-ide
+	vmkdir usr/bin
+	cat > "${DESTDIR}/usr/bin/embedide" << 'EOF'
+#!/bin/sh
+exec /usr/lib/embed-ide/embed-ide "$@"
+EOF
+	chmod 755 "${DESTDIR}/usr/bin/embedide"
+	vinstall "${FILESDIR}/embedide.desktop" 644 usr/share/applications
+}

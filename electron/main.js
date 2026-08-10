@@ -13,9 +13,17 @@ let serialConnection = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
-function sanitizePath(projectDir, targetPath) {
-  const resolved = path.resolve(projectDir, targetPath)
-  if (!resolved.startsWith(path.resolve(projectDir))) {
+/** Resolve targetPath under projectDir; reject traversal / absolute escapes. */
+function assertInsideProject(projectDir, targetPath) {
+  if (!projectDir || typeof projectDir !== 'string') {
+    throw new Error('Project directory required')
+  }
+  const root = path.resolve(projectDir)
+  const resolved = path.isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : path.resolve(root, targetPath)
+  const rel = path.relative(root, resolved)
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error('Path traversal denied')
   }
   return resolved
@@ -148,8 +156,8 @@ function buildAppMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About EmbedIDE',
-              message: 'EmbedIDE v1.0.0',
-              detail: 'An embedded development IDE for Rust, C, C++, and Assembly.',
+              message: `EmbedIDE v${app.getVersion()}`,
+              detail: 'An embedded development IDE for Rust, C, C++, Assembly, and Zig.',
             });
           },
         },
@@ -197,29 +205,36 @@ ipcMain.handle('project:list-files', (_e, projectDir) => {
   return listProjectFiles(projectDir);
 });
 
-ipcMain.handle('project:read-file', (_e, filePath) => {
-  return readProjectFile(filePath);
+ipcMain.handle('project:read-file', (_e, projectDir, filePath) => {
+  return readProjectFile(assertInsideProject(projectDir, filePath));
 });
 
-ipcMain.handle('project:write-file', (_e, filePath, content) => {
-  writeProjectFile(filePath, content);
+ipcMain.handle('project:write-file', (_e, projectDir, filePath, content) => {
+  writeProjectFile(assertInsideProject(projectDir, filePath), content);
   return true;
 });
 
 ipcMain.handle('project:create-file', (_e, dir, name) => {
-  if (name.includes('..') || name.includes('~') || path.isAbsolute(name)) throw new Error('Invalid name')
+  if (typeof name !== 'string' || name.includes('..') || name.includes('~') || path.isAbsolute(name)) {
+    throw new Error('Invalid name')
+  }
+  assertInsideProject(dir, name.replace(/\/$/, '') || '.')
   return createProjectFile(dir, name);
 });
 
-ipcMain.handle('project:delete-file', (_e, filePath) => {
-  return deleteProjectFile(filePath);
+ipcMain.handle('project:delete-file', (_e, projectDir, filePath) => {
+  return deleteProjectFile(assertInsideProject(projectDir, filePath));
 });
 
-ipcMain.handle('project:rename-file', (_e, oldPath, newPath) => {
-  return renameProjectFile(oldPath, newPath);
+ipcMain.handle('project:rename-file', (_e, projectDir, oldPath, newPath) => {
+  return renameProjectFile(
+    assertInsideProject(projectDir, oldPath),
+    assertInsideProject(projectDir, newPath),
+  );
 });
 
 ipcMain.handle('project:search-files', (_e, dir, query) => {
+  assertInsideProject(dir, '.')
   return searchInFiles(dir, query);
 });
 
@@ -239,6 +254,7 @@ ipcMain.handle('project:open', async () => {
   if (!meta?.type) {
     const files = fs.readdirSync(dir);
     if (files.includes('Cargo.toml')) type = 'rust';
+    else if (files.some(f => f.endsWith('.zig'))) type = 'zig';
     else if (files.some(f => f.endsWith('.cpp'))) type = 'cpp';
     else if (files.some(f => f.endsWith('.S') || f.endsWith('.s'))) type = 'asm';
   }
@@ -283,10 +299,16 @@ ipcMain.handle('project:build', async (_e, projectDir, projectType) => {
 
   try {
     const result = await buildProject(projectDir, projectType, onOutput);
+    if (result.cancelled) {
+      mainWindow?.webContents.send('build:complete', { code: null, cancelled: true });
+      return { success: false, cancelled: true, output };
+    }
     mainWindow?.webContents.send('build:complete', { code: result.code });
     return { success: true, output };
   } catch (err) {
-    mainWindow?.webContents.send('build:complete', { code: -1, error: err.message });
+    const codeMatch = /code (-?\d+)/.exec(err.message || '')
+    const code = codeMatch ? Number(codeMatch[1]) : -1
+    mainWindow?.webContents.send('build:complete', { code, error: err.message });
     return { success: false, error: err.message, output };
   }
 });
@@ -309,7 +331,9 @@ ipcMain.handle('project:flash', async (_e, projectDir, projectType, config) => {
     mainWindow?.webContents.send('flash:complete', { code: result.code });
     return { success: true, output };
   } catch (err) {
-    mainWindow?.webContents.send('flash:complete', { code: -1, error: err.message });
+    const codeMatch = /code (-?\d+)/.exec(err.message || '')
+    const code = codeMatch ? Number(codeMatch[1]) : -1
+    mainWindow?.webContents.send('flash:complete', { code, error: err.message });
     return { success: false, error: err.message, output };
   }
 });
@@ -320,15 +344,20 @@ ipcMain.handle('serial:list-ports', async () => {
   return ports;
 });
 
-ipcMain.handle('serial:connect', (_e, port, baud) => {
+ipcMain.handle('serial:connect', async (_e, port, baud) => {
   disconnectSerial();
-  serialConnection = connectSerial(
-    port,
-    baud,
-    (data) => mainWindow?.webContents.send('serial:data', data),
-    (err) => mainWindow?.webContents.send('serial:error', err),
-  );
-  return { connected: true };
+  try {
+    serialConnection = await connectSerial(
+      port,
+      baud,
+      (data) => mainWindow?.webContents.send('serial:data', data),
+      (err) => mainWindow?.webContents.send('serial:error', err),
+    );
+    return { connected: true };
+  } catch (err) {
+    serialConnection = null;
+    return { connected: false, error: err.message || String(err) };
+  }
 });
 
 ipcMain.handle('serial:send', (_e, data) => {
@@ -361,6 +390,7 @@ ipcMain.handle('settings:load', () => {
 ipcMain.handle('settings:save', (_e, settings) => {
   try {
     fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    // Persist full settings (including aiKey) only in userData, not renderer localStorage
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
     return true;
   } catch { return false; }

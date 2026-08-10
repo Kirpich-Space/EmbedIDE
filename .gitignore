@@ -5,3 +5,6 @@ release
 .DS_Store
 Thumbs.db
 build/deb
+.local-lib/
+debug-*.png
+embedide-*.png

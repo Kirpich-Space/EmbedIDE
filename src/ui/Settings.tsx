@@ -1,8 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
 import { useTheme } from '../themes/ThemeProvider'
 import { themes } from '../themes/themes'
 import type { EditorSettings } from '../core/types'
 import { useTranslation } from '../core/TranslationContext'
+import { fetchOllamaModels, pingOllama, ollamaBaseUrl } from '../core/ollama'
+import { AI_PROVIDERS, getAiProvider, migrateAiProvider } from '../core/aiProviders'
+import { AiProviderIcon } from './AiProviderIcons'
+import { FancySelect } from './FancySelect'
+import { SelectionMark } from './CheckIcon'
+import { type LangCode } from '../core/translations'
+import { ACCENT_PRESETS, DEFAULT_EDITOR_SETTINGS } from '../core/defaultSettings'
 
 interface SettingsProps {
   editorSettings: EditorSettings
@@ -10,37 +17,196 @@ interface SettingsProps {
   onClose: () => void
 }
 
-const LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'ru', label: 'Русский' },
-  { code: 'zh', label: '中文' },
-  { code: 'ja', label: '日本語' },
-  { code: 'de', label: 'Deutsch' },
-  { code: 'fr', label: 'Français' },
+const LANGUAGE_META: { code: LangCode; native: string; region: string }[] = [
+  { code: 'en', native: 'English', region: 'EN' },
+  { code: 'ru', native: 'Русский', region: 'RU' },
+  { code: 'zh', native: '中文', region: 'ZH' },
+  { code: 'ja', native: '日本語', region: 'JA' },
+  { code: 'de', native: 'Deutsch', region: 'DE' },
+  { code: 'fr', native: 'Français', region: 'FR' },
 ]
 
-type Tab = 'general' | 'editor' | 'themes' | 'ai'
+const FONT_OPTIONS = [
+  { value: "'JetBrains Mono', monospace", label: 'JetBrains Mono', hint: 'Bundled' },
+  { value: "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace", label: 'System Mono', hint: 'OS default' },
+  { value: "'IBM Plex Sans', 'Segoe UI', sans-serif", label: 'IBM Plex Sans', hint: 'UI / proportional' },
+]
+
+const BAUD_OPTIONS = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+
+type Tab = 'general' | 'editor' | 'appearance' | 'themes' | 'ai'
+
+function Toggle({
+  checked, onChange, label,
+}: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="settings-field-row settings-toggle-row">
+      <span className={`settings-check ${checked ? 'settings-check-on' : ''}`} aria-hidden>
+        {checked ? (
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+            <path d="M3.25 8.35L6.55 11.55L12.75 4.4" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : null}
+      </span>
+      <input
+        type="checkbox"
+        className="settings-check-input"
+        checked={checked}
+        onChange={e => onChange(e.target.checked)}
+      />
+      <span className="settings-label" style={{ margin: 0 }}>{label}</span>
+    </label>
+  )
+}
+
+function SliderField({
+  label, value, min, max, step, display, onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  display: string
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="settings-field">
+      <label className="settings-label">{label}</label>
+      <div className="settings-field-row">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          className="settings-slider"
+        />
+        <span className="settings-value">{display}</span>
+      </div>
+    </div>
+  )
+}
 
 export function Settings({ editorSettings, onEditorSettingsChange, onClose }: SettingsProps) {
   const { t } = useTranslation()
   const { theme, setTheme } = useTheme()
   const [activeTab, setActiveTab] = useState<Tab>('general')
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
+  const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle')
+  const [ollamaInfo, setOllamaInfo] = useState('')
 
+  const providerId = migrateAiProvider(editorSettings)
+  const provider = getAiProvider(providerId)
   const set = (partial: Partial<EditorSettings>) => onEditorSettingsChange({ ...editorSettings, ...partial })
+
+  const languageOptions = useMemo(() => LANGUAGE_META.map(l => ({
+    value: l.code,
+    label: l.native,
+    hint: l.region,
+    preview: l.region,
+    labelStyle: (l.code === 'zh' || l.code === 'ja')
+      ? { fontFamily: l.code === 'zh'
+        ? "'Noto Sans SC', 'IBM Plex Sans', sans-serif"
+        : "'Noto Sans JP', 'IBM Plex Sans', sans-serif" }
+      : undefined,
+  })), [])
+
+  const fontOptions = useMemo(() => FONT_OPTIONS.map(f => ({
+    value: f.value,
+    label: f.label,
+    hint: f.hint,
+    labelStyle: { fontFamily: f.value } as CSSProperties,
+    preview: <span style={{ fontFamily: f.value, fontSize: 14 }}>Aa</span>,
+  })), [])
+
+  const accentOptions = useMemo(() => ACCENT_PRESETS.map(p => ({
+    value: p.value || '__theme__',
+    label: p.id === 'theme' ? t('settings.accentTheme') : p.label,
+    hint: p.value || t('settings.accentThemeHint'),
+    previewClassName: 'fancy-preview-accent',
+    preview: (
+      <span
+        className={`settings-accent-swatch ${p.id === 'theme' ? 'settings-accent-swatch-theme' : ''}`}
+        style={p.value ? { background: p.value } : undefined}
+      />
+    ),
+  })), [t])
+
+  const baudOptions = useMemo(() => BAUD_OPTIONS.map(b => ({
+    value: String(b),
+    label: String(b),
+    hint: 'baud',
+  })), [])
+
+  useEffect(() => {
+    if (editorSettings.fontFamily.includes('IBM Plex Mono')) {
+      set({ fontFamily: DEFAULT_EDITOR_SETTINGS.fontFamily })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const refreshOllama = useCallback(async () => {
+    if (!editorSettings.aiEnabled || !provider.local) return
+    setOllamaStatus('checking')
+    const ping = await pingOllama(editorSettings.aiEndpoint)
+    if (!ping.ok) {
+      setOllamaStatus('fail')
+      setOllamaInfo(ping.error || t('settings.ollamaUnreachable'))
+      setOllamaModels([])
+      return
+    }
+    try {
+      const models = await fetchOllamaModels(editorSettings.aiEndpoint)
+      setOllamaModels(models)
+      setOllamaStatus('ok')
+      setOllamaInfo(ping.version
+        ? t('settings.ollamaOkVersion', { version: ping.version, count: models.length })
+        : t('settings.ollamaOk', { count: models.length }))
+      if (models.length && !models.includes(editorSettings.aiModel)) {
+        onEditorSettingsChange({ ...editorSettings, aiModel: models[0] })
+      }
+    } catch (e) {
+      setOllamaStatus('fail')
+      setOllamaInfo(e instanceof Error ? e.message : String(e))
+    }
+  }, [editorSettings, onEditorSettingsChange, provider.local, t])
+
+  useEffect(() => {
+    if (activeTab === 'ai' && editorSettings.aiEnabled && provider.local) {
+      void refreshOllama()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, editorSettings.aiEnabled, providerId, editorSettings.aiEndpoint])
+
+  const accentValue = editorSettings.customAccent || '__theme__'
+  const knownAccent = ACCENT_PRESETS.some(p => (p.value || '__theme__') === accentValue)
 
   return (
     <div className="settings-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="settings-modal">
+      <div className="settings-modal settings-modal-wide">
         <div className="settings-header">
           <span className="settings-title">{t('settings.title')}</span>
           <button className="settings-close" onClick={onClose}>×</button>
         </div>
 
         <div className="settings-tabs">
-          <button className={`settings-tab ${activeTab === 'general' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('general')}>{t('settings.general')}</button>
-          <button className={`settings-tab ${activeTab === 'editor' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('editor')}>{t('settings.editor')}</button>
-          <button className={`settings-tab ${activeTab === 'themes' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('themes')}>{t('settings.themes')}</button>
-          <button className={`settings-tab ${activeTab === 'ai' ? 'settings-tab-active' : ''}`} onClick={() => setActiveTab('ai')}>{t('settings.ai')}</button>
+          {([
+            ['general', t('settings.general')],
+            ['editor', t('settings.editor')],
+            ['appearance', t('settings.appearance')],
+            ['themes', t('settings.themes')],
+            ['ai', t('settings.ai')],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              className={`settings-tab ${activeTab === id ? 'settings-tab-active' : ''}`}
+              onClick={() => setActiveTab(id)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         <div className="settings-body">
@@ -50,17 +216,68 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
 
               <div className="settings-field">
                 <label className="settings-label">{t('settings.uiLanguage')}</label>
-                <select
-                  className="settings-select"
+                <FancySelect
+                  variant="cards"
+                  columns={3}
+                  aria-label={t('settings.uiLanguage')}
                   value={editorSettings.language}
-                  onChange={e => set({ language: e.target.value })}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.label}</option>
-                  ))}
-                </select>
+                  options={languageOptions}
+                  onChange={v => set({ language: v })}
+                />
                 <span className="settings-hint">{t('settings.langHint')}</span>
               </div>
+
+              <div className="settings-divider" />
+              <span className="settings-section-title">{t('settings.workflow')}</span>
+
+              <Toggle
+                checked={!!editorSettings.autoSave}
+                onChange={v => set({ autoSave: v })}
+                label={t('settings.autoSave')}
+              />
+              <span className="settings-hint">{t('settings.autoSaveHint')}</span>
+
+              {editorSettings.autoSave && (
+                <SliderField
+                  label={t('settings.autoSaveDelay')}
+                  value={editorSettings.autoSaveDelayMs}
+                  min={500}
+                  max={5000}
+                  step={100}
+                  display={`${(editorSettings.autoSaveDelayMs / 1000).toFixed(1)}s`}
+                  onChange={v => set({ autoSaveDelayMs: v })}
+                />
+              )}
+
+              <Toggle
+                checked={editorSettings.confirmDelete !== false}
+                onChange={v => set({ confirmDelete: v })}
+                label={t('settings.confirmDelete')}
+              />
+
+              <div className="settings-field">
+                <label className="settings-label">{t('settings.defaultBaud')}</label>
+                <FancySelect
+                  variant="menu"
+                  aria-label={t('settings.defaultBaud')}
+                  value={String(editorSettings.defaultBaud)}
+                  options={baudOptions}
+                  onChange={v => set({ defaultBaud: Number(v) })}
+                />
+              </div>
+
+              <div className="settings-divider" />
+              <button
+                type="button"
+                className="project-btn settings-reset-btn"
+                onClick={() => onEditorSettingsChange({
+                  ...DEFAULT_EDITOR_SETTINGS,
+                  aiKey: editorSettings.aiKey,
+                  language: editorSettings.language,
+                })}
+              >
+                {t('settings.resetDefaults')}
+              </button>
             </div>
           )}
 
@@ -68,89 +285,170 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
             <div className="settings-section animate-fade-in">
               <span className="settings-section-title">{t('settings.editorPrefs')}</span>
 
-              <div className="settings-field">
-                <label className="settings-label">{t('settings.fontSize')}</label>
-                <div className="settings-field-row">
-                  <input type="range" min={10} max={24} step={1}
-                    value={editorSettings.fontSize}
-                    onChange={e => set({ fontSize: Number(e.target.value) })}
-                    className="settings-slider" />
-                  <span className="settings-value">{editorSettings.fontSize}px</span>
-                </div>
-              </div>
+              <SliderField
+                label={t('settings.fontSize')}
+                value={editorSettings.fontSize}
+                min={10}
+                max={28}
+                step={1}
+                display={`${editorSettings.fontSize}px`}
+                onChange={v => set({ fontSize: v })}
+              />
 
-              <div className="settings-field">
-                <label className="settings-label">{t('settings.tabSize')}</label>
-                <div className="settings-field-row">
-                  <input type="range" min={2} max={8} step={2}
-                    value={editorSettings.tabSize}
-                    onChange={e => set({ tabSize: Number(e.target.value) })}
-                    className="settings-slider" />
-                  <span className="settings-value">{editorSettings.tabSize} {t('settings.spaces')}</span>
-                </div>
-              </div>
+              <SliderField
+                label={t('settings.lineHeight')}
+                value={Math.round(editorSettings.lineHeight * 100)}
+                min={110}
+                max={220}
+                step={5}
+                display={editorSettings.lineHeight.toFixed(2)}
+                onChange={v => set({ lineHeight: v / 100 })}
+              />
+
+              <SliderField
+                label={t('settings.tabSize')}
+                value={editorSettings.tabSize}
+                min={2}
+                max={8}
+                step={1}
+                display={`${editorSettings.tabSize} ${t('settings.spaces')}`}
+                onChange={v => set({ tabSize: v })}
+              />
+
+              <SliderField
+                label={t('settings.caretWidth')}
+                value={editorSettings.caretWidth}
+                min={1}
+                max={4}
+                step={1}
+                display={`${editorSettings.caretWidth}px`}
+                onChange={v => set({ caretWidth: v })}
+              />
 
               <div className="settings-field">
                 <label className="settings-label">{t('settings.fontFamily')}</label>
-                <select className="settings-select"
-                  value={editorSettings.fontFamily}
-                  onChange={e => set({ fontFamily: e.target.value })}
-                >
-                  <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
-                  <option value="'IBM Plex Mono', monospace">IBM Plex Mono</option>
-                  <option value="monospace">Default Monospace</option>
-                </select>
+                <FancySelect
+                  variant="cards"
+                  columns={3}
+                  aria-label={t('settings.fontFamily')}
+                  value={
+                    FONT_OPTIONS.some(f => f.value === editorSettings.fontFamily)
+                      ? editorSettings.fontFamily
+                      : FONT_OPTIONS[0].value
+                  }
+                  options={fontOptions}
+                  onChange={v => set({ fontFamily: v })}
+                />
               </div>
 
-              <div className="settings-field">
-                <label className="settings-field-row">
-                  <input type="checkbox"
-                    checked={editorSettings.wordWrap}
-                    onChange={e => set({ wordWrap: e.target.checked })} />
-                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.wordWrap')}</span>
-                </label>
-              </div>
+              <div className="settings-divider" />
+              <span className="settings-section-title">{t('settings.editorBehavior')}</span>
 
-              <div className="settings-field">
-                <label className="settings-field-row">
-                  <input type="checkbox"
-                    checked={editorSettings.lineNumbers}
-                    onChange={e => set({ lineNumbers: e.target.checked })} />
-                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.lineNumbers')}</span>
-                </label>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-field-row">
-                  <input type="checkbox"
-                    checked={editorSettings.bracketMatch}
-                    onChange={e => set({ bracketMatch: e.target.checked })} />
-                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.bracketMatch')}</span>
-                </label>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-field-row">
-                  <input type="checkbox"
-                    checked={editorSettings.smoothScroll}
-                    onChange={e => set({ smoothScroll: e.target.checked })} />
-                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.smoothScroll')}</span>
-                </label>
+              <div className="settings-toggle-grid">
+                <Toggle checked={!!editorSettings.insertSpaces} onChange={v => set({ insertSpaces: v })} label={t('settings.insertSpaces')} />
+                <Toggle checked={!!editorSettings.wordWrap} onChange={v => set({ wordWrap: v })} label={t('settings.wordWrap')} />
+                <Toggle checked={!!editorSettings.lineNumbers} onChange={v => set({ lineNumbers: v })} label={t('settings.lineNumbers')} />
+                <Toggle checked={!!editorSettings.bracketMatch} onChange={v => set({ bracketMatch: v })} label={t('settings.bracketMatch')} />
+                <Toggle checked={editorSettings.highlightActiveLine !== false} onChange={v => set({ highlightActiveLine: v })} label={t('settings.highlightActiveLine')} />
+                <Toggle checked={editorSettings.foldGutter !== false} onChange={v => set({ foldGutter: v })} label={t('settings.foldGutter')} />
+                <Toggle checked={editorSettings.autoComplete !== false} onChange={v => set({ autoComplete: v })} label={t('settings.autoComplete')} />
+                <Toggle checked={!!editorSettings.showWhitespace} onChange={v => set({ showWhitespace: v })} label={t('settings.showWhitespace')} />
+                <Toggle checked={!!editorSettings.smoothScroll} onChange={v => set({ smoothScroll: v })} label={t('settings.smoothScroll')} />
               </div>
 
               <div className="settings-divider" />
 
+              <SliderField
+                label={t('settings.cursorBlink')}
+                value={editorSettings.cursorBlinkRate}
+                min={0}
+                max={2000}
+                step={100}
+                display={editorSettings.cursorBlinkRate === 0 ? t('settings.off') : `${editorSettings.cursorBlinkRate}${t('settings.ms')}`}
+                onChange={v => set({ cursorBlinkRate: v })}
+              />
+            </div>
+          )}
+
+          {activeTab === 'appearance' && (
+            <div className="settings-section animate-fade-in">
+              <span className="settings-section-title">{t('settings.appearancePrefs')}</span>
+
               <div className="settings-field">
-                <label className="settings-label">{t('settings.cursorBlink')}</label>
-                <div className="settings-field-row">
-                  <input type="range" min={0} max={2000} step={100}
-                    value={editorSettings.cursorBlinkRate}
-                    onChange={e => set({ cursorBlinkRate: Number(e.target.value) })}
-                    className="settings-slider" />
-                  <span className="settings-value">
-                    {editorSettings.cursorBlinkRate === 0 ? t('settings.off') : `${editorSettings.cursorBlinkRate}${t('settings.ms')}`}
-                  </span>
-                </div>
+                <label className="settings-label">{t('settings.accentColor')}</label>
+                <FancySelect
+                  variant="cards"
+                  columns={4}
+                  aria-label={t('settings.accentColor')}
+                  value={knownAccent ? accentValue : '__custom__'}
+                  options={[
+                    ...accentOptions,
+                    {
+                      value: '__custom__',
+                      label: t('settings.accentCustom'),
+                      hint: editorSettings.customAccent || '#RRGGBB',
+                      previewClassName: 'fancy-preview-accent',
+                      preview: (
+                        <span
+                          className={`settings-accent-swatch ${
+                            /^#[0-9A-Fa-f]{6}$/.test(editorSettings.customAccent)
+                              ? ''
+                              : 'settings-accent-swatch-custom'
+                          }`}
+                          style={
+                            /^#[0-9A-Fa-f]{6}$/.test(editorSettings.customAccent)
+                              ? { background: editorSettings.customAccent }
+                              : undefined
+                          }
+                        />
+                      ),
+                    },
+                  ]}
+                  onChange={v => {
+                    if (v === '__theme__') set({ customAccent: '' })
+                    else if (v === '__custom__') {
+                      if (!editorSettings.customAccent) set({ customAccent: theme.colors.accent })
+                    } else set({ customAccent: v })
+                  }}
+                />
+                {(!knownAccent || accentValue === '__custom__' || (editorSettings.customAccent && !ACCENT_PRESETS.some(p => p.value === editorSettings.customAccent))) && (
+                  <div className="settings-field-row" style={{ marginTop: 8 }}>
+                    <input
+                      type="color"
+                      className="settings-color-input"
+                      value={/^#[0-9A-Fa-f]{6}$/.test(editorSettings.customAccent) ? editorSettings.customAccent : theme.colors.accent}
+                      onChange={e => set({ customAccent: e.target.value.toUpperCase() })}
+                    />
+                    <input
+                      className="settings-select"
+                      value={editorSettings.customAccent}
+                      placeholder="#FF6B00"
+                      onChange={e => {
+                        const v = e.target.value.trim()
+                        set({ customAccent: v })
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                )}
+                <span className="settings-hint">{t('settings.accentHint')}</span>
+              </div>
+
+              <SliderField
+                label={t('settings.uiScale')}
+                value={editorSettings.uiScale}
+                min={85}
+                max={125}
+                step={5}
+                display={`${editorSettings.uiScale}%`}
+                onChange={v => set({ uiScale: v })}
+              />
+
+              <div className="settings-toggle-grid">
+                <Toggle checked={!!editorSettings.compactUi} onChange={v => set({ compactUi: v })} label={t('settings.compactUi')} />
+                <Toggle checked={editorSettings.showStatusBar !== false} onChange={v => set({ showStatusBar: v })} label={t('settings.showStatusBar')} />
+                <Toggle checked={editorSettings.glassEffects !== false} onChange={v => set({ glassEffects: v })} label={t('settings.glassEffects')} />
+                <Toggle checked={!!editorSettings.reduceMotion} onChange={v => set({ reduceMotion: v })} label={t('settings.reduceMotion')} />
               </div>
             </div>
           )}
@@ -160,13 +458,17 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
               <span className="settings-section-title">{t('settings.colorTheme')}</span>
               <div className="settings-themes">
                 {themes.map(th => (
-                  <div key={th.name}
+                  <div
+                    key={th.name}
                     className={`settings-theme-card ${theme.name === th.name ? 'settings-theme-active' : ''}`}
-                    onClick={() => setTheme(th.name)}
+                    onClick={() => {
+                      setTheme(th.name)
+                      set({ theme: th.name })
+                    }}
                   >
                     <div className="settings-theme-preview" style={{ background: th.colors.bg }}>
                       <div className="stp-toolbar" style={{ background: th.colors.toolbarBg, borderBottom: `1px solid ${th.colors.border}` }}>
-                        <div className="stp-dot" style={{ background: th.colors.accent }} />
+                        <div className="stp-dot" style={{ background: editorSettings.customAccent || th.colors.accent }} />
                         <div className="stp-line" style={{ background: th.colors.border }} />
                       </div>
                       <div className="stp-body">
@@ -185,7 +487,9 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                       <span className="settings-theme-name">{th.name}</span>
                       <span className="settings-theme-type">{th.type === 'dark' ? t('settings.dark') : t('settings.light')}</span>
                     </div>
-                    {theme.name === th.name && <div className="settings-theme-check">✓</div>}
+                    {theme.name === th.name && (
+                      <SelectionMark size={22} className="settings-theme-check" />
+                    )}
                   </div>
                 ))}
               </div>
@@ -196,47 +500,63 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
             <div className="settings-section animate-fade-in">
               <span className="settings-section-title">{t('settings.aiPrefs')}</span>
 
-              <div className="settings-field">
-                <label className="settings-field-row">
-                  <input type="checkbox"
-                    checked={editorSettings.aiEnabled}
-                    onChange={e => set({ aiEnabled: e.target.checked })} />
-                  <span className="settings-label" style={{ margin: 0 }}>{t('settings.aiEnabled')}</span>
-                </label>
-                <span className="settings-hint">{t('settings.aiEnabledHint')}</span>
-              </div>
+              <Toggle
+                checked={!!editorSettings.aiEnabled}
+                onChange={v => set({ aiEnabled: v })}
+                label={t('settings.aiEnabled')}
+              />
+              <span className="settings-hint">{t('settings.aiEnabledHint')}</span>
+
+              <Toggle
+                checked={editorSettings.aiAutoApplyFiles !== false}
+                onChange={v => set({ aiAutoApplyFiles: v })}
+                label={t('settings.aiAutoApplyFiles')}
+              />
+              <span className="settings-hint">{t('settings.aiAutoApplyFilesHint')}</span>
 
               <div className="settings-field">
-                <label className="settings-label">{t('settings.aiMode')}</label>
-                <select
-                  className="settings-select"
-                  value={editorSettings.aiMode}
-                  onChange={e => {
-                    const mode = e.target.value as 'local' | 'cloud'
-                    if (mode === 'local') {
-                      set({
-                        aiMode: mode,
-                        aiEndpoint: editorSettings.aiEndpoint?.includes('127.0.0.1') || editorSettings.aiEndpoint?.includes('localhost')
-                          ? editorSettings.aiEndpoint
-                          : 'http://127.0.0.1:11434/v1',
-                        aiModel: editorSettings.aiMode === 'cloud' ? 'llama3.2' : editorSettings.aiModel,
-                      })
-                    } else {
-                      set({
-                        aiMode: mode,
-                        aiEndpoint: editorSettings.aiEndpoint?.startsWith('https://')
-                          ? editorSettings.aiEndpoint
-                          : 'https://api.openai.com/v1',
-                        aiModel: editorSettings.aiMode === 'local' ? 'gpt-4o' : editorSettings.aiModel,
-                      })
-                    }
-                  }}
-                  disabled={!editorSettings.aiEnabled}
-                >
-                  <option value="local">{t('settings.aiLocal')}</option>
-                  <option value="cloud">{t('settings.aiCloud')}</option>
-                </select>
-                <span className="settings-hint">{t('settings.aiLocalHint')}</span>
+                <label className="settings-label">{t('settings.aiProvider')}</label>
+                <div className={`settings-provider-grid ${!editorSettings.aiEnabled ? 'settings-provider-grid-disabled' : ''}`}>
+                  {AI_PROVIDERS.map(p => {
+                    const active = providerId === p.id
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`settings-provider-card ${active ? 'settings-provider-card-active' : ''}`}
+                        style={{ ['--provider-accent' as string]: p.accent }}
+                        disabled={!editorSettings.aiEnabled}
+                        onClick={() => {
+                          set({
+                            aiProvider: p.id,
+                            aiMode: p.local ? 'local' : 'cloud',
+                            aiEndpoint: p.endpoint,
+                            aiModel: p.defaultModel || editorSettings.aiModel,
+                          })
+                        }}
+                      >
+                        <span className="settings-provider-logo">
+                          <AiProviderIcon id={p.id} />
+                        </span>
+                        <span className="settings-provider-meta">
+                          <span className="settings-provider-name">{p.name}</span>
+                          <span className="settings-provider-tags">
+                            <span className={`settings-provider-tag ${p.local ? 'local' : 'cloud'}`}>
+                              {p.local ? t('settings.aiTagLocal') : t('settings.aiTagCloud')}
+                            </span>
+                            {p.needsKey && (
+                              <span className="settings-provider-tag key">{t('settings.aiTagKey')}</span>
+                            )}
+                          </span>
+                        </span>
+                        {active && (
+                          <SelectionMark size={18} className="settings-provider-check" />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                <span className="settings-hint">{provider.hint || t('settings.aiProviderHint')}</span>
               </div>
 
               <div className="settings-field">
@@ -246,17 +566,68 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   value={editorSettings.aiEndpoint}
                   onChange={e => set({ aiEndpoint: e.target.value })}
                   disabled={!editorSettings.aiEnabled}
+                  placeholder={provider.endpoint}
                 />
+                {provider.local && (
+                  <span className="settings-hint">{t('settings.ollamaEndpointHint', { base: ollamaBaseUrl(editorSettings.aiEndpoint) })}</span>
+                )}
               </div>
+
+              {provider.local && editorSettings.aiEnabled && (
+                <div className="settings-field">
+                  <div className="settings-field-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="project-btn"
+                      onClick={() => void refreshOllama()}
+                      disabled={ollamaStatus === 'checking'}
+                      style={{ padding: '6px 12px', fontSize: 12 }}
+                    >
+                      {ollamaStatus === 'checking' ? t('settings.ollamaChecking') : t('settings.ollamaRefresh')}
+                    </button>
+                    <span className="settings-hint" style={{
+                      margin: 0,
+                      color: ollamaStatus === 'ok' ? 'var(--accent)' : ollamaStatus === 'fail' ? '#ff6b6b' : undefined,
+                    }}>
+                      {ollamaInfo}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="settings-field">
                 <label className="settings-label">{t('settings.aiModel')}</label>
-                <input
-                  className="settings-select"
-                  value={editorSettings.aiModel}
-                  onChange={e => set({ aiModel: e.target.value })}
-                  disabled={!editorSettings.aiEnabled}
-                />
+                {provider.local && ollamaModels.length > 0 ? (
+                  <FancySelect
+                    variant="menu"
+                    aria-label={t('settings.aiModel')}
+                    disabled={!editorSettings.aiEnabled}
+                    value={ollamaModels.includes(editorSettings.aiModel) ? editorSettings.aiModel : ollamaModels[0]}
+                    options={ollamaModels.map(m => ({ value: m, label: m }))}
+                    onChange={v => set({ aiModel: v })}
+                  />
+                ) : (
+                  <>
+                    <input
+                      className="settings-select"
+                      list={`ai-models-${providerId}`}
+                      value={editorSettings.aiModel}
+                      onChange={e => set({ aiModel: e.target.value })}
+                      disabled={!editorSettings.aiEnabled}
+                      placeholder={provider.defaultModel || 'model-id'}
+                    />
+                    {provider.models && provider.models.length > 0 && (
+                      <datalist id={`ai-models-${providerId}`}>
+                        {provider.models.map(m => (
+                          <option key={m} value={m} />
+                        ))}
+                      </datalist>
+                    )}
+                  </>
+                )}
+                {provider.local && ollamaModels.length === 0 && (
+                  <span className="settings-hint">{t('settings.ollamaPullHint')}</span>
+                )}
               </div>
 
               <div className="settings-field">
@@ -266,8 +637,8 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   type="password"
                   value={editorSettings.aiKey}
                   onChange={e => set({ aiKey: e.target.value })}
-                  disabled={!editorSettings.aiEnabled || editorSettings.aiMode === 'local'}
-                  placeholder={editorSettings.aiMode === 'local' ? '—' : 'sk-...'}
+                  disabled={!editorSettings.aiEnabled || !provider.needsKey}
+                  placeholder={provider.needsKey ? 'sk-... / or-...' : '—'}
                 />
                 <span className="settings-hint">{t('settings.aiKeyHint')}</span>
               </div>

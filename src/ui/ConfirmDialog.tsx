@@ -13,7 +13,7 @@ interface ConfirmDialogProps {
 
 export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, danger = true, onConfirm, onCancel }: ConfirmDialogProps) {
   const { t } = useTranslation()
-  confirmLabel ??= t('confirmDialog.deleteTitle')
+  confirmLabel ??= t('common.delete')
   cancelLabel ??= t('common.cancel')
   const btnRef = useRef<HTMLButtonElement>(null)
 

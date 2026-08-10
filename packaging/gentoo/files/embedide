@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/embed-ide/embed-ide "$@"

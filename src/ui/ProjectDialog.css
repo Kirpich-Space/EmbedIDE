@@ -5,8 +5,9 @@
   width: 520px;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-lg), var(--island-rim);
   overflow: hidden;
+  animation: scaleIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .project-dialog-wide {
@@ -45,16 +46,30 @@
   gap: 8px;
 }
 
+.project-type-group {
+  margin-bottom: 12px;
+}
+
+.project-type-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
 .project-type-card {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 10px 34px 10px 12px;
   border: 1px solid transparent;
   border-radius: var(--radius-md, 8px);
   cursor: pointer;
   background: transparent;
   box-shadow: none;
+  position: relative;
 }
 
 .project-type-card:hover {
@@ -104,6 +119,21 @@
   margin-left: auto;
 }
 
+.project-type-check {
+  position: absolute !important;
+  top: calc(50% - 9px);
+  right: 10px;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.board-chip-check {
+  position: absolute !important;
+  top: 6px;
+  right: 6px;
+  margin: 0;
+}
+
 .board-picker {
   margin-top: 8px;
   max-height: 220px;
@@ -138,11 +168,12 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 6px 10px;
+  padding: 6px 28px 6px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm, 5px);
   background: transparent;
   color: var(--text);
+  position: relative;
   cursor: pointer;
   font-family: inherit;
   text-align: left;
@@ -221,6 +252,8 @@
   cursor: pointer;
   border: 1px solid var(--border);
   box-shadow: var(--btn-raise);
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .project-btn-cancel {

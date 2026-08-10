@@ -1,16 +1,22 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from 'react'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars, drawSelection, rectangularSelection } from '@codemirror/view'
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars, drawSelection, rectangularSelection, highlightWhitespace } from '@codemirror/view'
 import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands'
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
-import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import { syntaxHighlighting, HighlightStyle, bracketMatching, foldGutter, indentOnInput, indentUnit } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
+import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, startCompletion } from '@codemirror/autocomplete'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
 import { javascript } from '@codemirror/lang-javascript'
 import { cpp } from '@codemirror/lang-cpp'
 import { rust as rustLang } from '@codemirror/lang-rust'
 import type { EditorTabData, EditorSettings } from '../core/types'
+import type { FileDiagnostic } from '../core/parseDiagnostics'
 import { getLangColor } from '../core/utils'
 import { useTranslation } from '../core/TranslationContext'
+import { useTheme } from '../themes/ThemeProvider'
+import { createCompletionSource } from './completions'
+import { zigLanguage } from './zigLanguage'
 
 const langCompartment = new Compartment()
 const themeCompartment = new Compartment()
@@ -18,75 +24,139 @@ const tabSizeCompartment = new Compartment()
 const lineNumbersCompartment = new Compartment()
 const wordWrapCompartment = new Compartment()
 const bracketMatchCompartment = new Compartment()
+const highlightCompartment = new Compartment()
+const activeLineCompartment = new Compartment()
+const foldGutterCompartment = new Compartment()
+const whitespaceCompartment = new Compartment()
+const autocompleteCompartment = new Compartment()
+const indentUnitCompartment = new Compartment()
 
-const LANGUAGES: Record<string, () => import('@codemirror/language').LanguageSupport> = {
+const LANGUAGES: Record<string, () => unknown> = {
   rust: () => rustLang(),
   c: () => cpp(),
   cpp: () => cpp(),
+  zig: () => zigLanguage,
 }
 
 function getLanguage(lang: string) {
-  return LANGUAGES[lang]?.() ?? javascript()
+  return (LANGUAGES[lang]?.() ?? javascript()) as import('@codemirror/language').LanguageSupport
+}
+
+function indentExt(settings: EditorSettings) {
+  return indentUnit.of(settings.insertSpaces ? ' '.repeat(Math.max(1, settings.tabSize)) : '\t')
 }
 
 function getEditorTheme(settings: EditorSettings) {
+  const caret = Math.max(1, Math.min(4, settings.caretWidth || 2))
   return EditorView.theme({
     '&': {
       fontSize: `${settings.fontSize}px`,
       fontFamily: settings.fontFamily,
+      color: 'var(--text)',
+      fontWeight: '500',
     },
     '.cm-scroller': {
       overflow: 'auto',
       fontFamily: settings.fontFamily,
-      ...(settings.smoothScroll ? { scrollBehavior: 'smooth' } : {}),
+      fontWeight: '500',
+      lineHeight: String(settings.lineHeight || 1.45),
+      ...(settings.smoothScroll ? { scrollBehavior: 'smooth' } : { scrollBehavior: 'auto' }),
+    },
+    '.cm-content': {
+      caretColor: 'var(--accent)',
+      color: 'var(--text)',
+      fontWeight: '500',
+      lineHeight: String(settings.lineHeight || 1.45),
     },
     '&.cm-focused': { outline: 'none' },
-    '.cm-cursor': {
+    '.cm-cursor, .cm-dropCursor': {
       borderLeftColor: 'var(--accent)',
+      borderLeftWidth: `${caret}px`,
       animationDuration: settings.cursorBlinkRate > 0 ? `${settings.cursorBlinkRate}ms` : '0s',
     },
     '.cm-gutters': {
       background: 'var(--editor-bg)',
       borderRight: '1px solid var(--border)',
       userSelect: 'none',
+      color: 'var(--text-secondary)',
+      fontWeight: '500',
     },
-    '.cm-activeLineGutter': { background: 'var(--bg-hover)' },
+    '.cm-activeLineGutter': { background: 'var(--bg-hover)', color: 'var(--text)' },
     '.cm-activeLine': { background: 'var(--bg-hover)' },
     '.cm-selectionBackground': { background: 'var(--accent-glow) !important' },
     '&.cm-focused .cm-selectionBackground': { background: 'var(--accent-glow) !important' },
     '.cm-matchingBracket': { background: 'rgba(255,107,0,0.2)', outline: '1px solid var(--accent)' },
     '.cm-foldPlaceholder': { background: 'transparent', border: 'none', color: 'var(--text-secondary)' },
     '.cm-selectionMatch': { background: 'rgba(255,107,0,0.15)' },
-    '.cm-content': { caretColor: 'var(--accent)' },
     '&.cm-focused .cm-cursor': { borderLeftColor: 'var(--accent)' },
+    '.cm-highlightSpace::before, .cm-highlightTab': {
+      opacity: 0.35,
+      color: 'var(--text-secondary)',
+    },
+    '.cm-tooltip-autocomplete': {
+      background: 'var(--bg-panel) !important',
+      border: '1px solid var(--border) !important',
+      color: 'var(--text) !important',
+    },
+    '.cm-tooltip-autocomplete ul li[aria-selected]': {
+      background: 'var(--accent-glow) !important',
+      color: 'var(--accent) !important',
+    },
+    '.cm-completionLabel': { fontWeight: '500' },
+    '.cm-completionDetail': { color: 'var(--text-secondary)', fontStyle: 'normal' },
+    '.cm-diagnostic-error': { borderBottom: '2px wavy #E81123' },
+    '.cm-diagnostic-warning': { borderBottom: '2px wavy #F5A623' },
+    '.cm-diagnostic-info': { borderBottom: '2px wavy #0078D4' },
+    '.cm-lintRange-error': { backgroundImage: 'none', borderBottom: '2px wavy #E81123' },
+    '.cm-lintRange-warning': { backgroundImage: 'none', borderBottom: '2px wavy #F5A623' },
+    '.cm-gutters .cm-lint-marker-error': { color: '#E81123' },
+    '.cm-gutters .cm-lint-marker-warning': { color: '#F5A623' },
   })
 }
 
-function getSyntaxTheme() {
+function getSyntaxHighlight() {
   const el = getComputedStyle(document.documentElement)
-  return EditorView.theme({
-    '&': { color: el.getPropertyValue('--text') },
-    '.cm-keyword': { color: el.getPropertyValue('--hl-keyword') },
-    '.cm-atom': { color: el.getPropertyValue('--hl-number') },
-    '.cm-number': { color: el.getPropertyValue('--hl-number') },
-    '.cm-type': { color: el.getPropertyValue('--hl-type') },
-    '.cm-def': { color: el.getPropertyValue('--hl-type') },
-    '.cm-string': { color: el.getPropertyValue('--hl-string') },
-    '.cm-comment': { color: el.getPropertyValue('--hl-comment') },
-    '.cm-variable': { color: el.getPropertyValue('--text') },
-    '.cm-variable-2': { color: el.getPropertyValue('--text') },
-    '.cm-variable-3': { color: el.getPropertyValue('--hl-type') },
-    '.cm-operator': { color: el.getPropertyValue('--text') },
-    '.cm-meta': { color: el.getPropertyValue('--text-secondary') },
-    '.cm-tag': { color: el.getPropertyValue('--hl-keyword') },
-    '.cm-attribute': { color: el.getPropertyValue('--hl-type') },
-    '.cm-builtin': { color: el.getPropertyValue('--hl-type') },
-    '.cm-bracket': { color: el.getPropertyValue('--text-secondary') },
-    '.cm-punctuation': { color: el.getPropertyValue('--text-secondary') },
-    '.cm-link': { color: el.getPropertyValue('--accent') },
-    '.cm-quote': { color: el.getPropertyValue('--hl-string') },
-    '.cm-hr': { color: el.getPropertyValue('--text-secondary') },
-  })
+  const keyword = el.getPropertyValue('--hl-keyword').trim() || '#FFB4A8'
+  const type = el.getPropertyValue('--hl-type').trim() || '#A8DCFF'
+  const string = el.getPropertyValue('--hl-string').trim() || '#D4F0FF'
+  const number = el.getPropertyValue('--hl-number').trim() || '#A8DCFF'
+  const comment = el.getPropertyValue('--hl-comment').trim() || '#A0A0A0'
+  const text = el.getPropertyValue('--text').trim() || '#FFFFFF'
+  const secondary = el.getPropertyValue('--text-secondary').trim() || '#E0E0E0'
+  const accent = el.getPropertyValue('--accent').trim() || '#FF6B00'
+
+  return HighlightStyle.define([
+    { tag: t.keyword, color: keyword, fontWeight: '600' },
+    { tag: t.controlKeyword, color: keyword, fontWeight: '600' },
+    { tag: t.definitionKeyword, color: keyword, fontWeight: '600' },
+    { tag: t.operatorKeyword, color: keyword },
+    { tag: t.moduleKeyword, color: keyword },
+    { tag: t.typeName, color: type, fontWeight: '600' },
+    { tag: t.className, color: type, fontWeight: '600' },
+    { tag: t.namespace, color: type },
+    { tag: t.typeOperator, color: type },
+    { tag: t.string, color: string },
+    { tag: t.character, color: string },
+    { tag: t.special(t.string), color: string },
+    { tag: t.number, color: number },
+    { tag: t.bool, color: number },
+    { tag: t.null, color: number },
+    { tag: t.comment, color: comment, fontStyle: 'italic' },
+    { tag: t.lineComment, color: comment, fontStyle: 'italic' },
+    { tag: t.blockComment, color: comment, fontStyle: 'italic' },
+    { tag: t.function(t.variableName), color: accent, fontWeight: '600' },
+    { tag: t.function(t.propertyName), color: accent },
+    { tag: t.definition(t.variableName), color: text, fontWeight: '600' },
+    { tag: t.variableName, color: text },
+    { tag: t.propertyName, color: text },
+    { tag: t.operator, color: text },
+    { tag: t.punctuation, color: secondary },
+    { tag: t.bracket, color: secondary },
+    { tag: t.meta, color: secondary },
+    { tag: t.processingInstruction, color: keyword },
+    { tag: t.name, color: text },
+    { tag: t.literal, color: number },
+  ])
 }
 
 interface EditorProps {
@@ -95,11 +165,34 @@ interface EditorProps {
   onTabSelect: (id: string) => void
   onTabClose: (id: string) => void
   onContentChange: (id: string, content: string) => void
+  onCursorChange?: (id: string, line: number, col: number) => void
   onSave?: (id: string) => void
   editorSettings: EditorSettings
+  /** Build diagnostics for the active file (underlines + gutter) */
+  fileDiagnostics?: FileDiagnostic[]
 }
 
-export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentChange, onSave, editorSettings }: EditorProps) {
+function toCmDiagnostics(doc: { lines: number; line: (n: number) => { from: number; to: number } }, items: FileDiagnostic[]): Diagnostic[] {
+  const diags: Diagnostic[] = []
+  for (const d of items) {
+    const lineNo = Math.min(Math.max(1, d.line), doc.lines)
+    const line = doc.line(lineNo)
+    const col = Math.max(1, d.col || 1)
+    const from = Math.min(line.from + col - 1, line.to)
+    const to = from < line.to ? Math.min(from + 1, line.to) : line.to
+    diags.push({
+      from: Math.min(from, line.to),
+      to: Math.max(from, to === from ? Math.min(from + 1, line.to) : to),
+      severity: d.severity === 'warning' ? 'warning' : d.severity === 'info' ? 'info' : 'error',
+      message: d.message,
+    })
+  }
+  return diags
+}
+
+export function Editor({
+  tabs, activeTabId, onTabSelect, onTabClose, onContentChange, onCursorChange, onSave, editorSettings, fileDiagnostics = [],
+}: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const activeTabIdRef = useRef(activeTabId)
@@ -107,18 +200,23 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
   const tabsRef = useRef(tabs)
   const onSaveRef = useRef(onSave)
   const onContentChangeRef = useRef(onContentChange)
+  const onCursorChangeRef = useRef(onCursorChange)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const { t } = useTranslation()
+  const { theme } = useTheme()
 
   activeTabIdRef.current = activeTabId
   tabsRef.current = tabs
   onSaveRef.current = onSave
   onContentChangeRef.current = onContentChange
+  onCursorChangeRef.current = onCursorChange
 
   const activeTab = tabs.find(t => t.id === activeTabId)
 
   const settingsRef = useRef(editorSettings)
   settingsRef.current = editorSettings
+  const langRef = useRef(activeTab?.language ?? 'c')
+  langRef.current = activeTab?.language ?? 'c'
 
   const CMBindings = useMemo(() => {
     const bindings: any[] = [
@@ -126,6 +224,7 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
       ...historyKeymap,
       ...searchKeymap,
       ...closeBracketsKeymap,
+      ...completionKeymap,
       indentWithTab,
       {
         key: 'Mod-s',
@@ -133,6 +232,10 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
           onSaveRef.current?.(activeTabIdRef.current)
           return true
         },
+      },
+      {
+        key: 'Ctrl-Space',
+        run: startCompletion,
       },
     ]
     return bindings
@@ -148,29 +251,46 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
         tabContentRef.current.set(id, content)
         onContentChangeRef.current(id, content)
       }
+      if (update.selectionSet || update.docChanged) {
+        const head = update.state.selection.main.head
+        const line = update.state.doc.lineAt(head)
+        onCursorChangeRef.current?.(activeTabIdRef.current, line.number, head - line.from + 1)
+      }
     })
+
+    const completionSource = createCompletionSource(() => langRef.current)
+    const s0 = settingsRef.current
 
     const view = new EditorView({
       state: EditorState.create({
         doc: '',
         extensions: [
-          highlightActiveLine(),
+          activeLineCompartment.of(s0.highlightActiveLine !== false ? highlightActiveLine() : []),
           drawSelection(),
           rectangularSelection(),
           highlightSpecialChars(),
-          bracketMatchCompartment.of(settingsRef.current.bracketMatch ? bracketMatching() : []),
+          bracketMatchCompartment.of(s0.bracketMatch ? bracketMatching() : []),
           closeBrackets(),
           indentOnInput(),
-          foldGutter(),
+          foldGutterCompartment.of(s0.foldGutter !== false ? foldGutter() : []),
+          whitespaceCompartment.of(s0.showWhitespace ? highlightWhitespace() : []),
           highlightSelectionMatches(),
           history(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          lintGutter(),
+          highlightCompartment.of(syntaxHighlighting(getSyntaxHighlight())),
+          autocompleteCompartment.of(autocompletion({
+            override: [completionSource],
+            activateOnTyping: s0.autoComplete !== false,
+            maxRenderedOptions: 40,
+            defaultKeymap: true,
+          })),
           keymap.of(CMBindings),
           langCompartment.of(javascript()),
-          themeCompartment.of([getEditorTheme(editorSettings), getSyntaxTheme()]),
+          themeCompartment.of([getEditorTheme(editorSettings)]),
           tabSizeCompartment.of(EditorState.tabSize.of(editorSettings.tabSize)),
-          lineNumbersCompartment.of(settingsRef.current.lineNumbers ? lineNumbers() : []),
-          wordWrapCompartment.of(settingsRef.current.wordWrap ? EditorView.lineWrapping : []),
+          indentUnitCompartment.of(indentExt(s0)),
+          lineNumbersCompartment.of(s0.lineNumbers ? lineNumbers() : []),
+          wordWrapCompartment.of(s0.wordWrap ? EditorView.lineWrapping : []),
           updateListener,
         ],
       }),
@@ -182,6 +302,7 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
     const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current)
     if (tab) {
       tabContentRef.current.set(tab.id, tab.content)
+      langRef.current = tab.language
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: tab.content },
         effects: langCompartment.reconfigure(getLanguage(tab.language)),
@@ -195,16 +316,28 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
+    const completionSource = createCompletionSource(() => langRef.current)
     view.dispatch({
       effects: [
-        themeCompartment.reconfigure([getEditorTheme(editorSettings), getSyntaxTheme()]),
+        themeCompartment.reconfigure([getEditorTheme(editorSettings)]),
+        highlightCompartment.reconfigure(syntaxHighlighting(getSyntaxHighlight())),
         tabSizeCompartment.reconfigure(EditorState.tabSize.of(editorSettings.tabSize)),
+        indentUnitCompartment.reconfigure(indentExt(editorSettings)),
         lineNumbersCompartment.reconfigure(editorSettings.lineNumbers ? lineNumbers() : []),
         wordWrapCompartment.reconfigure(editorSettings.wordWrap ? EditorView.lineWrapping : []),
         bracketMatchCompartment.reconfigure(editorSettings.bracketMatch ? bracketMatching() : []),
+        activeLineCompartment.reconfigure(editorSettings.highlightActiveLine !== false ? highlightActiveLine() : []),
+        foldGutterCompartment.reconfigure(editorSettings.foldGutter !== false ? foldGutter() : []),
+        whitespaceCompartment.reconfigure(editorSettings.showWhitespace ? highlightWhitespace() : []),
+        autocompleteCompartment.reconfigure(autocompletion({
+          override: [completionSource],
+          activateOnTyping: editorSettings.autoComplete !== false,
+          maxRenderedOptions: 40,
+          defaultKeymap: true,
+        })),
       ],
     })
-  }, [editorSettings])
+  }, [editorSettings, theme.name])
 
   useEffect(() => {
     const view = viewRef.current
@@ -217,6 +350,8 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
       tabContentRef.current.set(activeTabId, content)
     }
     if (content === undefined) content = ''
+
+    if (tab) langRef.current = tab.language
 
     const currentDoc = view.state.doc.toString()
     if (currentDoc !== content) {
@@ -231,6 +366,30 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
     }
     view.focus()
   }, [activeTabId])
+
+  // Sync externally updated tab content (e.g. AI apply) into the editor cache/view
+  useEffect(() => {
+    const view = viewRef.current
+    for (const tab of tabs) {
+      if (tab.dirty) continue
+      const cached = tabContentRef.current.get(tab.id)
+      if (cached === tab.content) continue
+      tabContentRef.current.set(tab.id, tab.content)
+      if (view && tab.id === activeTabIdRef.current && view.state.doc.toString() !== tab.content) {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: tab.content },
+        })
+      }
+    }
+  }, [tabs])
+
+  // Apply build diagnostics to the open buffer
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const diags = toCmDiagnostics(view.state.doc, fileDiagnostics)
+    view.dispatch(setDiagnostics(view.state, diags))
+  }, [fileDiagnostics, activeTabId, tabs])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -264,7 +423,18 @@ export function Editor({ tabs, activeTabId, onTabSelect, onTabClose, onContentCh
           </div>
         ))}
       </div>
-      {!activeTab && <div className="editor-empty">{t('editor.empty')}</div>}
+      {!activeTab && (
+        <div className="editor-empty">
+          <div className="editor-empty-mark" aria-hidden>◇</div>
+          <div className="editor-empty-title">EmbedIDE</div>
+          <p className="editor-empty-hint">{t('editor.empty')}</p>
+          <div className="editor-empty-keys">
+            <span className="editor-empty-key">Ctrl+N</span>
+            <span className="editor-empty-key">Ctrl+O</span>
+            <span className="editor-empty-key">Ctrl+B</span>
+          </div>
+        </div>
+      )}
       <div className="editor-cm-wrapper" ref={editorRef} style={{ display: activeTab ? '' : 'none' }} />
 
       {contextMenu && (

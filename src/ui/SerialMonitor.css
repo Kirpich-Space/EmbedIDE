@@ -5,7 +5,7 @@
   flex-direction: column;
   max-height: 260px;
   min-height: 140px;
-  animation: slideInUp 0.15s ease-out;
+  animation: slideInUp var(--dur-med, 220ms) var(--ease-spring, ease-out);
 }
 
 .serial-header {

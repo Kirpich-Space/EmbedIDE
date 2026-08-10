@@ -8,6 +8,8 @@ interface ToolchainInfo {
   openocdVersion?: string
   make: boolean
   python: boolean
+  zig?: boolean
+  zigVersion?: string
 }
 
 interface SerialPort {
@@ -19,6 +21,9 @@ interface ProjectTemplate {
   id: string
   name: string
   ext: string
+  category?: 'firmware' | 'driver' | 'os' | 'systems' | 'script'
+  needsBoard?: boolean
+  lang?: string
 }
 
 interface BoardInfo {
@@ -84,29 +89,29 @@ interface ElectronAPI {
   createProject: (rootDir: string, name: string, type: string, boardId?: string) => Promise<string>
   openProject: () => Promise<OpenedProject | null>
   listProjectFiles: (dir: string) => Promise<{id: string, name: string, type: 'file' | 'directory', language?: string}[]>
-  readProjectFile: (path: string) => Promise<string>
-  writeProjectFile: (path: string, content: string) => Promise<boolean>
+  readProjectFile: (projectDir: string, path: string) => Promise<string>
+  writeProjectFile: (projectDir: string, path: string, content: string) => Promise<boolean>
   getProjectTemplates: () => Promise<ProjectTemplate[]>
   getProjectMeta: (dir: string) => Promise<ProjectMeta | null>
   listBoards: () => Promise<BoardInfo[]>
   getBoard: (boardId: string) => Promise<BoardDetail | null>
 
   createProjectFile: (dir: string, name: string) => Promise<boolean>
-  deleteProjectFile: (path: string) => Promise<boolean>
-  renameProjectFile: (oldPath: string, newPath: string) => Promise<boolean>
+  deleteProjectFile: (projectDir: string, path: string) => Promise<boolean>
+  renameProjectFile: (projectDir: string, oldPath: string, newPath: string) => Promise<boolean>
   searchInFiles: (dir: string, query: string) => Promise<{file: string, line: number, text: string}[]>
 
   buildProject: (dir: string, type: string) => Promise<{success: boolean, output: BuildOutput[]}>
   cancelBuild: () => Promise<boolean>
   onBuildOutput: (cb: (data: BuildOutput) => void) => () => void
-  onBuildComplete: (cb: (data: {code: number, error?: string}) => void) => () => void
+  onBuildComplete: (cb: (data: {code: number | null, error?: string, cancelled?: boolean}) => void) => () => void
 
   flashProject: (dir: string, type: string, config: { adapter?: string, target?: string, boardId?: string, elfPath?: string }) => Promise<{success: boolean, output: BuildOutput[]}>
   onFlashOutput: (cb: (data: BuildOutput) => void) => () => void
-  onFlashComplete: (cb: (data: {code: number, error?: string}) => void) => () => void
+  onFlashComplete: (cb: (data: {code: number | null, error?: string}) => void) => () => void
 
   listSerialPorts: () => Promise<SerialPort[]>
-  connectSerial: (port: string, baud: number) => Promise<{connected: boolean}>
+  connectSerial: (port: string, baud: number) => Promise<{connected: boolean, error?: string}>
   sendSerial: (data: string) => Promise<boolean>
   disconnectSerial: () => Promise<boolean>
   onSerialData: (cb: (data: string) => void) => () => void

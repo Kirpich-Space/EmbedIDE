@@ -9,6 +9,15 @@
   font-size: 11px;
   user-select: none;
   flex-shrink: 0;
+  transition: filter var(--dur-med, 220ms) var(--ease-out, ease);
+}
+
+.statusbar:not(:hover) {
+  filter: saturate(0.92) brightness(0.92);
+}
+
+.statusbar:hover {
+  filter: none;
 }
 
 .statusbar-left,
@@ -34,7 +43,7 @@
 .statusbar-item:hover {
   background: var(--bg-hover);
   color: var(--text);
-  border-color: var(--border);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .statusbar-mcu {
@@ -61,6 +70,7 @@
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
 }
 
 .statusbar-separator {
