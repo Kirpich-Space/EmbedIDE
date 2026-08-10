@@ -1,9 +1,9 @@
-; EmbedIDE 2.0.1 Windows installer (built with linux makensis)
+; EmbedIDE 2.0.2 Windows installer (built with linux makensis)
 !include "MUI2.nsh"
 !include "x64.nsh"
 
 Name "EmbedIDE"
-OutFile "embed-ide-2.0.1-windows-x64-setup.exe"
+OutFile "embed-ide-2.0.2-windows-x64-setup.exe"
 Unicode true
 InstallDir "$LOCALAPPDATA\Programs\EmbedIDE"
 InstallDirRegKey HKCU "Software\KirpichSpace\EmbedIDE" "InstallDir"
@@ -35,7 +35,7 @@ Section "EmbedIDE" SecApp
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "DisplayName" "EmbedIDE"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "UninstallString" "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "DisplayVersion" "2.0.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "DisplayVersion" "2.0.2"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmbedIDE" "Publisher" "Kirpich Space"
 SectionEnd
 

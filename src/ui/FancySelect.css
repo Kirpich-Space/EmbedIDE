@@ -21,30 +21,40 @@
   cursor: pointer;
   font: inherit;
   box-shadow: var(--btn-raise);
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  animation: fancyCardIn var(--dur-med, 220ms) var(--ease-spring, ease-out) both;
+  isolation: isolate;
+  overflow: hidden;
+  transform: translateY(0);
   transition:
-    border-color var(--dur-fast, 120ms) var(--ease-out, ease),
-    background var(--dur-fast, 120ms) var(--ease-out, ease),
-    transform var(--dur-fast, 120ms) var(--ease-press, ease),
-    box-shadow var(--dur-fast, 120ms) var(--ease-out, ease);
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@keyframes fancyCardIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+/* Accent wash — opacity interpolates reliably (color-mix backgrounds often snap) */
+.fancy-select-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.fancy-select-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.fancy-select-card:hover:not(:disabled)::before {
+  opacity: 0.14;
 }
 
 .fancy-select-card:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
   transform: translateY(-2px);
   box-shadow: var(--btn-raise-hover);
 }
@@ -52,15 +62,24 @@
 .fancy-select-card:active:not(:disabled) {
   transform: translateY(1px) scale(0.985);
   box-shadow: var(--btn-press);
+  transition-duration: 90ms;
+}
+
+.fancy-select-card:active:not(:disabled)::before {
+  opacity: 0.2;
+  transition-duration: 90ms;
 }
 
 .fancy-select-card-active {
   border-color: var(--accent) !important;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg)) !important;
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
     0 0 16px color-mix(in srgb, var(--accent) 22%, transparent) !important;
   transform: none !important;
+}
+
+.fancy-select-card-active::before {
+  opacity: 0.16;
 }
 
 .fancy-select-card-preview {
@@ -191,11 +210,34 @@
   font: inherit;
   cursor: pointer;
   box-shadow: var(--btn-raise);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   transition:
-    border-color var(--dur-fast, 120ms) ease,
-    background var(--dur-fast, 120ms) ease,
-    box-shadow var(--dur-fast, 120ms) ease,
-    transform var(--dur-fast, 120ms) ease;
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fancy-select-trigger::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.fancy-select-trigger > * {
+  position: relative;
+  z-index: 1;
+}
+
+.fancy-select-trigger:hover:not(:disabled)::before {
+  opacity: 0.1;
 }
 
 .fancy-select-trigger:hover:not(:disabled) {

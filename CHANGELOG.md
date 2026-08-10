@@ -1,3 +1,8 @@
+## 2.0.2 — 2026-08-10
+
+### Changed
+- Smoother orange hover on Settings cards/tabs and toolbar buttons (opacity wash instead of snapping `color-mix`)
+
 ## 2.0.1 — 2026-08-10
 
 Patch update on the 2.0 line: AI API onboarding + performance.
