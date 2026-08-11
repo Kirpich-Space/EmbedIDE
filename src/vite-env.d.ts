@@ -5,12 +5,18 @@ interface ToolchainInfo {
   armGcc: boolean
   armGccVersion?: string
   armGccBundled?: boolean
+  armGdb?: boolean
+  armGdbVersion?: string
+  armGdbBundled?: boolean
   openocd: boolean
   openocdVersion?: string
   openocdBundled?: boolean
   make: boolean
+  makeVersion?: string
   makeBundled?: boolean
   python: boolean
+  pythonVersion?: string
+  pythonBundled?: boolean
   zig?: boolean
   zigVersion?: string
   zigBundled?: boolean
@@ -95,6 +101,43 @@ interface ElectronAPI {
   onMaximizedChange: (callback: (isMaximized: boolean) => void) => () => void
 
   detectToolchains: () => Promise<ToolchainInfo>
+  needsToolchainInstall: () => Promise<boolean>
+  toolchainInstallStatus: () => Promise<{
+    running: boolean
+    progress: null | {
+      phase?: string
+      package?: string
+      percent?: number
+      message?: string
+      received?: number
+      total?: number
+      root?: string
+      auto?: boolean
+    }
+    status: unknown
+  }>
+  installToolchain: (opts?: { includeRust?: boolean; force?: boolean }) => Promise<{
+    ok: boolean
+    root?: string
+    skipped?: boolean
+    error?: string
+  }>
+  onToolchainInstallProgress: (cb: (data: {
+    phase?: string
+    package?: string
+    percent?: number
+    message?: string
+    received?: number
+    total?: number
+    root?: string
+    auto?: boolean
+  }) => void) => () => void
+  onToolchainInstallComplete: (cb: (data: {
+    ok: boolean
+    root?: string
+    skipped?: boolean
+    error?: string
+  }) => void) => () => void
 
   createProject: (rootDir: string, name: string, type: string, boardId?: string) => Promise<string>
   openProject: () => Promise<OpenedProject | null>
@@ -137,6 +180,24 @@ interface ElectronAPI {
   loadSettings: () => Promise<Record<string, unknown>>
   saveSettings: (settings: Record<string, unknown>) => Promise<boolean>
   openExternal: (url: string) => Promise<boolean>
+
+  aiCliStatus: (providerId: string) => Promise<{
+    providerId: string
+    supported: boolean
+    found: boolean
+    loggedIn: boolean
+    bin: string | null
+    path: string | null
+    version: string | null
+    loginHint: string
+    installHint: string
+  }>
+  aiCliChat: (providerId: string, payload: {
+    messages: { role: string; content: string }[]
+    model?: string
+    cwd?: string
+  }) => Promise<{ ok: boolean; text?: string; error?: string }>
+  aiCliCancel: () => Promise<boolean>
 
   onMenuNewProject: (cb: () => void) => () => void
   onMenuOpenProject: (cb: () => void) => () => void

@@ -21,7 +21,13 @@ export type AiProviderId =
 export type AiApiStyle = 'openai' | 'anthropic'
 
 /** Maps to i18n keys settings.aiSubscriptionNote* */
-export type AiSubscriptionNoteId = 'openai' | 'claude' | 'gemini'
+export type AiSubscriptionNoteId = 'openai' | 'claude' | 'gemini' | 'xai'
+
+export const SUBSCRIPTION_CLI_PROVIDERS: AiProviderId[] = ['openai', 'claude', 'xai']
+
+export function providerSupportsSubscription(id: string | undefined): boolean {
+  return !!id && (SUBSCRIPTION_CLI_PROVIDERS as string[]).includes(id)
+}
 
 export interface AiProviderPreset {
   id: AiProviderId
@@ -70,7 +76,7 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     defaultModel: 'gpt-5.6',
     needsKey: true,
     models: ['gpt-5.6', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-4.1', 'gpt-4o', 'o4-mini'],
-    hint: 'Official OpenAI API — not ChatGPT Plus. Create a key at platform.openai.com',
+    hint: 'OpenAI API key, or ChatGPT subscription via local Codex CLI (`codex login`)',
     accent: '#10A37F',
     consoleUrl: 'https://platform.openai.com/api-keys',
     keyPlaceholder: 'sk-… / sk-proj-…',
@@ -91,7 +97,7 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
       'claude-haiku-4-5',
       'claude-sonnet-4-5',
     ],
-    hint: 'Anthropic Messages API (Console key sk-ant-api…). Pro/Max OAuth is not supported',
+    hint: 'Console API key, or Claude Pro/Max via local Claude Code CLI (`claude /login`)',
     accent: '#D97757',
     consoleUrl: 'https://console.anthropic.com/settings/keys',
     keyPlaceholder: 'sk-ant-api…',
@@ -124,10 +130,11 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
     defaultModel: 'grok-4.5',
     needsKey: true,
     models: ['grok-4.5', 'grok-3', 'grok-3-mini'],
-    hint: 'xAI Grok API (OpenAI-compatible). Key from console.x.ai',
+    hint: 'xAI API key, or SuperGrok / X Premium+ via local Grok Build CLI (`grok login`)',
     accent: '#E8E8E8',
     consoleUrl: 'https://console.x.ai/',
     keyPlaceholder: 'xai-…',
+    subscriptionNote: 'xai',
   },
   {
     id: 'openrouter',
@@ -288,7 +295,41 @@ export function migrateAiProvider(settings: {
   return 'ollama'
 }
 
+/** Prefer uncapped generation; Anthropic requires max_tokens so use a very high ceiling. */
+const AI_MAX_OUTPUT_TOKENS = 200_000
+
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+
+/** Call subscription CLI (Codex / Claude Code / Grok) via Electron IPC. */
+export async function chatViaSubscriptionCli(opts: {
+  providerId: string
+  messages: ChatMessage[]
+  model?: string
+  cwd?: string
+  signal?: AbortSignal
+}): Promise<string> {
+  const api = window.electronAPI
+  if (!api?.aiCliChat) {
+    throw new Error('CLI_BRIDGE_UNAVAILABLE')
+  }
+  if (opts.signal?.aborted) throw new Error('Aborted')
+
+  const onAbort = () => { void api.aiCliCancel?.() }
+  opts.signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    const result = await api.aiCliChat(opts.providerId, {
+      messages: opts.messages,
+      model: opts.model,
+      cwd: opts.cwd,
+    })
+    if (!result?.ok) {
+      throw new Error(result?.error || 'CLI_CHAT_FAILED')
+    }
+    return result.text || ''
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort)
+  }
+}
 
 /** Call OpenAI-compatible or Anthropic Messages chat API; returns assistant text. */
 export async function chatCompletion(opts: {
@@ -299,8 +340,22 @@ export async function chatCompletion(opts: {
   messages: ChatMessage[]
   signal?: AbortSignal
   temperature?: number
+  /** When subscription, route through local CLI instead of HTTP */
+  authMode?: 'api' | 'subscription'
+  cwd?: string
 }): Promise<string> {
-  const { provider, endpoint, model, apiKey, messages, signal, temperature = 0.3 } = opts
+  const { provider, endpoint, model, apiKey, messages, signal, temperature = 0.3, authMode = 'api', cwd } = opts
+
+  if (authMode === 'subscription' && providerSupportsSubscription(provider.id)) {
+    return chatViaSubscriptionCli({
+      providerId: provider.id,
+      messages,
+      model,
+      cwd,
+      signal,
+    })
+  }
+
   const base = endpoint.replace(/\/+$/, '')
   const style = provider.apiStyle || 'openai'
 
@@ -326,7 +381,7 @@ export async function chatCompletion(opts: {
       headers,
       body: JSON.stringify({
         model,
-        max_tokens: 8192,
+        max_tokens: AI_MAX_OUTPUT_TOKENS,
         temperature,
         ...(system ? { system } : {}),
         messages: anthropicMessages,
@@ -363,7 +418,7 @@ export async function chatCompletion(opts: {
       model,
       messages,
       temperature,
-      max_tokens: 8192,
+      // No max_tokens → provider uses the full model output window (effectively uncapped).
     }),
     signal,
   })

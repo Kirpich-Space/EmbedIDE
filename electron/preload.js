@@ -21,6 +21,8 @@ const listeners = {
   'menu:build': new Set(),
   'menu:flash': new Set(),
   'menu:debug': new Set(),
+  'toolchain:install-progress': new Set(),
+  'toolchain:install-complete': new Set(),
 }
 
 function on(channel, cb) {
@@ -43,6 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Toolchain
   detectToolchains: () => ipcRenderer.invoke('toolchain:detect'),
+  needsToolchainInstall: () => ipcRenderer.invoke('toolchain:needs-install'),
+  toolchainInstallStatus: () => ipcRenderer.invoke('toolchain:install-status'),
+  installToolchain: (opts) => ipcRenderer.invoke('toolchain:install', opts || {}),
+  onToolchainInstallProgress: (cb) => on('toolchain:install-progress', cb),
+  onToolchainInstallComplete: (cb) => on('toolchain:install-complete', cb),
 
   // Project
   createProject: (rootDir, name, type, boardId) => ipcRenderer.invoke('project:create', rootDir, name, type, boardId),
@@ -89,6 +96,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+
+  // AI subscription CLIs (Codex / Claude Code / Grok Build)
+  aiCliStatus: (providerId) => ipcRenderer.invoke('ai:cli-status', providerId),
+  aiCliChat: (providerId, payload) => ipcRenderer.invoke('ai:cli-chat', providerId, payload),
+  aiCliCancel: () => ipcRenderer.invoke('ai:cli-cancel'),
 
   // Menu events
   onMenuNewProject: (cb) => on('menu:new-project', cb),

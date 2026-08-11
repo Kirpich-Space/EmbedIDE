@@ -13,6 +13,7 @@ import './ui/FancySelect.css'
 import './ui/ProjectDialog.css'
 import './ui/SerialMonitor.css'
 import './ui/EngineeringPanels.css'
+import './ui/ToolchainSetup.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

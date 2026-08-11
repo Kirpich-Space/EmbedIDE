@@ -12,3 +12,4 @@ vendor/cache/
 vendor/toolchain/**
 !vendor/toolchain/.gitkeep
 !vendor/README.md
+build/bootstrap/

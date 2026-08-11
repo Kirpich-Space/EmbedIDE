@@ -4,7 +4,7 @@ import { themes } from '../themes/themes'
 import type { EditorSettings } from '../core/types'
 import { useTranslation } from '../core/TranslationContext'
 import { fetchOllamaModels, pingOllama, ollamaBaseUrl } from '../core/ollama'
-import { AI_PROVIDERS, getAiProvider, migrateAiProvider } from '../core/aiProviders'
+import { AI_PROVIDERS, getAiProvider, migrateAiProvider, providerSupportsSubscription } from '../core/aiProviders'
 import { inspectAiCredential } from '../core/aiCredentials'
 import { AiProviderIcon } from './AiProviderIcons'
 import { FancySelect } from './FancySelect'
@@ -17,6 +17,9 @@ interface SettingsProps {
   onEditorSettingsChange: (s: EditorSettings) => void
   onClose: () => void
 }
+
+type CliStatus = Awaited<ReturnType<NonNullable<Window['electronAPI']>['aiCliStatus']>>
+
 
 const LANGUAGE_META: { code: LangCode; native: string; region: string }[] = [
   { code: 'en', native: 'English', region: 'EN' },
@@ -95,19 +98,43 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
   const { theme, setTheme } = useTheme()
   const [activeTab, setActiveTab] = useState<Tab>('general')
   const [tcInfo, setTcInfo] = useState<ToolchainInfo | null>(null)
+  const [tcInstalling, setTcInstalling] = useState(false)
+  const [tcInstallMsg, setTcInstallMsg] = useState('')
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle')
   const [ollamaInfo, setOllamaInfo] = useState('')
+  const [cliStatus, setCliStatus] = useState<CliStatus | null>(null)
+  const [cliChecking, setCliChecking] = useState(false)
 
   const providerId = migrateAiProvider(editorSettings)
   const provider = getAiProvider(providerId)
-  const keyIssue = inspectAiCredential(providerId, editorSettings.aiKey || '')
+  const authMode = editorSettings.aiAuthMode === 'subscription' ? 'subscription' : 'api'
+  const subSupported = providerSupportsSubscription(providerId)
+  const useSubscription = subSupported && authMode === 'subscription'
+  const keyIssue = !useSubscription ? inspectAiCredential(providerId, editorSettings.aiKey || '') : null
   const subscriptionNote =
     provider.subscriptionNote === 'openai' ? t('settings.aiSubscriptionNoteOpenAI')
     : provider.subscriptionNote === 'claude' ? t('settings.aiSubscriptionNoteClaude')
     : provider.subscriptionNote === 'gemini' ? t('settings.aiSubscriptionNoteGemini')
+    : provider.subscriptionNote === 'xai' ? t('settings.aiSubscriptionNoteXai')
     : null
   const set = (partial: Partial<EditorSettings>) => onEditorSettingsChange({ ...editorSettings, ...partial })
+
+  const refreshCliStatus = useCallback(async () => {
+    if (!subSupported || !window.electronAPI?.aiCliStatus) {
+      setCliStatus(null)
+      return
+    }
+    setCliChecking(true)
+    try {
+      const st = await window.electronAPI.aiCliStatus(providerId)
+      setCliStatus(st)
+    } catch {
+      setCliStatus(null)
+    } finally {
+      setCliChecking(false)
+    }
+  }, [providerId, subSupported])
 
   const languageOptions = useMemo(() => LANGUAGE_META.map(l => ({
     value: l.code,
@@ -190,6 +217,20 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, editorSettings.aiEnabled, providerId, editorSettings.aiEndpoint])
+
+  useEffect(() => {
+    if (activeTab !== 'toolchain') return
+    const off = window.electronAPI?.onToolchainInstallProgress?.(p => {
+      setTcInstalling(true)
+      if (p.message) setTcInstallMsg(p.message)
+      if (p.phase === 'done') {
+        setTcInstalling(false)
+        window.electronAPI?.detectToolchains().then(setTcInfo)
+      }
+      if (p.phase === 'error') setTcInstalling(false)
+    })
+    return () => { off?.() }
+  }, [activeTab])
 
   const accentValue = editorSettings.customAccent || '__theme__'
   const knownAccent = ACCENT_PRESETS.some(p => (p.value || '__theme__') === accentValue)
@@ -702,29 +743,53 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 <ul className="settings-toolchain-list" style={{ marginTop: 10, paddingLeft: 18, lineHeight: 1.7 }}>
                   {[
                     ['arm-none-eabi-gcc', tcInfo?.armGcc, tcInfo?.armGccVersion, tcInfo?.armGccBundled],
+                    ['arm-none-eabi-gdb', tcInfo?.armGdb, tcInfo?.armGdbVersion, tcInfo?.armGdbBundled],
                     ['openocd', tcInfo?.openocd, tcInfo?.openocdVersion, tcInfo?.openocdBundled],
-                    ['make', tcInfo?.make, undefined, tcInfo?.makeBundled],
+                    ['make', tcInfo?.make, tcInfo?.makeVersion, tcInfo?.makeBundled],
                     ['zig', tcInfo?.zig, tcInfo?.zigVersion, tcInfo?.zigBundled],
                     ['rustc', tcInfo?.rust, tcInfo?.rustVersion, false],
-                    ['python', tcInfo?.python, undefined, false],
+                    ['python', tcInfo?.python, tcInfo?.pythonVersion, tcInfo?.pythonBundled],
                   ].map(([name, ok, ver, bundled]) => (
                     <li key={String(name)}>
                       <strong>{String(name)}</strong>
                       {': '}
                       {ok ? t('common.success') : t('common.error')}
-                      {ver ? ` — ${String(ver).slice(0, 60)}` : ''}
+                      {ver ? ` — ${String(ver).slice(0, 80)}` : ''}
                       {bundled ? ` (${t('statusBar.bundled')})` : ''}
                     </li>
                   ))}
                 </ul>
-                <button
-                  className="project-btn project-btn-create"
-                  style={{ marginTop: 12 }}
-                  type="button"
-                  onClick={() => window.electronAPI?.detectToolchains().then(setTcInfo)}
-                >
-                  {t('settings.toolchainRefresh')}
-                </button>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+                  <button
+                    className="project-btn project-btn-create"
+                    type="button"
+                    disabled={tcInstalling}
+                    onClick={async () => {
+                      setTcInstalling(true)
+                      setTcInstallMsg(t('toolchainSetup.starting'))
+                      try {
+                        const r = await window.electronAPI?.installToolchain({ includeRust: true, force: true })
+                        if (r && !r.ok) setTcInstallMsg(r.error || t('toolchainSetup.failed'))
+                        else setTcInstallMsg(t('toolchainSetup.success'))
+                        window.electronAPI?.detectToolchains().then(setTcInfo)
+                      } catch (e) {
+                        setTcInstallMsg(e instanceof Error ? e.message : String(e))
+                      } finally {
+                        setTcInstalling(false)
+                      }
+                    }}
+                  >
+                    {tcInstalling ? t('toolchainSetup.downloading') : t('settings.toolchainDownload')}
+                  </button>
+                  <button
+                    className="project-btn"
+                    type="button"
+                    onClick={() => window.electronAPI?.detectToolchains().then(setTcInfo)}
+                  >
+                    {t('settings.toolchainRefresh')}
+                  </button>
+                </div>
+                {tcInstallMsg && <div className="settings-hint" style={{ marginTop: 8 }}>{tcInstallMsg}</div>}
               </div>
             </div>
           )}

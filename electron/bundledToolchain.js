@@ -39,20 +39,17 @@ function platformKey() {
 
 function candidateRoots() {
   const roots = []
-  // Packaged app: resources/toolchain
-  try {
-    if (process.resourcesPath) {
-      roots.push(path.join(process.resourcesPath, 'toolchain'))
-    }
-  } catch {}
-  // Electron app path / project root (dev + unpacked)
+  // Electron app path / project root (dev) — prefer real vendor tree over any stub
   try {
     if (app && !app.isPackaged) {
       roots.push(path.join(app.getAppPath(), 'vendor', 'toolchain', platformKey()))
       roots.push(path.join(process.cwd(), 'vendor', 'toolchain', platformKey()))
+      roots.push(path.join(__dirname, '..', 'vendor', 'toolchain', platformKey()))
     } else if (app) {
-      roots.push(path.join(process.resourcesPath, 'toolchain'))
-      // also allow user-installed overlay
+      // Packaged: resources/toolchain (electron-builder extraResources)
+      if (process.resourcesPath) {
+        roots.push(path.join(process.resourcesPath, 'toolchain'))
+      }
       roots.push(path.join(app.getPath('userData'), 'toolchain'))
     }
   } catch {
@@ -61,19 +58,53 @@ function candidateRoots() {
   }
   // Always try repo-relative (scripts / tests without app ready)
   roots.push(path.join(__dirname, '..', 'vendor', 'toolchain', platformKey()))
+  // Last resort: resourcesPath (may be electron's own resources in dev — usually empty)
+  try {
+    if (process.resourcesPath) {
+      roots.push(path.join(process.resourcesPath, 'toolchain'))
+    }
+  } catch {}
   return [...new Set(roots.map(r => path.resolve(r)))]
 }
 
 function findBundledRoot() {
   for (const root of candidateRoots()) {
-    if (fs.existsSync(root) && fs.statSync(root).isDirectory()) {
-      const bin = path.join(root, 'bin')
-      if (fs.existsSync(bin) || fs.existsSync(path.join(root, 'arm-gnu-toolchain')) || fs.existsSync(path.join(root, 'manifest.json'))) {
-        return root
-      }
-    }
+    if (!isUsableToolchainRoot(root)) continue
+    return root
   }
   return null
+}
+
+/** Reject empty stubs (e.g. {"skipped":true}) and dirs without real tools. */
+function isUsableToolchainRoot(root) {
+  try {
+    if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return false
+    const mp = path.join(root, 'manifest.json')
+    if (fs.existsSync(mp)) {
+      try {
+        const m = JSON.parse(fs.readFileSync(mp, 'utf8'))
+        if (m && m.skipped) return false
+      } catch {}
+    }
+    const bin = path.join(root, 'bin')
+    const markers = [
+      path.join(bin, TOOL_NAMES['arm-none-eabi-gcc']),
+      path.join(bin, TOOL_NAMES.openocd),
+      path.join(bin, TOOL_NAMES.zig),
+      path.join(root, 'gcc', 'bin', TOOL_NAMES['arm-none-eabi-gcc']),
+      path.join(root, 'openocd', 'bin', TOOL_NAMES.openocd),
+    ]
+    if (markers.some(p => fs.existsSync(p))) return true
+    // Fallback: any arm-none-eabi-gcc / openocd under root/bin trees
+    const bins = collectBinDirs(root)
+    for (const d of bins) {
+      if (fs.existsSync(path.join(d, TOOL_NAMES['arm-none-eabi-gcc']))) return true
+      if (fs.existsSync(path.join(d, TOOL_NAMES.openocd))) return true
+    }
+    return false
+  } catch {
+    return false
+  }
 }
 
 /** Collect all bin directories under a toolchain root (xPack layout, zig, rust). */

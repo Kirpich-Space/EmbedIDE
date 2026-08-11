@@ -31,8 +31,15 @@ export function StatusBar({ line, col, language, projectType, boardName, toolcha
         </span>
         <span className="statusbar-separator" />
         <span className="statusbar-item">
-          {toolchains?.openocd
-            ? `${t('statusBar.openocd')}${toolchains.openocdBundled ? ` (${t('statusBar.bundled')})` : ''}`
+          {toolchains?.openocd || toolchains?.armGdb
+            ? [
+                toolchains.openocd
+                  ? `${t('statusBar.openocd')}${toolchains.openocdBundled ? ` (${t('statusBar.bundled')})` : ''}`
+                  : null,
+                toolchains.armGdb
+                  ? `GDB${toolchains.armGdbVersion?.match(/\d+\.\d+\.\d+/)?.[0] ? ` ${toolchains.armGdbVersion.match(/\d+\.\d+\.\d+/)?.[0]}` : ''}${toolchains.armGdbBundled ? ` (${t('statusBar.bundled')})` : ''}`
+                  : null,
+              ].filter(Boolean).join(' · ')
             : t('statusBar.noDebugger')}
         </span>
         <span className="statusbar-separator" />

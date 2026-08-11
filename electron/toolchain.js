@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { readProjectMeta } = require('./project');
-const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot, getBundledBinDirs } = require('./bundledToolchain');
+const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot, getBundledBinDirs, invalidateCache } = require('./bundledToolchain');
 const execFileAsync = promisify(execFile);
 
 let currentBuildProc = null;
@@ -75,9 +75,11 @@ async function execTool(cmd, args, options = {}) {
 
 async function detectToolchains() {
   prependBundledToolchainToPath();
+  invalidateCache();
   const result = {
     rust: false,
     armGcc: false,
+    armGdb: false,
     openocd: false,
     make: false,
     python: false,
@@ -87,11 +89,23 @@ async function detectToolchains() {
 
   const check = async (cmd, key, args = ['--version']) => {
     try {
-      const { stdout } = await execTool(cmd, args, { timeout: 5000 });
+      const { stdout, stderr } = await execTool(cmd, args, { timeout: 8000 });
       result[key] = true;
-      result[key + 'Version'] = String(stdout).split('\n')[0].trim();
+      const line = String(stdout || stderr || '')
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .find(Boolean) || '';
+      result[key + 'Version'] = line;
       result[key + 'Bundled'] = isBundled(cmd);
-    } catch {}
+    } catch (err) {
+      // Some tools print --version to stderr and still exit 0; execFile may still surface output on errors
+      const out = String(err?.stdout || err?.stderr || '');
+      if (out.trim()) {
+        result[key] = true;
+        result[key + 'Version'] = out.split(/\r?\n/).map(l => l.trim()).find(Boolean) || '';
+        result[key + 'Bundled'] = isBundled(cmd);
+      }
+    }
   };
 
   await Promise.all([
@@ -99,6 +113,7 @@ async function detectToolchains() {
     check('python', 'python'),
     check('rustc', 'rust'),
     check('arm-none-eabi-gcc', 'armGcc'),
+    check('arm-none-eabi-gdb', 'armGdb'),
     check('openocd', 'openocd'),
     check('zig', 'zig', ['version']),
   ]);
@@ -293,7 +308,25 @@ async function resolveHostCompiler(kind) {
   for (const cmd of lists[kind] || []) {
     try {
       await execHost(cmd, ['--version'], { timeout: 4000 });
-      return cmd;
+      return { cmd, via: 'host' };
+    } catch {}
+  }
+  // Bundled Zig can compile C/C++/ASM without a system gcc
+  if (kind === 'c' || kind === 'cpp' || kind === 'asm') {
+    try {
+      const zig = resolveTool('zig');
+      await execTool('zig', ['version'], { timeout: 4000 });
+      return { cmd: zig, via: 'zig' };
+    } catch {}
+  }
+  // Bundled rustc for single-file rust scripts
+  if (kind === 'rust') {
+    try {
+      const rustc = resolveTool('rustc');
+      if (rustc && rustc !== 'rustc') {
+        await execTool('rustc', ['--version'], { timeout: 4000 });
+        return { cmd: rustc, via: 'bundled' };
+      }
     } catch {}
   }
   return null;
@@ -306,18 +339,26 @@ function scriptBinaryPath(projectDir, entry) {
   return { outDir, outPath: path.join(outDir, exe) };
 }
 
-function scriptCompileSpec(projectType, entry, outPath) {
+function scriptCompileSpec(projectType, entry, outPath, compiler) {
+  if (compiler?.via === 'zig') {
+    if (projectType === 'script-c' || projectType === 'script-asm') {
+      return { cmd: compiler.cmd, args: ['cc', '-O2', '-g', entry, '-o', outPath], host: false };
+    }
+    if (projectType === 'script-cpp') {
+      return { cmd: compiler.cmd, args: ['c++', '-O2', '-g', entry, '-o', outPath], host: false };
+    }
+  }
   if (projectType === 'script-c') {
-    return { kind: 'c', args: ['-O2', '-g', '-Wall', entry, '-o', outPath] };
+    return { cmd: compiler.cmd, args: ['-O2', '-g', '-Wall', entry, '-o', outPath], host: true };
   }
   if (projectType === 'script-cpp') {
-    return { kind: 'cpp', args: ['-O2', '-g', '-Wall', entry, '-o', outPath] };
+    return { cmd: compiler.cmd, args: ['-O2', '-g', '-Wall', entry, '-o', outPath], host: true };
   }
   if (projectType === 'script-asm') {
-    return { kind: 'asm', args: ['-O2', '-g', entry, '-o', outPath] };
+    return { cmd: compiler.cmd, args: ['-O2', '-g', entry, '-o', outPath], host: true };
   }
   if (projectType === 'script-rust') {
-    return { kind: 'rust', args: ['-O', '-g', entry, '-o', outPath] };
+    return { cmd: compiler.cmd, args: ['-O', '-g', entry, '-o', outPath], host: compiler.via === 'host' };
   }
   return null;
 }
@@ -376,10 +417,43 @@ function runProcess(cmd, args, cwd, onOutput, { host = false } = {}) {
 let currentRunProc = null;
 let currentOpenocdProc = null;
 
+function makeToolchainOverrides() {
+  const overrides = [];
+  const gcc = resolveTool('arm-none-eabi-gcc');
+  const gxx = resolveTool('arm-none-eabi-g++');
+  const objcopy = resolveTool('arm-none-eabi-objcopy');
+  const size = resolveTool('arm-none-eabi-size');
+  const zig = resolveTool('zig');
+  const openocd = resolveTool('openocd');
+
+  // PREFIX=…/arm-none-eabi- → $(PREFIX)gcc resolves to absolute gcc even inside Make recipes
+  if (gcc && path.isAbsolute(gcc) && /arm-none-eabi-gcc(\.exe)?$/i.test(gcc)) {
+    const prefix = gcc.replace(/gcc(\.exe)?$/i, '');
+    overrides.push(`PREFIX=${prefix}`);
+  }
+  if (gcc && path.isAbsolute(gcc)) overrides.push(`CC=${gcc}`);
+  if (gxx && path.isAbsolute(gxx)) overrides.push(`CXX=${gxx}`);
+  if (objcopy && path.isAbsolute(objcopy)) overrides.push(`OBJCOPY=${objcopy}`);
+  if (size && path.isAbsolute(size)) overrides.push(`SIZE=${size}`);
+  if (zig && path.isAbsolute(zig)) overrides.push(`ZIG=${zig}`);
+  if (openocd && path.isAbsolute(openocd)) {
+    overrides.push(`OPENOCD=${openocd}`);
+    // Many Makefiles hardcode `openocd` — also put a Make variable some templates use
+  }
+  return overrides;
+}
+
+function missingBundledHint(tool) {
+  return `${tool} not found. Open Settings → Toolchain and click Download, or wait for the first-launch installer.`;
+}
+
 function buildProject(projectDir, projectType, onOutput) {
   return new Promise(async (resolve, reject) => {
     let cmd, args;
     buildWasCancelled = false;
+
+    prependBundledToolchainToPath();
+    invalidateCache();
 
     if (isScriptProject(projectType)) {
       try {
@@ -395,7 +469,7 @@ function buildProject(projectDir, projectType, onOutput) {
 
     if (isRustProject(projectType)) {
       if (!tc.rust) {
-        reject(new Error('Rust toolchain not found. Install rustup: https://rustup.rs'));
+        reject(new Error(missingBundledHint('rustc/cargo')));
         return;
       }
       cmd = 'cargo';
@@ -431,20 +505,24 @@ function buildProject(projectDir, projectType, onOutput) {
       }
     } else if (isMakeProject(projectType)) {
       if (!tc.make) {
-        reject(new Error('make not found. Install build-essential / Xcode CLT / mingw make.'));
+        reject(new Error(missingBundledHint('make')));
         return;
       }
       if (projectType.includes('zig') || projectType === 'zig') {
         if (!tc.zig) {
-          reject(new Error('Zig not found. Install from https://ziglang.org/download/'));
+          reject(new Error(missingBundledHint('zig')));
           return;
         }
       } else if (!tc.armGcc) {
-        reject(new Error('arm-none-eabi-gcc not found. Install the GNU Arm Embedded Toolchain.'));
+        reject(new Error(missingBundledHint('arm-none-eabi-gcc')));
         return;
       }
       cmd = 'make';
-      args = ['-j4'];
+      args = ['-j4', ...makeToolchainOverrides()];
+      onOutput?.({
+        type: 'stdout',
+        text: `Using bundled toolchain${tc.bundled?.root ? `: ${tc.bundled.root}` : ''}\n`,
+      });
     } else {
       reject(new Error(`Unknown project type: ${projectType}`));
       return;
@@ -528,26 +606,33 @@ function runScript(projectDir, projectType, filePath, onOutput) {
     }
 
     const { outDir, outPath } = scriptBinaryPath(projectDir, entry);
-    const compile = scriptCompileSpec(projectType, entry, outPath);
-    if (!compile) {
-      reject(new Error(`Unsupported script type: ${projectType}`));
-      return;
-    }
+    const kind =
+      projectType === 'script-cpp' ? 'cpp'
+      : projectType === 'script-rust' ? 'rust'
+      : projectType === 'script-asm' ? 'asm'
+      : 'c';
 
     try {
       fs.mkdirSync(outDir, { recursive: true });
-      const compiler = await resolveHostCompiler(compile.kind);
+      prependBundledToolchainToPath();
+      const compiler = await resolveHostCompiler(kind);
       if (!compiler) {
         const hint =
-          compile.kind === 'rust'
-            ? 'Install rustc (rustup): https://rustup.rs'
-            : 'Install a host C/C++ toolchain (gcc/clang).';
+          kind === 'rust'
+            ? missingBundledHint('rustc')
+            : 'Need gcc/clang on the host, or download Zig via Settings → Toolchain.';
         reject(new Error(`Host compiler not found for ${projectType}. ${hint}`));
         return;
       }
 
-      onOutput?.({ type: 'stdout', text: `Compiling ${path.basename(entry)} with ${compiler}...\n` });
-      const built = await runProcess(compiler, compile.args, projectDir, onOutput, { host: true });
+      const compile = scriptCompileSpec(projectType, entry, outPath, compiler);
+      if (!compile) {
+        reject(new Error(`Unsupported script type: ${projectType}`));
+        return;
+      }
+
+      onOutput?.({ type: 'stdout', text: `Compiling ${path.basename(entry)} with ${compiler.via === 'zig' ? 'zig' : path.basename(compiler.cmd)}...\n` });
+      const built = await runProcess(compile.cmd, compile.args, projectDir, onOutput, { host: !!compile.host });
       if (built.code !== 0) {
         reject(new Error(`Compile failed with code ${built.code}`));
         return;
@@ -587,12 +672,14 @@ async function startDebugSession(projectDir, projectType, config = {}, onOutput)
     return runScript(projectDir, projectType, config.filePath || null, onOutput);
   }
 
+  prependBundledToolchainToPath();
+  invalidateCache();
   const tc = await detectToolchains();
   if (!tc.openocd) {
-    throw new Error('OpenOCD not found. Install OpenOCD to debug on target.');
+    throw new Error(missingBundledHint('OpenOCD'));
   }
-  if (!tc.armGcc) {
-    throw new Error('arm-none-eabi-gdb not found (GNU Arm Embedded Toolchain required).');
+  if (!tc.armGdb && !tc.armGcc) {
+    throw new Error(missingBundledHint('arm-none-eabi-gdb'));
   }
 
   const board = resolveBoard(projectDir, config);
@@ -790,14 +877,11 @@ async function flashBoard(projectDir, projectType, config = {}, onOutput) {
     throw new Error('No ELF file found. Build the project first.');
   }
 
+  prependBundledToolchainToPath();
+  invalidateCache();
   const tc = await detectToolchains();
   if (!tc.openocd) {
-    const installGuide = process.platform === 'win32'
-      ? 'Download from https://github.com/openocd-org/openocd/releases'
-      : process.platform === 'darwin'
-        ? 'Install with: brew install openocd'
-        : 'Install with: sudo apt install openocd';
-    throw new Error(`OpenOCD not found. ${installGuide}`);
+    throw new Error(missingBundledHint('OpenOCD'));
   }
 
   // OpenOCD expects forward slashes; quote path for spaces

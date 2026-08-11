@@ -84,6 +84,8 @@ export interface EditorSettings {
   aiEndpoint: string
   aiModel: string
   aiKey: string
+  /** How to auth cloud providers that support subscriptions: API key or local CLI */
+  aiAuthMode: 'api' | 'subscription'
 
   // Editor extras
   lineHeight: number

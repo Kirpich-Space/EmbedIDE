@@ -222,6 +222,13 @@ button, input, select, textarea, label, .panel-title, .toolbar-title, .settings-
 .slide-panel-left,
 .slide-panel-right {
   transition: width var(--dur-med, 220ms) var(--ease-spring, ease);
+  position: relative;
+}
+
+.slide-panel-dragging.slide-panel-left,
+.slide-panel-dragging.slide-panel-right {
+  transition: none;
+  user-select: none;
 }
 
 .slide-panel-bottom {
@@ -232,11 +239,48 @@ button, input, select, textarea, label, .panel-title, .toolbar-title, .settings-
   width: 100%;
   height: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 
 .slide-panel-left .slide-panel-content,
 .slide-panel-right .slide-panel-content {
-  min-width: 200px;
+  min-width: 180px;
+}
+
+.slide-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.slide-panel-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  left: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.slide-panel-resizer:hover::after,
+.slide-panel-dragging .slide-panel-resizer::after {
+  background: var(--accent, #FF6B00);
+  opacity: 0.7;
+}
+
+.slide-panel-resizer-left {
+  right: 0;
+}
+
+.slide-panel-resizer-right {
+  left: 0;
 }
 
 /* ===== Scrollbar ===== */

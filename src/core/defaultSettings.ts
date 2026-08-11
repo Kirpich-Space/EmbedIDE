@@ -18,6 +18,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   aiEndpoint: 'http://127.0.0.1:11434',
   aiModel: 'llama3.2',
   aiKey: '',
+  aiAuthMode: 'api',
 
   lineHeight: 1.45,
   insertSpaces: true,
@@ -60,6 +61,7 @@ export function normalizeEditorSettings(raw: Partial<EditorSettings> | null | un
   if (merged.customAccent && !/^#[0-9A-Fa-f]{6}$/.test(merged.customAccent)) {
     merged.customAccent = ''
   }
+  if (merged.aiAuthMode !== 'subscription') merged.aiAuthMode = 'api'
   return merged
 }
 

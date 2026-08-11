@@ -170,6 +170,7 @@ PREFIX = arm-none-eabi-
 CC = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 
 CPU = ${cpu}
 DEFINES = -D${board.cDefine}
@@ -197,7 +198,7 @@ clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -259,6 +260,7 @@ PREFIX = arm-none-eabi-
 CXX = $(PREFIX)g++
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 
 CPU = ${cpu}
 DEFINES = -D${board.cDefine}
@@ -286,7 +288,7 @@ clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -332,6 +334,7 @@ PREFIX = arm-none-eabi-
 AS = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 
 CPU = -mcpu=${board.cpu} -mthumb
 ASFLAGS = $(CPU) -c -g -Wall
@@ -354,7 +357,7 @@ clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -516,6 +519,7 @@ PREFIX = arm-none-eabi-
 CXX = $(PREFIX)g++
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 CPU = ${cpu}
 DEFINES = -D${board.cDefine}
 CXXFLAGS = $(CPU) -c $(DEFINES) -O2 -g -Wall -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -Iinclude
@@ -542,7 +546,7 @@ clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -559,6 +563,7 @@ PREFIX = arm-none-eabi-
 CC = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 CPU = ${cpu}
 DEFINES = -D${board.cDefine}
 CFLAGS = $(CPU) -c $(DEFINES) -O2 -g -Wall -ffunction-sections -fdata-sections -Iinclude
@@ -585,7 +590,7 @@ clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -602,6 +607,9 @@ function zigMakefile(name, board, flashCfg) {
   return `TARGET = ${name}
 BUILD_DIR = build
 ZIG = zig
+OPENOCD ?= openocd
+OBJCOPY ?= arm-none-eabi-objcopy
+SIZE ?= arm-none-eabi-size
 CPU = ${zigCpu}
 
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin
@@ -618,17 +626,17 @@ $(BUILD_DIR)/$(TARGET).elf: src/main.zig linker.ld
 \t  --cache-dir $(BUILD_DIR)/zig-cache \\
 \t  --name $(TARGET) \\
 \t  -femit-bin=$(BUILD_DIR)/$(TARGET).elf
-\t@arm-none-eabi-size $(BUILD_DIR)/$(TARGET).elf 2>/dev/null || true
+\t@$(SIZE) $(BUILD_DIR)/$(TARGET).elf 2>/dev/null || true
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
-\tarm-none-eabi-objcopy -O binary $< $@ 2>/dev/null || \\
+\t$(OBJCOPY) -O binary $< $@ 2>/dev/null || \\
 \t  $(ZIG) objcopy -O binary $< $@
 
 clean:
 \trm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 .PHONY: all clean flash
@@ -863,6 +871,7 @@ PREFIX = arm-none-eabi-
 AS = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 CPU = -mcpu=${board.cpu} -mthumb
 ASFLAGS = $(CPU) -c -g -Wall
 LDFLAGS = $(CPU) -T linker.ld -nostartfiles -Wl,--gc-sections
@@ -879,7 +888,7 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 clean:
 \trm -rf $(BUILD_DIR)
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 .PHONY: all clean flash
 `,
@@ -1160,6 +1169,7 @@ PREFIX = arm-none-eabi-
 AS = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE = $(PREFIX)size
+OPENOCD ?= openocd
 CPU = -mcpu=${board.cpu} -mthumb
 ASFLAGS = $(CPU) -c -g -Wall
 LDFLAGS = $(CPU) -T linker.ld -nostartfiles -Wl,--gc-sections
@@ -1175,7 +1185,7 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 clean:
 \trm -rf $(BUILD_DIR)
 flash: $(BUILD_DIR)/$(TARGET).elf
-\topenocd ${flashCfg} \\
+\t$(OPENOCD) ${flashCfg} \\
 \t  -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 .PHONY: all clean flash
 `,

@@ -14,6 +14,7 @@ import { ConfirmDialog } from './ui/ConfirmDialog'
 import { StatusBar } from './ui/StatusBar'
 import { MemoryAnalyzer } from './ui/MemoryAnalyzer'
 import { PeripheralViewer } from './ui/PeripheralViewer'
+import { ToolchainSetup } from './ui/ToolchainSetup'
 import { TranslationProvider } from './core/TranslationContext'
 import { getFlatTranslations, LANG_LABELS } from './core/translations'
 import type { FileNode, EditorTabData, BuildMessage, EditorSettings, ProjectConfig, MemoryUsage } from './core/types'
@@ -51,12 +52,29 @@ function AppContent() {
   const [activeTabId, setActiveTabId] = useState('')
   const [outputMessages, setOutputMessages] = useState<BuildMessage[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [toolchainSetupOpen, setToolchainSetupOpen] = useState(false)
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
   const [bottomTab, setBottomTab] = useState<'output' | 'serial' | 'memory' | 'peripheral' | null>(null)
   const [toolchains, setToolchains] = useState<ToolchainInfo | null>(null)
   const [memoryUsage, setMemoryUsage] = useState<MemoryUsage>({ flashUsed: 0, flashTotal: 1048576, ramUsed: 0, ramTotal: 131072 })
   const [showLeftPanel, setShowLeftPanel] = useState(true)
   const [showRightPanel, setShowRightPanel] = useState(false)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
+    try {
+      const n = Number(localStorage.getItem('embed-ide-left-panel-width'))
+      return Number.isFinite(n) && n >= 180 && n <= 900 ? n : 260
+    } catch {
+      return 260
+    }
+  })
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
+    try {
+      const n = Number(localStorage.getItem('embed-ide-right-panel-width'))
+      return Number.isFinite(n) && n >= 240 && n <= 1000 ? n : 360
+    } catch {
+      return 360
+    }
+  })
   const [dirtyConfirm, setDirtyConfirm] = useState<{ tabId: string; callback: () => void } | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
   const [settingsReady, setSettingsReady] = useState(false)
@@ -112,7 +130,41 @@ function AppContent() {
   editorSettingsRef.current = editorSettings
 
   useEffect(() => {
-    window.electronAPI?.detectToolchains().then(setToolchains)
+    const refresh = () => {
+      window.electronAPI?.detectToolchains().then(setToolchains).catch(() => {})
+    }
+    refresh()
+    const onFocus = () => refresh()
+    window.addEventListener('focus', onFocus)
+    const id = window.setInterval(refresh, 60000)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.needsToolchainInstall) return
+    api.needsToolchainInstall().then(needs => {
+      if (needs) setToolchainSetupOpen(true)
+    }).catch(() => {})
+    const offP = api.onToolchainInstallProgress?.(p => {
+      if (p?.auto) setToolchainSetupOpen(true)
+    })
+    const offC = api.onToolchainInstallComplete?.(data => {
+      if (data.ok) {
+        api.detectToolchains().then(setToolchains).catch(() => {})
+        setTimeout(() => setToolchainSetupOpen(false), 800)
+      }
+    })
+    return () => {
+      offP?.()
+      offC?.()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!window.electronAPI?.loadSettings) {
       setSettingsReady(true)
       return
@@ -803,7 +855,18 @@ function AppContent() {
             }}
           />
           <div className="app-body">
-            <SlidePanel visible={showLeftPanel} side="left" width={260}>
+            <SlidePanel
+              visible={showLeftPanel}
+              side="left"
+              width={leftPanelWidth}
+              resizable
+              minSize={180}
+              maxSize={720}
+              onSizeChange={w => {
+                setLeftPanelWidth(w)
+                try { localStorage.setItem('embed-ide-left-panel-width', String(w)) } catch {}
+              }}
+            >
               <FileExplorer
                 files={projectFiles}
                 projectDir={project?.dir}
@@ -866,7 +929,18 @@ function AppContent() {
               </SlidePanel>
             </div>
             {editorSettings.aiEnabled && (
-              <SlidePanel visible={showRightPanel} side="right" width={320}>
+              <SlidePanel
+                visible={showRightPanel}
+                side="right"
+                width={rightPanelWidth}
+                resizable
+                minSize={280}
+                maxSize={1000}
+                onSizeChange={w => {
+                  setRightPanelWidth(w)
+                  try { localStorage.setItem('embed-ide-right-panel-width', String(w)) } catch {}
+                }}
+              >
                 <AIAgents project={project} files={projectFiles} settings={editorSettings} onSettingsChange={setEditorSettings} onFilesApplied={handleAiFilesApplied} />
               </SlidePanel>
             )}
@@ -888,6 +962,13 @@ function AppContent() {
               onClose={() => setSettingsOpen(false)}
             />
           )}
+          <ToolchainSetup
+            open={toolchainSetupOpen}
+            onClose={() => setToolchainSetupOpen(false)}
+            onDone={() => {
+              window.electronAPI?.detectToolchains().then(setToolchains).catch(() => {})
+            }}
+          />
           {projectDialogOpen && <ProjectDialog onCreate={handleCreateProject} onClose={() => setProjectDialogOpen(false)} />}
 
           {fileDialog && (

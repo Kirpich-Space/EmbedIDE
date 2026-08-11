@@ -11,104 +11,19 @@
  */
 import { createWriteStream, existsSync, mkdirSync, cpSync, chmodSync, writeFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'fs'
 import { execFileSync, spawnSync } from 'child_process'
-import { dirname, join, basename } from 'path'
+import { dirname, join, basename, resolve, relative } from 'path'
 import { fileURLToPath } from 'url'
-import { pipeline } from 'stream/promises'
-import { createGunzip } from 'zlib'
-import { tmpdir } from 'os'
-import { createHash } from 'crypto'
+import { createRequire } from 'module'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
+const require = createRequire(import.meta.url)
+const { PACKAGES: ALL_PACKAGES, platformKey } = require('../electron/toolchainPackages.js')
 
-const PLATFORM = (() => {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-  if (process.platform === 'win32') return `win-${arch}`
-  if (process.platform === 'darwin') return `darwin-${arch}`
-  return `linux-${arch}`
-})()
-
+const PLATFORM = platformKey()
 const OUT = join(ROOT, 'vendor', 'toolchain', PLATFORM)
 const BIN = join(OUT, 'bin')
-
-// Pinned xPack / Zig releases (update periodically)
-const PACKAGES = {
-  'linux-x64': {
-    gcc: {
-      url: 'https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v14.2.1-1.1/xpack-arm-none-eabi-gcc-14.2.1-1.1-linux-x64.tar.gz',
-      strip: 1,
-    },
-    openocd: {
-      url: 'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v0.12.0-6/xpack-openocd-0.12.0-6-linux-x64.tar.gz',
-      strip: 1,
-    },
-    zig: {
-      url: 'https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz',
-      strip: 1,
-      renameBin: true,
-    },
-  },
-  'linux-arm64': {
-    gcc: {
-      url: 'https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v14.2.1-1.1/xpack-arm-none-eabi-gcc-14.2.1-1.1-linux-arm64.tar.gz',
-      strip: 1,
-    },
-    openocd: {
-      url: 'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v0.12.0-6/xpack-openocd-0.12.0-6-linux-arm64.tar.gz',
-      strip: 1,
-    },
-    zig: {
-      url: 'https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz',
-      strip: 1,
-      renameBin: true,
-    },
-  },
-  'win-x64': {
-    gcc: {
-      url: 'https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v14.2.1-1.1/xpack-arm-none-eabi-gcc-14.2.1-1.1-win32-x64.zip',
-      strip: 1,
-    },
-    openocd: {
-      url: 'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v0.12.0-6/xpack-openocd-0.12.0-6-win32-x64.zip',
-      strip: 1,
-    },
-    zig: {
-      url: 'https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip',
-      strip: 1,
-      renameBin: true,
-    },
-  },
-  'darwin-x64': {
-    gcc: {
-      url: 'https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v14.2.1-1.1/xpack-arm-none-eabi-gcc-14.2.1-1.1-darwin-x64.tar.gz',
-      strip: 1,
-    },
-    openocd: {
-      url: 'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v0.12.0-6/xpack-openocd-0.12.0-6-darwin-x64.tar.gz',
-      strip: 1,
-    },
-    zig: {
-      url: 'https://ziglang.org/download/0.13.0/zig-macos-x86_64-0.13.0.tar.xz',
-      strip: 1,
-      renameBin: true,
-    },
-  },
-  'darwin-arm64': {
-    gcc: {
-      url: 'https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v14.2.1-1.1/xpack-arm-none-eabi-gcc-14.2.1-1.1-darwin-arm64.tar.gz',
-      strip: 1,
-    },
-    openocd: {
-      url: 'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v0.12.0-6/xpack-openocd-0.12.0-6-darwin-arm64.tar.gz',
-      strip: 1,
-    },
-    zig: {
-      url: 'https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz',
-      strip: 1,
-      renameBin: true,
-    },
-  },
-}
+const PACKAGES = { [PLATFORM]: ALL_PACKAGES[PLATFORM] }
 
 function which(cmd) {
   const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8' })
@@ -168,6 +83,7 @@ function extractArchive(archive, destDir, strip = 1) {
   execFileSync('tar', args, { stdio: 'inherit' })
 }
 
+/** Relative symlink so packaged AppImage/deb still resolve after relocate. */
 function linkBinsFrom(dir) {
   const binSrc = join(dir, 'bin')
   if (!existsSync(binSrc)) return
@@ -181,7 +97,8 @@ function linkBinsFrom(dir) {
         cpSync(src, dst)
       } else {
         try {
-          symlinkSync(src, dst)
+          const rel = relative(BIN, src)
+          symlinkSync(rel, dst)
         } catch {
           cpSync(src, dst)
         }
@@ -201,10 +118,26 @@ function copyHostTool(cmd, destName) {
   }
   mkdirSync(BIN, { recursive: true })
   const dest = join(BIN, destName || basename(p))
-  cpSync(p, dest)
-  try { chmodSync(dest, 0o755) } catch {}
-  console.log(`  ✓ copied ${cmd} → bin/${basename(dest)}`)
-  return true
+  if (existsSync(dest) && resolve(p) === resolve(dest)) {
+    console.log(`  = ${cmd} already in bin/`)
+    return true
+  }
+  // If which() finds our own bundled copy first, keep it
+  if (existsSync(dest) && resolve(p) === resolve(dest)) return true
+  try {
+    if (existsSync(dest)) rmSync(dest, { force: true })
+    cpSync(p, dest)
+    try { chmodSync(dest, 0o755) } catch {}
+    console.log(`  ✓ copied ${cmd} → bin/${basename(dest)}`)
+    return true
+  } catch (e) {
+    if (existsSync(dest)) {
+      console.log(`  = keep existing bin/${basename(dest)}`)
+      return true
+    }
+    console.warn(`  ! could not copy ${cmd}:`, e.message)
+    return false
+  }
 }
 
 async function fetchOne(name, spec) {
@@ -302,13 +235,21 @@ async function main() {
       env,
       stdio: 'inherit',
     })
-    // expose cargo/rustc in bin via symlink
+    // expose cargo/rustc/rustup in bin/ (relative symlinks for packaging)
     for (const tool of ['cargo', 'rustc', 'rustup']) {
       const src = join(cargoHome, 'bin', tool)
       if (existsSync(src)) {
         const dst = join(BIN, tool)
         try { rmSync(dst, { force: true }) } catch {}
-        cpSync(src, dst)
+        if (process.platform === 'win32') {
+          cpSync(src, dst)
+        } else {
+          try {
+            symlinkSync(relative(BIN, src), dst)
+          } catch {
+            cpSync(src, dst)
+          }
+        }
         try { chmodSync(dst, 0o755) } catch {}
       }
     }

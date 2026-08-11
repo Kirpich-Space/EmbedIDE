@@ -2,9 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path');
 const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession } = require('./toolchain');
 const { prependBundledToolchainToPath, getBundledStatus } = require('./bundledToolchain');
+const { installToolchain, needsToolchainInstall, isInstallRunning, getInstallProgress } = require('./toolchainInstaller');
 const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
 const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, getTemplateList, readProjectMeta } = require('./project');
 const { listBoards, getBoard, getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
+const { getCliStatus, chatViaCli, cancelCliChat } = require('./aiCli');
 const fs = require('fs');
 
 app.disableHardwareAcceleration();
@@ -202,6 +204,29 @@ function buildAppMenu() {
 app.whenReady().then(() => {
   buildAppMenu()
   createWindow()
+  // Slim packages: auto-download compilers on first launch if missing
+  setTimeout(() => {
+    try {
+      if (!app.isPackaged) return
+      if (!needsToolchainInstall() || isInstallRunning()) return
+      const send = (p) => {
+        try { mainWindow?.webContents.send('toolchain:install-progress', p) } catch {}
+      }
+      send({ phase: 'start', percent: 0, message: 'Downloading compilers…', auto: true })
+      installToolchain({
+        includeRust: true,
+        onProgress: send,
+      }).then((r) => {
+        send({ phase: 'done', percent: 100, message: 'Toolchain ready', root: r.root, auto: true })
+        mainWindow?.webContents.send('toolchain:install-complete', { ok: true, ...r })
+      }).catch((err) => {
+        send({ phase: 'error', percent: 0, message: err.message || String(err), auto: true })
+        mainWindow?.webContents.send('toolchain:install-complete', { ok: false, error: err.message || String(err) })
+      })
+    } catch (e) {
+      console.warn('Auto toolchain install failed to start:', e.message)
+    }
+  }, 1500)
 });
 
 app.on('window-all-closed', () => {
@@ -221,8 +246,32 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 
-// Toolchain detection
+// Toolchain detection + installer
 ipcMain.handle('toolchain:detect', () => detectToolchains());
+ipcMain.handle('toolchain:needs-install', () => needsToolchainInstall());
+ipcMain.handle('toolchain:install-status', () => ({
+  running: isInstallRunning(),
+  progress: getInstallProgress(),
+  status: getBundledStatus(),
+}));
+ipcMain.handle('toolchain:install', async (_e, opts = {}) => {
+  const send = (p) => {
+    try { mainWindow?.webContents.send('toolchain:install-progress', p) } catch {}
+  }
+  try {
+    const result = await installToolchain({
+      includeRust: opts?.includeRust !== false,
+      force: !!opts?.force,
+      onProgress: send,
+    })
+    mainWindow?.webContents.send('toolchain:install-complete', { ok: true, ...result })
+    return { ok: true, ...result }
+  } catch (err) {
+    const error = err.message || String(err)
+    mainWindow?.webContents.send('toolchain:install-complete', { ok: false, error })
+    return { ok: false, error }
+  }
+});
 
 // Project management
 ipcMain.handle('project:create', (_e, rootDir, name, type, boardId) => {
@@ -475,3 +524,21 @@ ipcMain.handle('settings:save', async (_e, settings) => {
     return true;
   } catch { return false; }
 });
+
+ipcMain.handle('ai:cli-status', (_e, providerId) => {
+  return getCliStatus(String(providerId || ''))
+})
+
+ipcMain.handle('ai:cli-chat', async (_e, providerId, payload) => {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : []
+  const model = typeof payload?.model === 'string' ? payload.model : undefined
+  const cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined
+  try {
+    const text = await chatViaCli(String(providerId || ''), { messages, model, cwd })
+    return { ok: true, text }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
+})
+
+ipcMain.handle('ai:cli-cancel', () => cancelCliChat())

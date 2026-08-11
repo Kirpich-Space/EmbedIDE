@@ -1,3 +1,21 @@
+## 2.6.0 — 2026-08-11
+
+### Changed
+- **Slim installers**: packages no longer ship the multi‑GB toolchain. On first launch EmbedIDE **downloads** ARM GCC, GDB, OpenOCD, Zig, make and Rust into the user data folder (progress UI + Settings → Download / repair).
+- Dev workflow still uses `npm run toolchain:fetch` / `toolchain:fetch:rust` into `vendor/toolchain`.
+
+### Added
+- Runtime toolchain installer (`electron/toolchainInstaller.js`) with IPC progress events
+- First-launch download dialog; Settings button to re-download / repair
+
+## 2.5.1 — 2026-08-11
+
+### Fixed
+- Compilers/debuggers missing in packaged builds (stub toolchain rejected; full ARM GCC + GDB + OpenOCD + Zig embedded in Linux packages)
+
+### Changed
+- Linux installers now ship the full bundled toolchain (~1.5GB) so EmbedIDE works offline out of the box
+
 ## 2.5.0 — 2026-08-11
 
 ### Added

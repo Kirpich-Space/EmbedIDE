@@ -212,7 +212,7 @@ export function AIAgents({ project, files, settings, onSettingsChange, onFilesAp
 
     try {
       const context = buildContext()
-      const history = (messages[activeAgent] || []).slice(-20)
+      const history = (messages[activeAgent] || []).slice(-40)
       const conversation: ChatMessage[] = [
         {
           role: 'system',
