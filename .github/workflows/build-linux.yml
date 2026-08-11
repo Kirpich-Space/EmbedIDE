@@ -1,0 +1,70 @@
+name: Build Linux packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Upload built assets to this release tag (e.g. v2.6.2). Empty = artifact only.'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: sudo apt-get update && sudo apt-get install -y rpm fakeroot
+      - run: npm ci
+      - run: npm run bootstrap:prepare
+      - run: npm run build
+      - run: npx electron-builder --linux AppImage deb pacman tar.gz --x64 --publish=never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Copy setup scripts
+        run: |
+          cp packaging/linux/EmbedIDE-Setup.sh packaging/linux/install-toolchain.sh release/
+          cp packaging/windows/EmbedIDE-Setup.ps1 release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-2.6
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.pacman
+            release/*.tar.gz
+            release/EmbedIDE-Setup.sh
+            release/install-toolchain.sh
+            release/EmbedIDE-Setup.ps1
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            release/*.AppImage
+            release/*.deb
+            release/*.pacman
+            release/*.tar.gz
+            release/EmbedIDE-Setup.sh
+            release/install-toolchain.sh
+            release/EmbedIDE-Setup.ps1
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
