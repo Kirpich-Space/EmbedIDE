@@ -101,20 +101,20 @@ export function Toolbar({
               <span className="label">{t('toolbar.cancel')}</span>
             </button>
           ) : (
-            <button className="toolbar-btn" onClick={onBuild} title={`${t('toolbar.build')} (Ctrl+B)`}>
+            <button className="toolbar-btn" onClick={onBuild} title={`${t('toolbar.build')} (Ctrl+B / F7)`}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
               </svg>
               <span className="label">{t('toolbar.build')}</span>
             </button>
           )}
-          <button className="toolbar-btn toolbar-btn-accent" onClick={onFlash} title={t('toolbar.flash')}>
+          <button className="toolbar-btn toolbar-btn-accent" onClick={onFlash} title={`${t('toolbar.flash')} (Ctrl+Shift+B)`}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
             </svg>
             <span className="label">{t('toolbar.flash')}</span>
           </button>
-          <button className="toolbar-btn" onClick={onDebug} title={t('toolbar.debugSession')}>
+          <button className="toolbar-btn" onClick={onDebug} title={`${t('toolbar.debugSession')} (F5)`}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />
               <path d="M12 6v6l4 2" />

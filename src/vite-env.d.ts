@@ -4,12 +4,22 @@ interface ToolchainInfo {
   rustEmbeddedTargets?: string[]
   armGcc: boolean
   armGccVersion?: string
+  armGccBundled?: boolean
   openocd: boolean
   openocdVersion?: string
+  openocdBundled?: boolean
   make: boolean
+  makeBundled?: boolean
   python: boolean
   zig?: boolean
   zigVersion?: string
+  zigBundled?: boolean
+  bundled?: {
+    root: string | null
+    platform: string
+    bundled: boolean
+    tools: Record<string, boolean>
+  }
 }
 
 interface SerialPort {
@@ -110,6 +120,12 @@ interface ElectronAPI {
   onFlashOutput: (cb: (data: BuildOutput) => void) => () => void
   onFlashComplete: (cb: (data: {code: number | null, error?: string}) => void) => () => void
 
+  runScript: (dir: string, type: string, filePath?: string | null) => Promise<{success: boolean, output: BuildOutput[], error?: string}>
+  startDebug: (dir: string, type: string, config?: { adapter?: string, target?: string, boardId?: string, elfPath?: string, filePath?: string }) => Promise<{success: boolean, output: BuildOutput[], error?: string}>
+  cancelDebug: () => Promise<boolean>
+  onRunOutput: (cb: (data: BuildOutput) => void) => () => void
+  onRunComplete: (cb: (data: {code: number | null, error?: string}) => void) => () => void
+
   listSerialPorts: () => Promise<SerialPort[]>
   connectSerial: (port: string, baud: number) => Promise<{connected: boolean, error?: string}>
   sendSerial: (data: string) => Promise<boolean>
@@ -132,6 +148,7 @@ interface ElectronAPI {
   onMenuToggleAgents: (cb: () => void) => () => void
   onMenuBuild: (cb: () => void) => () => void
   onMenuFlash: (cb: () => void) => () => void
+  onMenuDebug: (cb: () => void) => () => void
 }
 
 interface Window {

@@ -3,6 +3,7 @@ import type { AgentMessage, ProjectConfig, FileNode, EditorSettings } from '../c
 import { useTranslation } from '../core/TranslationContext'
 import { openAiCompatibleUrl } from '../core/ollama'
 import { chatCompletion, getAiProvider, migrateAiProvider, type ChatMessage } from '../core/aiProviders'
+import { ConfirmDialog } from './ConfirmDialog'
 
 interface AIAgentsProps {
   project: ProjectConfig | null
@@ -136,6 +137,7 @@ export function AIAgents({ project, files, settings, onSettingsChange, onFilesAp
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [fileOps, setFileOps] = useState<{ file: string; content: string }[]>([])
+  const [confirmApply, setConfirmApply] = useState<{ file: string; content: string }[] | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -269,11 +271,10 @@ Do not use absolute paths. Only relative paths inside the project.`,
 
       const safeOps = parseFileOps(reply).filter(op => isSafeProjectPath(op.file))
       if (safeOps.length > 0) {
+        setFileOps(safeOps)
+        // Always confirm before writing; auto-apply only auto-opens the dialog
         if (settings.aiAutoApplyFiles !== false) {
-          const applied = await writeFileOps(safeOps)
-          finishApplied(applied)
-        } else {
-          setFileOps(safeOps)
+          setConfirmApply(safeOps)
         }
       }
     } catch (e: unknown) {
@@ -305,14 +306,26 @@ Do not use absolute paths. Only relative paths inside the project.`,
   const clearConversation = useCallback(() => {
     setMessages(prev => ({ ...prev, [activeAgent]: [] }))
     setFileOps([])
+    setConfirmApply(null)
   }, [activeAgent])
 
-  const applyFileOps = useCallback(async () => {
-    const applied = await writeFileOps(fileOps)
-    finishApplied(applied)
-  }, [fileOps, writeFileOps, finishApplied])
+  const applyFileOps = useCallback(() => {
+    if (fileOps.length === 0) return
+    setConfirmApply(fileOps)
+  }, [fileOps])
 
-  const discardFileOps = useCallback(() => setFileOps([]), [])
+  const discardFileOps = useCallback(() => {
+    setFileOps([])
+    setConfirmApply(null)
+  }, [])
+
+  const confirmApplyFiles = useCallback(async () => {
+    const ops = confirmApply
+    setConfirmApply(null)
+    if (!ops || ops.length === 0) return
+    const applied = await writeFileOps(ops)
+    finishApplied(applied)
+  }, [confirmApply, writeFileOps, finishApplied])
 
   if (needsCloudKey) {
     return (
@@ -434,6 +447,20 @@ Do not use absolute paths. Only relative paths inside the project.`,
           </button>
         )}
       </div>
+
+      {confirmApply && (
+        <ConfirmDialog
+          title={t('aiAgents.confirmTitle')}
+          message={t('aiAgents.confirmMsg', {
+            count: confirmApply.length,
+            files: confirmApply.map(o => o.file).join(', '),
+          })}
+          confirmLabel={t('aiAgents.apply')}
+          danger={false}
+          onConfirm={() => { void confirmApplyFiles() }}
+          onCancel={() => setConfirmApply(null)}
+        />
+      )}
     </div>
   )
 }

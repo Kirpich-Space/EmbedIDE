@@ -22,16 +22,18 @@ export function StatusBar({ line, col, language, projectType, boardName, toolcha
         <span className="statusbar-separator" />
         <span className="statusbar-item">
           {toolchains?.armGcc
-            ? `${t('statusBar.armGcc')} ${toolchains.armGccVersion?.match(/\d+\.\d+\.\d+/)?.[0] || ''}`
+            ? `${t('statusBar.armGcc')} ${toolchains.armGccVersion?.match(/\d+\.\d+\.\d+/)?.[0] || ''}${toolchains.armGccBundled ? ` (${t('statusBar.bundled')})` : ''}`
             : toolchains?.zig
-              ? `Zig ${toolchains.zigVersion || ''}`
+              ? `Zig ${toolchains.zigVersion || ''}${toolchains.zigBundled ? ` (${t('statusBar.bundled')})` : ''}`
               : toolchains?.rust
                 ? `${t('statusBar.rust')} ${toolchains.rustVersion?.match(/\d+\.\d+/)?.[0] || ''}`
                 : t('statusBar.noCompiler')}
         </span>
         <span className="statusbar-separator" />
         <span className="statusbar-item">
-          {toolchains?.openocd ? t('statusBar.openocd') : t('statusBar.noDebugger')}
+          {toolchains?.openocd
+            ? `${t('statusBar.openocd')}${toolchains.openocdBundled ? ` (${t('statusBar.bundled')})` : ''}`
+            : t('statusBar.noDebugger')}
         </span>
         <span className="statusbar-separator" />
         <span className="statusbar-item">{projectType?.toUpperCase() || ''}</span>

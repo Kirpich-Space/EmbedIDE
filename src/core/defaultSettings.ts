@@ -38,7 +38,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSaveDelayMs: 1500,
   confirmDelete: true,
   defaultBaud: 115200,
-  aiAutoApplyFiles: true,
+  aiAutoApplyFiles: false,
 }
 
 /** Merge persisted settings with defaults (forward-compatible). */

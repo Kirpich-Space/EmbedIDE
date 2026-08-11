@@ -430,6 +430,48 @@ make flash  # OpenOCD
 
     ...buildDriverTemplates(board, cpu, flashCfg),
     ...buildOsTemplates(board, cpu, flashCfg),
+    ...buildScriptTemplates(),
+  }
+}
+
+function buildScriptTemplates() {
+  return {
+    'script-python': {
+      name: 'Script — Python (single file)',
+      ext: '.py',
+      files: {
+        '$entry$': (name) => `#!/usr/bin/env python3
+"""${name} — EmbedIDE single-file script. Run with Build / Debug."""
+
+def main() -> None:
+    print("Hello from ${name}")
+
+if __name__ == "__main__":
+    main()
+`,
+      },
+    },
+    'script-bash': {
+      name: 'Script — Bash (single file)',
+      ext: '.sh',
+      files: {
+        '$entry$': (name) => `#!/usr/bin/env bash
+# ${name} — EmbedIDE single-file script. Run with Build / Debug.
+set -euo pipefail
+echo "Hello from ${name}"
+`,
+      },
+    },
+    'script-js': {
+      name: 'Script — JavaScript (single file)',
+      ext: '.js',
+      files: {
+        '$entry$': (name) => `#!/usr/bin/env node
+// ${name} — EmbedIDE single-file script. Run with Build / Debug.
+console.log('Hello from ${name}')
+`,
+      },
+    },
   }
 }
 
@@ -1215,6 +1257,9 @@ const TEMPLATES_META = {
   'os-rust': { name: 'OS / Kernel — Rust', ext: '.rs', category: 'os', needsBoard: true, lang: 'rust' },
   'os-asm': { name: 'OS / Kernel — ASM', ext: '.S', category: 'os', needsBoard: true, lang: 'asm' },
   'os-zig': { name: 'OS / Kernel — Zig', ext: '.zig', category: 'os', needsBoard: true, lang: 'zig' },
+  'script-python': { name: 'Script — Python (1 file)', ext: '.py', category: 'script', needsBoard: false, lang: 'python' },
+  'script-bash': { name: 'Script — Bash (1 file)', ext: '.sh', category: 'script', needsBoard: false, lang: 'bash' },
+  'script-js': { name: 'Script — JavaScript (1 file)', ext: '.js', category: 'script', needsBoard: false, lang: 'javascript' },
 }
 
 function readProjectMeta(projectDir) {
@@ -1262,9 +1307,18 @@ function createProject(rootDir, name, type, boardId = DEFAULT_BOARD_ID) {
   fs.mkdirSync(projectDir, { recursive: true });
 
   for (const [filePath, contentFn] of Object.entries(template.files)) {
-    const fullPath = path.join(projectDir, filePath);
+    let rel = filePath
+    if (filePath === '$entry$') {
+      const ext = metaTpl.ext || ''
+      rel = `${name}${ext}`
+    }
+    const fullPath = path.join(projectDir, rel);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, contentFn(name), 'utf8');
+    const content = contentFn(name)
+    fs.writeFileSync(fullPath, content, 'utf8');
+    if (rel.endsWith('.sh') || rel.endsWith('.py')) {
+      try { fs.chmodSync(fullPath, 0o755) } catch {}
+    }
   }
 
   const meta = {
@@ -1273,6 +1327,9 @@ function createProject(rootDir, name, type, boardId = DEFAULT_BOARD_ID) {
     version: 1,
   };
   if (needsBoard) meta.boardId = board.id;
+  if (String(type).startsWith('script-')) {
+    meta.entry = `${name}${metaTpl.ext || ''}`
+  }
 
   writeProjectMeta(projectDir, meta);
 
@@ -1302,6 +1359,7 @@ function listProjectFiles(projectDir) {
           rs: 'rust', c: 'c', cpp: 'cpp', S: 'asm', s: 'asm', h: 'c', hpp: 'cpp',
           ld: 'linker', toml: 'toml', json: 'json', x: 'linker', zig: 'zig',
           md: 'markdown', txt: 'text',
+          py: 'python', sh: 'shell', js: 'javascript', mjs: 'javascript',
         };
         result.push({ id: relPath, name: entry.name, type: 'file', language: langMap[ext] || ext });
       }

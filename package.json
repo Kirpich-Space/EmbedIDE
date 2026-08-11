@@ -41,15 +41,17 @@
     "build": "vite build",
     "start": "electron .",
     "launch": "vite build && electron .",
-    "pack": "vite build && electron-builder --dir",
-    "dist:linux": "vite build && electron-builder --linux AppImage deb rpm pacman tar.gz",
-    "dist:fedora": "vite build && electron-builder --linux rpm",
-    "dist:arch": "vite build && electron-builder --linux pacman AppImage tar.gz",
-    "dist:void": "vite build && electron-builder --linux AppImage tar.gz",
-    "dist:gentoo": "vite build && electron-builder --linux AppImage tar.gz",
-    "dist:win": "vite build && electron-builder --win nsis portable",
-    "dist:mac": "vite build && electron-builder --mac dmg zip",
-    "dist:all": "vite build && electron-builder --linux AppImage deb rpm pacman tar.gz --win nsis portable",
+    "toolchain:fetch": "node scripts/fetch-toolchains.mjs",
+    "toolchain:fetch:rust": "EMBEDIDE_FETCH_RUST=1 node scripts/fetch-toolchains.mjs",
+    "pack": "npm run toolchain:fetch && vite build && electron-builder --dir",
+    "dist:linux": "npm run toolchain:fetch && vite build && electron-builder --linux AppImage deb rpm pacman tar.gz",
+    "dist:fedora": "npm run toolchain:fetch && vite build && electron-builder --linux rpm",
+    "dist:arch": "npm run toolchain:fetch && vite build && electron-builder --linux pacman AppImage tar.gz",
+    "dist:void": "npm run toolchain:fetch && vite build && electron-builder --linux AppImage tar.gz",
+    "dist:gentoo": "npm run toolchain:fetch && vite build && electron-builder --linux AppImage tar.gz",
+    "dist:win": "npm run toolchain:fetch && vite build && electron-builder --win nsis portable",
+    "dist:mac": "npm run toolchain:fetch && vite build && electron-builder --mac dmg zip",
+    "dist:all": "npm run toolchain:fetch && vite build && electron-builder --linux AppImage deb rpm pacman tar.gz --win nsis portable",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -72,6 +74,13 @@
       }
     ],
     "linux": {
+      "extraResources": [
+        {
+          "from": "vendor/toolchain/linux-x64",
+          "to": "toolchain",
+          "filter": ["**/*"]
+        }
+      ],
       "target": [
         { "target": "AppImage", "arch": ["x64"] },
         { "target": "deb", "arch": ["x64"] },
@@ -82,7 +91,7 @@
       "category": "Development",
       "icon": "build/icons/512.png",
       "synopsis": "Offline-first IDE for Cortex-M firmware",
-      "description": "EmbedIDE — engineering IDE for embedded flight computers (C/C++/Rust/ASM/Zig, STM32 and other Cortex-M).",
+      "description": "EmbedIDE — engineering IDE for embedded flight computers (C/C++/Rust/ASM/Zig, STM32 and other Cortex-M). Ships with bundled ARM GCC, OpenOCD, and Zig.",
       "desktop": {
         "entry": {
           "Name": "EmbedIDE",
@@ -101,6 +110,13 @@
       "depends": ["libx11", "libxrandr", "libxdamage", "libxcomposite", "libxcursor", "libxfixes", "libxi", "mesa", "nss", "alsa-lib"]
     },
     "win": {
+      "extraResources": [
+        {
+          "from": "vendor/toolchain/win-x64",
+          "to": "toolchain",
+          "filter": ["**/*"]
+        }
+      ],
       "target": [
         { "target": "nsis", "arch": ["x64"] },
         { "target": "portable", "arch": ["x64"] }
@@ -123,6 +139,13 @@
       "artifactName": "${name}-${version}-windows-${arch}-portable.${ext}"
     },
     "mac": {
+      "extraResources": [
+        {
+          "from": "vendor/toolchain/darwin-${arch}",
+          "to": "toolchain",
+          "filter": ["**/*"]
+        }
+      ],
       "target": [
         { "target": "dmg", "arch": ["x64", "arm64"] },
         { "target": "zip", "arch": ["x64", "arm64"] }

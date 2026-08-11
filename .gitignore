@@ -8,3 +8,7 @@ build/deb
 .local-lib/
 debug-*.png
 embedide-*.png
+vendor/cache/
+vendor/toolchain/**
+!vendor/toolchain/.gitkeep
+!vendor/README.md

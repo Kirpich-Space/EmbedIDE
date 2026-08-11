@@ -5,6 +5,8 @@ const listeners = {
   'build:complete': new Set(),
   'flash:output': new Set(),
   'flash:complete': new Set(),
+  'run:output': new Set(),
+  'run:complete': new Set(),
   'serial:data': new Set(),
   'serial:error': new Set(),
   'window:maximized-change': new Set(),
@@ -18,6 +20,7 @@ const listeners = {
   'menu:toggle-agents': new Set(),
   'menu:build': new Set(),
   'menu:flash': new Set(),
+  'menu:debug': new Set(),
 }
 
 function on(channel, cb) {
@@ -67,6 +70,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onFlashOutput: (cb) => on('flash:output', cb),
   onFlashComplete: (cb) => on('flash:complete', cb),
 
+  runScript: (dir, type, filePath) => ipcRenderer.invoke('project:run-script', dir, type, filePath),
+  startDebug: (dir, type, config) => ipcRenderer.invoke('project:debug', dir, type, config),
+  cancelDebug: () => ipcRenderer.invoke('project:cancel-debug'),
+  onRunOutput: (cb) => on('run:output', cb),
+  onRunComplete: (cb) => on('run:complete', cb),
+
   // Serial
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
   connectSerial: (port, baud) => ipcRenderer.invoke('serial:connect', port, baud),
@@ -92,4 +101,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuToggleAgents: (cb) => on('menu:toggle-agents', cb),
   onMenuBuild: (cb) => on('menu:build', cb),
   onMenuFlash: (cb) => on('menu:flash', cb),
+  onMenuDebug: (cb) => on('menu:debug', cb),
 });

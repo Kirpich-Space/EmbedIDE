@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from '../core/TranslationContext'
 
 interface FileDialogProps {
-  mode: 'create-file' | 'create-folder' | 'rename'
+  mode: 'create-file' | 'create-folder' | 'rename' | 'create-script'
   initialName?: string
   parentDir?: string
   projectType?: string
@@ -28,11 +28,16 @@ const EXTENSIONS: Record<string, string[]> = {
   'os-zig': ['.zig'],
   driver: ['.c', '.h'],
   os: ['.c', '.h'],
+  'script-python': ['.py'],
+  'script-bash': ['.sh'],
+  'script-js': ['.js'],
 }
+
+const SCRIPT_EXTS = ['.py', '.sh', '.js'] as const
 
 export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit, onClose }: FileDialogProps) {
   const { t } = useTranslation()
-  const [name, setName] = useState(initialName || '')
+  const [name, setName] = useState(initialName || (mode === 'create-script' ? 'script.py' : ''))
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -40,29 +45,36 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
 
   const titleKey = mode === 'create-file' ? 'fileDialog.newFile'
     : mode === 'create-folder' ? 'fileDialog.newFolder'
+    : mode === 'create-script' ? 'fileDialog.newScript'
     : 'fileDialog.rename'
   const title = t(titleKey)
 
-  const placeholder = mode === 'create-file' ? t('fileDialog.filePlaceholder')
+  const placeholder = mode === 'create-file' || mode === 'create-script' ? t('fileDialog.filePlaceholder')
     : mode === 'create-folder' ? t('fileDialog.folderPlaceholder')
     : t('fileDialog.renamePlaceholder')
 
-  const extensions = projectType ? EXTENSIONS[projectType] : undefined
+  const extensions = mode === 'create-script'
+    ? [...SCRIPT_EXTS]
+    : (projectType ? EXTENSIONS[projectType] : undefined)
 
   const handleSubmit = useCallback(async () => {
     if (!name.trim() || loadingRef.current) return
+    let finalName = name.trim()
+    if (mode === 'create-script' && !SCRIPT_EXTS.some(e => finalName.toLowerCase().endsWith(e))) {
+      finalName += '.py'
+    }
     loadingRef.current = true
     setLoading(true)
     setError('')
     try {
-      await onSubmit(name.trim())
+      await onSubmit(finalName)
     } catch (e: any) {
       setError(e.message || 'Operation failed')
     } finally {
       loadingRef.current = false
       setLoading(false)
     }
-  }, [name, onSubmit])
+  }, [name, onSubmit, mode])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') { e.preventDefault(); handleSubmit() }
@@ -77,7 +89,7 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
   const appendExt = (ext: string) => {
     const base = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) : name
     setError('')
-    setName(base + ext)
+    setName((base || 'script') + ext)
     inputRef.current?.focus()
   }
 
@@ -98,6 +110,10 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
             </div>
           )}
 
+          {mode === 'create-script' && (
+            <p className="settings-hint" style={{ marginBottom: 10 }}>{t('fileDialog.scriptHint')}</p>
+          )}
+
           <div className="settings-field">
             <label className="settings-label">{t('fileDialog.name')}</label>
             <input
@@ -112,12 +128,12 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
             />
           </div>
 
-          {mode === 'create-file' && extensions && (
+          {(mode === 'create-file' || mode === 'create-script') && extensions && (
             <div className="dialog-extensions">
               {extensions.map(ext => (
                 <button
                   key={ext}
-                  className={`dialog-ext-btn ${name.endsWith(ext) ? 'dialog-ext-active' : ''}`}
+                  className={`dialog-ext-btn ${name.toLowerCase().endsWith(ext) ? 'dialog-ext-active' : ''}`}
                   onClick={() => appendExt(ext)}
                 >
                   {ext}

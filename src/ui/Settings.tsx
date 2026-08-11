@@ -35,7 +35,7 @@ const FONT_OPTIONS = [
 
 const BAUD_OPTIONS = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
 
-type Tab = 'general' | 'editor' | 'appearance' | 'themes' | 'ai'
+type Tab = 'general' | 'editor' | 'appearance' | 'themes' | 'ai' | 'toolchain'
 
 function Toggle({
   checked, onChange, label,
@@ -94,6 +94,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
   const { t } = useTranslation()
   const { theme, setTheme } = useTheme()
   const [activeTab, setActiveTab] = useState<Tab>('general')
+  const [tcInfo, setTcInfo] = useState<ToolchainInfo | null>(null)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle')
   const [ollamaInfo, setOllamaInfo] = useState('')
@@ -184,6 +185,9 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
     if (activeTab === 'ai' && editorSettings.aiEnabled && provider.local) {
       void refreshOllama()
     }
+    if (activeTab === 'toolchain') {
+      window.electronAPI?.detectToolchains().then(setTcInfo).catch(() => setTcInfo(null))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, editorSettings.aiEnabled, providerId, editorSettings.aiEndpoint])
 
@@ -205,6 +209,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
             ['appearance', t('settings.appearance')],
             ['themes', t('settings.themes')],
             ['ai', t('settings.ai')],
+            ['toolchain', t('settings.toolchain')],
           ] as const).map(([id, label]) => (
             <button
               key={id}
@@ -680,6 +685,46 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 {!keyIssue && (
                   <span className="settings-hint">{t('settings.aiKeyHint')}</span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'toolchain' && (
+            <div className="settings-section animate-fade-in">
+              <span className="settings-section-title">{t('settings.toolchainTitle')}</span>
+              <p className="settings-hint">{t('settings.toolchainHint')}</p>
+              <div className="settings-field" style={{ marginTop: 12 }}>
+                <div className="settings-hint">
+                  {tcInfo?.bundled?.bundled
+                    ? `${t('statusBar.bundled')}: ${tcInfo.bundled.root || ''}`
+                    : t('settings.toolchainNotBundled')}
+                </div>
+                <ul className="settings-toolchain-list" style={{ marginTop: 10, paddingLeft: 18, lineHeight: 1.7 }}>
+                  {[
+                    ['arm-none-eabi-gcc', tcInfo?.armGcc, tcInfo?.armGccVersion, tcInfo?.armGccBundled],
+                    ['openocd', tcInfo?.openocd, tcInfo?.openocdVersion, tcInfo?.openocdBundled],
+                    ['make', tcInfo?.make, undefined, tcInfo?.makeBundled],
+                    ['zig', tcInfo?.zig, tcInfo?.zigVersion, tcInfo?.zigBundled],
+                    ['rustc', tcInfo?.rust, tcInfo?.rustVersion, false],
+                    ['python', tcInfo?.python, undefined, false],
+                  ].map(([name, ok, ver, bundled]) => (
+                    <li key={String(name)}>
+                      <strong>{String(name)}</strong>
+                      {': '}
+                      {ok ? t('common.success') : t('common.error')}
+                      {ver ? ` — ${String(ver).slice(0, 60)}` : ''}
+                      {bundled ? ` (${t('statusBar.bundled')})` : ''}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  className="project-btn project-btn-create"
+                  style={{ marginTop: 12 }}
+                  type="button"
+                  onClick={() => window.electronAPI?.detectToolchains().then(setTcInfo)}
+                >
+                  {t('settings.toolchainRefresh')}
+                </button>
               </div>
             </div>
           )}

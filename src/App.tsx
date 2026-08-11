@@ -49,13 +49,10 @@ function AppContent() {
   const [projectFiles, setProjectFiles] = useState<FileNode[]>([])
   const [openTabs, setOpenTabs] = useState<EditorTabData[]>([])
   const [activeTabId, setActiveTabId] = useState('')
-  const [outputVisible, setOutputVisible] = useState(false)
   const [outputMessages, setOutputMessages] = useState<BuildMessage[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
-  const [serialVisible, setSerialVisible] = useState(false)
-  const [memoryVisible, setMemoryVisible] = useState(false)
-  const [peripheralVisible, setPeripheralVisible] = useState(false)
+  const [bottomTab, setBottomTab] = useState<'output' | 'serial' | 'memory' | 'peripheral' | null>(null)
   const [toolchains, setToolchains] = useState<ToolchainInfo | null>(null)
   const [memoryUsage, setMemoryUsage] = useState<MemoryUsage>({ flashUsed: 0, flashTotal: 1048576, ramUsed: 0, ramTotal: 131072 })
   const [showLeftPanel, setShowLeftPanel] = useState(true)
@@ -96,7 +93,7 @@ function AppContent() {
 
   // File dialog state
   const [fileDialog, setFileDialog] = useState<{
-    mode: 'create-file' | 'create-folder' | 'rename'
+    mode: 'create-file' | 'create-folder' | 'rename' | 'create-script'
     node?: FileNode
     parentDir?: string
   } | null>(null)
@@ -213,9 +210,15 @@ function AppContent() {
       }
       if (data.code === 0) {
         setOutputMessages(prev => [...prev, { type: 'success', text: tRef.current('build.success'), timestamp: Date.now(), source: 'build' }])
-        setMemoryVisible(true)
+        const typ = projectRef.current?.type || ''
+        if (!/^script-|^python$|^shell$/.test(typ)) {
+          setBottomTab('memory')
+        } else {
+          setBottomTab('output')
+        }
       } else {
         setOutputMessages(prev => [...prev, { type: 'error', text: data.error || tRef.current('build.failed', { code: data.code ?? -1 }), timestamp: Date.now(), source: 'build' }])
+        setBottomTab('output')
       }
     })
 
@@ -230,11 +233,31 @@ function AppContent() {
       ])
     })
 
+    const unsubRunOut = api.onRunOutput?.((data) => {
+      setOutputMessages(prev => [...prev, {
+        type: data.type === 'stderr' ? 'warn' : 'info',
+        text: data.text,
+        timestamp: Date.now(),
+        source: 'build',
+      }])
+    })
+
+    const unsubRunComplete = api.onRunComplete?.((data) => {
+      setIsBuilding(false)
+      if (data.error) {
+        setOutputMessages(prev => [...prev, { type: 'error', text: data.error!, timestamp: Date.now(), source: 'build' }])
+      } else if (data.code === 0) {
+        setOutputMessages(prev => [...prev, { type: 'success', text: tRef.current('build.success'), timestamp: Date.now(), source: 'build' }])
+      }
+    })
+
     return () => {
       unsubBuildOut()
       unsubBuildComplete()
       unsubFlashOut()
       unsubFlashComplete()
+      unsubRunOut?.()
+      unsubRunComplete?.()
     }
   }, [])
 
@@ -244,6 +267,7 @@ function AppContent() {
   const saveAllDirtyRef = useRef<() => void>(() => {})
   const handleBuildRef = useRef<() => void>(() => {})
   const handleFlashRef = useRef<() => void>(() => {})
+  const handleDebugRef = useRef<() => void>(() => {})
   const handleTabCloseRef = useRef<(id: string) => void>(() => {})
 
   useEffect(() => {
@@ -265,13 +289,14 @@ function AppContent() {
       }),
       api.onMenuBuild(() => handleBuildRef.current()),
       api.onMenuFlash(() => handleFlashRef.current()),
+      api.onMenuDebug?.(() => handleDebugRef.current()),
     ]
-    return () => unsubs.forEach(u => u())
+    return () => unsubs.forEach(u => u?.())
   }, [])
 
   const addOutput = useCallback((msg: BuildMessage) => {
     setOutputMessages(prev => [...prev, msg])
-    setOutputVisible(true)
+    setBottomTab('output')
   }, [])
 
   const saveTab = useCallback(async (tabId: string) => {
@@ -428,6 +453,10 @@ function AppContent() {
     setFileDialog({ mode: 'create-file', parentDir })
   }, [])
 
+  const handleNewScript = useCallback((parentDir?: string) => {
+    setFileDialog({ mode: 'create-script', parentDir })
+  }, [])
+
   const handleNewFolder = useCallback((parentDir?: string) => {
     setFileDialog({ mode: 'create-folder', parentDir })
   }, [])
@@ -477,17 +506,33 @@ function AppContent() {
     const ok = await window.electronAPI!.createProjectFile(proj.dir, actualPath)
     if (!ok) throw new Error(`${relPath} already exists`)
 
+    let starter = ''
+    if (fileDialog.mode === 'create-script') {
+      const base = name.replace(/\.[^.]+$/, '')
+      const lower = name.toLowerCase()
+      if (lower.endsWith('.py')) {
+        starter = `#!/usr/bin/env python3\n"""${base} — EmbedIDE script."""\n\ndef main() -> None:\n    print("Hello from ${base}")\n\nif __name__ == "__main__":\n    main()\n`
+      } else if (lower.endsWith('.sh')) {
+        starter = `#!/usr/bin/env bash\n# ${base} — EmbedIDE script\nset -euo pipefail\necho "Hello from ${base}"\n`
+      } else if (lower.endsWith('.js') || lower.endsWith('.mjs')) {
+        starter = `#!/usr/bin/env node\n// ${base} — EmbedIDE script\nconsole.log('Hello from ${base}')\n`
+      }
+      if (starter) {
+        await window.electronAPI!.writeProjectFile(proj.dir, `${proj.dir}/${relPath}`, starter)
+      }
+    }
+
     setFileDialog(null)
     await refreshFiles()
 
     if (fileDialog.mode !== 'create-folder') {
       const filePath = `${proj.dir}/${relPath}`
       const ext = name.includes('.') ? name.split('.').pop() : ''
-      openFileTab({ id: filePath, name, language: ext }, '')
+      openFileTab({ id: filePath, name, language: ext }, starter)
       setActiveTabId(filePath)
     }
     addOutput({ type: 'info', text: tRef.current('fileOps.created', { name: relPath }), timestamp: Date.now(), source: 'build' })
-  }, [projectRef, fileDialog, refreshFiles, openFileTab, addOutput])
+  }, [fileDialog, refreshFiles, openFileTab, addOutput])
 
   const performDelete = useCallback(async (node: FileNode) => {
     const proj = projectRef.current
@@ -523,12 +568,28 @@ function AppContent() {
     const proj = projectRef.current
     if (!proj) { addOutput({ type: 'warn', text: tRef.current('build.noProject'), timestamp: Date.now(), source: 'build' }); return }
     await saveAllDirty()
-    setOutputMessages([{ type: 'info', text: `Building ${proj.name}...`, timestamp: Date.now(), source: 'build' }])
-    setOutputVisible(true)
-    setMemoryVisible(false)
+    const isScript = /^script-|^python$|^shell$/.test(proj.type)
+    setOutputMessages([{
+      type: 'info',
+      text: isScript
+        ? tRef.current('build.running', { name: proj.name })
+        : tRef.current('build.compiling', { name: proj.name }),
+      timestamp: Date.now(),
+      source: 'build',
+    }])
+    setBottomTab('output')
     setIsBuilding(true)
     try {
-      await window.electronAPI!.buildProject(proj.dir, proj.type)
+      const result = await window.electronAPI!.buildProject(proj.dir, proj.type)
+      if (result && result.success === false && (result as { error?: string }).error) {
+        addOutput({
+          type: 'error',
+          text: tRef.current('build.error', { msg: (result as { error?: string }).error || 'build failed' }),
+          timestamp: Date.now(),
+          source: 'build',
+        })
+        setIsBuilding(false)
+      }
     } catch (e: any) {
       addOutput({ type: 'error', text: tRef.current('build.error', { msg: e.message }), timestamp: Date.now(), source: 'build' })
       setIsBuilding(false)
@@ -538,6 +599,7 @@ function AppContent() {
   const handleCancelBuild = useCallback(async () => {
     buildCancelRef.current = true
     await window.electronAPI?.cancelBuild()
+    await window.electronAPI?.cancelDebug?.()
     setIsBuilding(false)
     addOutput({ type: 'warn', text: tRef.current('build.cancelled'), timestamp: Date.now(), source: 'build' })
   }, [addOutput])
@@ -545,17 +607,73 @@ function AppContent() {
   const handleFlash = useCallback(async () => {
     const proj = projectRef.current
     if (!proj) { addOutput({ type: 'warn', text: tRef.current('flash.noProject'), timestamp: Date.now(), source: 'flash' }); return }
+    if (/^script-|^python$|^shell$/.test(proj.type)) {
+      addOutput({ type: 'warn', text: tRef.current('flash.scriptsUnsupported'), timestamp: Date.now(), source: 'flash' })
+      return
+    }
     await saveAllDirty()
-    setOutputVisible(true)
-    setSerialVisible(false)
+    setBottomTab('output')
     addOutput({ type: 'info', text: tRef.current('flash.starting'), timestamp: Date.now(), source: 'flash' })
     try {
-      await window.electronAPI!.flashProject(proj.dir, proj.type, {
+      const result = await window.electronAPI!.flashProject(proj.dir, proj.type, {
         boardId: proj.boardId,
       })
+      if (result && result.success === false && (result as { error?: string }).error) {
+        addOutput({
+          type: 'error',
+          text: tRef.current('flash.error', { msg: (result as { error?: string }).error || 'flash failed' }),
+          timestamp: Date.now(),
+          source: 'flash',
+        })
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       addOutput({ type: 'error', text: tRef.current('flash.error', { msg }), timestamp: Date.now(), source: 'flash' })
+    }
+  }, [addOutput, saveAllDirty])
+
+  const handleDebug = useCallback(async () => {
+    const proj = projectRef.current
+    if (!proj) { addOutput({ type: 'warn', text: tRef.current('build.noProject'), timestamp: Date.now(), source: 'build' }); return }
+    await saveAllDirty()
+    setBottomTab('output')
+    setOutputMessages([{
+      type: 'info',
+      text: tRef.current('debug.starting', { name: proj.name }),
+      timestamp: Date.now(),
+      source: 'build',
+    }])
+    setIsBuilding(true)
+    try {
+      const active = activeTabIdRef.current
+      const filePath = active && active.startsWith(proj.dir) ? active : undefined
+      // Firmware: compile first so Debug always has a fresh ELF when possible
+      if (!/^script-|^python$|^shell$/.test(proj.type)) {
+        addOutput({ type: 'info', text: tRef.current('debug.buildingFirst'), timestamp: Date.now(), source: 'build' })
+        const built = await window.electronAPI!.buildProject(proj.dir, proj.type)
+        setBottomTab('output')
+        if (built && built.success === false) {
+          const err = (built as { error?: string }).error || tRef.current('build.failed', { code: -1 })
+          addOutput({ type: 'error', text: err, timestamp: Date.now(), source: 'build' })
+          setIsBuilding(false)
+          return
+        }
+      }
+      setBottomTab('output')
+      const result = await window.electronAPI!.startDebug(proj.dir, proj.type, {
+        boardId: proj.boardId,
+        filePath,
+      })
+      if (!result?.success && result?.error) {
+        addOutput({ type: 'error', text: result.error, timestamp: Date.now(), source: 'build' })
+      } else if (result?.success) {
+        addOutput({ type: 'success', text: tRef.current('debug.done'), timestamp: Date.now(), source: 'build' })
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      addOutput({ type: 'error', text: msg, timestamp: Date.now(), source: 'build' })
+    } finally {
+      setIsBuilding(false)
     }
   }, [addOutput, saveAllDirty])
 
@@ -606,6 +724,7 @@ function AppContent() {
   useEffect(() => { saveAllDirtyRef.current = saveAllDirty }, [saveAllDirty])
   useEffect(() => { handleBuildRef.current = handleBuild }, [handleBuild])
   useEffect(() => { handleFlashRef.current = handleFlash }, [handleFlash])
+  useEffect(() => { handleDebugRef.current = handleDebug }, [handleDebug])
   useEffect(() => { handleTabCloseRef.current = handleTabClose }, [handleTabClose])
 
   // Auto-save dirty tabs
@@ -626,6 +745,8 @@ function AppContent() {
       if (c && e.key === 's') { e.preventDefault(); handleSaveRef.current() }
       if (c && e.key === 'b' && !e.shiftKey) { e.preventDefault(); handleBuildRef.current() }
       if (c && e.shiftKey && e.key === 'B') { e.preventDefault(); handleFlashRef.current() }
+      if (e.key === 'F5') { e.preventDefault(); handleDebugRef.current() }
+      if (e.key === 'F7') { e.preventDefault(); handleBuildRef.current() }
       if (c && e.key === 'w' && activeTabIdRef.current) {
         e.preventDefault()
         handleTabCloseRef.current(activeTabIdRef.current)
@@ -641,8 +762,8 @@ function AppContent() {
       if (c && e.key === ',') { e.preventDefault(); setSettingsOpen(true) }
       if (c && e.key === 'n') { e.preventDefault(); setProjectDialogOpen(true) }
       if (c && e.key === 'o') { e.preventDefault(); handleOpenProjectRef.current() }
-      if (c && e.key === 'm') { e.preventDefault(); setMemoryVisible(v => !v) }
-      if (c && e.key === 'p') { e.preventDefault(); setPeripheralVisible(v => !v) }
+      if (c && e.key === 'm') { e.preventDefault(); setBottomTab(v => v === 'memory' ? null : 'memory') }
+      if (c && e.key === 'p') { e.preventDefault(); setBottomTab(v => v === 'peripheral' ? null : 'peripheral') }
       if (c && e.shiftKey && e.key === 'E') { e.preventDefault(); setShowLeftPanel(v => !v) }
       if (c && e.shiftKey && e.key === 'A') {
         e.preventDefault()
@@ -665,10 +786,10 @@ function AppContent() {
             onCancelBuild={handleCancelBuild}
             onFlash={handleFlash}
             isBuilding={isBuilding}
-            onDebug={() => addOutput({ type: 'info', text: t('common.info'), timestamp: Date.now(), source: 'build' })}
+            onDebug={handleDebug}
             onOpenSettings={() => setSettingsOpen(true)}
             onNewProject={() => setProjectDialogOpen(true)}
-            onSerial={() => setSerialVisible(v => !v)}
+            onSerial={() => setBottomTab(v => v === 'serial' ? null : 'serial')}
             onOpenProject={handleOpenProject}
             leftPanelVisible={showLeftPanel}
             rightPanelVisible={showRightPanel}
@@ -690,6 +811,7 @@ function AppContent() {
                 activeFileId={activeTabId}
                 onNewFile={handleNewFile}
                 onNewFolder={handleNewFolder}
+                onNewScript={handleNewScript}
                 onDelete={handleDelete}
                 onRename={handleRename}
                 onOpenProject={handleOpenProject}
@@ -708,34 +830,36 @@ function AppContent() {
                 editorSettings={editorSettings}
                 fileDiagnostics={activeFileDiagnostics}
               />
-              <SlidePanel visible={memoryVisible || peripheralVisible || serialVisible || outputVisible} side="bottom" height={220}>
+              <SlidePanel visible={bottomTab != null} side="bottom" height={240}>
                 <div className="app-bottom-panels">
                   <div className="app-bottom-tabs">
-                    <button className={`app-bottom-tab ${outputVisible ? 'active' : ''}`} onClick={() => { setOutputVisible(true); setSerialVisible(false) }}>{t('output.title')}</button>
-                    <button className={`app-bottom-tab ${serialVisible ? 'active' : ''}`} onClick={() => { setSerialVisible(true); setOutputVisible(false) }}>{t('serial.title')}</button>
-                    <button className={`app-bottom-tab ${memoryVisible ? 'active' : ''}`} onClick={() => setMemoryVisible(v => !v)}>{t('memory.title')}</button>
-                    <button className={`app-bottom-tab ${peripheralVisible ? 'active' : ''}`} onClick={() => setPeripheralVisible(v => !v)}>{t('peripheral.title')}</button>
+                    <button className={`app-bottom-tab ${bottomTab === 'output' ? 'active' : ''}`} onClick={() => setBottomTab('output')}>{t('output.title')}</button>
+                    <button className={`app-bottom-tab ${bottomTab === 'serial' ? 'active' : ''}`} onClick={() => setBottomTab('serial')}>{t('serial.title')}</button>
+                    <button className={`app-bottom-tab ${bottomTab === 'memory' ? 'active' : ''}`} onClick={() => setBottomTab('memory')}>{t('memory.title')}</button>
+                    <button className={`app-bottom-tab ${bottomTab === 'peripheral' ? 'active' : ''}`} onClick={() => setBottomTab('peripheral')}>{t('peripheral.title')}</button>
                   </div>
-                  {memoryVisible && (
-                    <MemoryAnalyzer
-                      flashUsed={memoryUsage.flashUsed}
-                      flashTotal={memoryUsage.flashTotal}
-                      ramUsed={memoryUsage.ramUsed}
-                      ramTotal={memoryUsage.ramTotal}
-                    />
-                  )}
-                  {peripheralVisible && (
-                    <PeripheralViewer
-                      boardName={project?.boardName}
-                      peripheralNames={project?.peripherals || []}
-                    />
-                  )}
-                  <div className="app-bottom-serial" style={{ display: serialVisible ? undefined : 'none' }}>
-                    <SerialMonitor defaultBaud={editorSettings.defaultBaud} />
+                  <div className="app-bottom-body">
+                    {bottomTab === 'memory' && (
+                      <MemoryAnalyzer
+                        flashUsed={memoryUsage.flashUsed}
+                        flashTotal={memoryUsage.flashTotal}
+                        ramUsed={memoryUsage.ramUsed}
+                        ramTotal={memoryUsage.ramTotal}
+                      />
+                    )}
+                    {bottomTab === 'peripheral' && (
+                      <PeripheralViewer
+                        boardName={project?.boardName}
+                        peripheralNames={project?.peripherals || []}
+                      />
+                    )}
+                    <div className="app-bottom-serial" style={{ display: bottomTab === 'serial' ? undefined : 'none' }}>
+                      <SerialMonitor defaultBaud={editorSettings.defaultBaud} />
+                    </div>
+                    {bottomTab === 'output' && (
+                      <OutputPanel messages={outputMessages} onClose={() => setBottomTab(null)} />
+                    )}
                   </div>
-                  {outputVisible && (
-                    <OutputPanel messages={outputMessages} onClose={() => setOutputVisible(false)} />
-                  )}
                 </div>
               </SlidePanel>
             </div>

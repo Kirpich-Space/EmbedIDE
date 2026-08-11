@@ -1,11 +1,13 @@
 .output-panel {
   background: var(--output-bg);
-  border-top: var(--panel-edge);
+  color: var(--text);
+  border-top: none;
   display: flex;
   flex-direction: column;
-  max-height: 220px;
-  min-height: 110px;
-  animation: slideInUp var(--dur-med, 220ms) var(--ease-spring, ease-out);
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  animation: none;
 }
 
 .output-header {

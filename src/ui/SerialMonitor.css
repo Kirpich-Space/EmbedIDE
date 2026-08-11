@@ -1,11 +1,13 @@
 .serial-monitor {
   background: var(--output-bg);
-  border-top: var(--panel-edge);
+  color: var(--text);
+  border-top: none;
   display: flex;
   flex-direction: column;
-  max-height: 260px;
-  min-height: 140px;
-  animation: slideInUp var(--dur-med, 220ms) var(--ease-spring, ease-out);
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  animation: none;
 }
 
 .serial-header {

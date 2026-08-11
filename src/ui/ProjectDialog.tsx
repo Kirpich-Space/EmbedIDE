@@ -26,9 +26,12 @@ const TYPE_ICONS: Record<string, string> = {
   'os-rust': 'Rs',
   'os-asm': 'Asm',
   'os-zig': 'Zig',
+  'script-python': 'Py',
+  'script-bash': 'Sh',
+  'script-js': 'JS',
 }
 
-const CATEGORY_ORDER = ['firmware', 'driver', 'os'] as const
+const CATEGORY_ORDER = ['firmware', 'driver', 'os', 'script'] as const
 
 type TemplateItem = {
   id: string
@@ -133,6 +136,7 @@ export function ProjectDialog({ onCreate, onClose }: ProjectDialogProps) {
     if (cat === 'firmware') return t('projectDialog.catFirmware')
     if (cat === 'driver') return t('projectDialog.catDrivers')
     if (cat === 'os') return t('projectDialog.catOs')
+    if (cat === 'script') return t('projectDialog.catScript')
     return cat
   }
 

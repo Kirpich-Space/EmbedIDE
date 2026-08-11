@@ -1,12 +1,19 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
-const { detectToolchains, buildProject, flashBoard, cancelBuild } = require('./toolchain');
+const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession } = require('./toolchain');
+const { prependBundledToolchainToPath, getBundledStatus } = require('./bundledToolchain');
 const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
 const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, getTemplateList, readProjectMeta } = require('./project');
 const { listBoards, getBoard, getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const fs = require('fs');
 
 app.disableHardwareAcceleration();
+
+try {
+  prependBundledToolchainToPath();
+} catch (e) {
+  console.warn('Bundled toolchain PATH setup failed:', e.message);
+}
 
 let mainWindow;
 let serialConnection = null;
@@ -133,9 +140,13 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
-          label: 'Build',
+          label: 'Build / Compile',
           accelerator: 'CmdOrCtrl+B',
           click: () => mainWindow?.webContents.send('menu:build'),
+        },
+        {
+          label: 'Debug',
+          click: () => mainWindow?.webContents.send('menu:debug'),
         },
         {
           label: 'Flash',
@@ -145,6 +156,26 @@ function buildAppMenu() {
         { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'reload' },
+      ],
+    },
+    {
+      label: 'Run',
+      submenu: [
+        {
+          label: 'Build / Compile',
+          accelerator: 'F7',
+          click: () => mainWindow?.webContents.send('menu:build'),
+        },
+        {
+          label: 'Start Debugging',
+          accelerator: 'F5',
+          click: () => mainWindow?.webContents.send('menu:debug'),
+        },
+        {
+          label: 'Flash to Device',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => mainWindow?.webContents.send('menu:flash'),
+        },
       ],
     },
     {
@@ -336,6 +367,47 @@ ipcMain.handle('project:flash', async (_e, projectDir, projectType, config) => {
     mainWindow?.webContents.send('flash:complete', { code, error: err.message });
     return { success: false, error: err.message, output };
   }
+});
+
+ipcMain.handle('project:run-script', async (_e, projectDir, projectType, filePath) => {
+  const output = [];
+  const onOutput = (data) => {
+    output.push(data);
+    mainWindow?.webContents.send('run:output', data);
+  };
+  try {
+    const result = await runScript(projectDir, projectType, filePath || null, onOutput);
+    mainWindow?.webContents.send('run:complete', { code: result.code });
+    return { success: true, output };
+  } catch (err) {
+    const codeMatch = /code (-?\d+)/.exec(err.message || '')
+    const code = codeMatch ? Number(codeMatch[1]) : -1
+    mainWindow?.webContents.send('run:complete', { code, error: err.message });
+    return { success: false, error: err.message, output };
+  }
+});
+
+ipcMain.handle('project:debug', async (_e, projectDir, projectType, config) => {
+  const output = [];
+  const onOutput = (data) => {
+    output.push(data);
+    mainWindow?.webContents.send('run:output', data);
+  };
+  try {
+    const result = await startDebugSession(projectDir, projectType, config || {}, onOutput);
+    mainWindow?.webContents.send('run:complete', { code: result.code ?? 0 });
+    return { success: true, output };
+  } catch (err) {
+    const codeMatch = /code (-?\d+)/.exec(err.message || '')
+    const code = codeMatch ? Number(codeMatch[1]) : -1
+    mainWindow?.webContents.send('run:complete', { code, error: err.message });
+    return { success: false, error: err.message, output };
+  }
+});
+
+ipcMain.handle('project:cancel-debug', () => {
+  cancelDebugSession();
+  return true;
 });
 
 // Serial

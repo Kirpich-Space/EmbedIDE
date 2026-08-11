@@ -3,8 +3,10 @@
   background: transparent;
   border: none;
   border-radius: var(--radius-md, 8px);
-  margin: 8px;
-  overflow: hidden;
+  margin: 0;
+  overflow: auto;
+  flex: 1;
+  color: var(--text);
 }
 
 .memory-analyzer .panel-header {
@@ -79,8 +81,10 @@
   background: transparent;
   border: none;
   border-radius: var(--radius-md, 8px);
-  margin: 8px;
-  overflow: hidden;
+  margin: 0;
+  flex: 1;
+  overflow: auto;
+  color: var(--text);
 }
 
 .peripheral-viewer .panel-header {
