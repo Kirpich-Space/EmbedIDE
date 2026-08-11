@@ -1,6 +1,6 @@
 {
   "name": "embed-ide",
-  "version": "2.0.4",
+  "version": "2.5.0",
   "private": false,
   "description": "EmbedIDE — Offline-first engineering IDE for embedded flight computers",
   "author": {

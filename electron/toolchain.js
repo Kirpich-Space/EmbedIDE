@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { readProjectMeta } = require('./project');
-const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot } = require('./bundledToolchain');
+const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot, getBundledBinDirs } = require('./bundledToolchain');
 const execFileAsync = promisify(execFile);
 
 let currentBuildProc = null;
@@ -22,6 +22,36 @@ function spawnTool(cmd, args, options = {}) {
     ...options,
     env: toolEnv(options.env),
     shell: options.shell === true,
+  });
+}
+
+/** Env without bundled ARM toolchain — for host C/C++/ASM/Rust scripts. */
+function hostToolEnv(extra = {}) {
+  const bins = new Set(getBundledBinDirs().map(d => path.resolve(d)));
+  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const raw = process.env[pathKey] || process.env.PATH || '';
+  const filtered = raw
+    .split(sep)
+    .filter(p => p && !bins.has(path.resolve(p)))
+    .join(sep);
+  return { ...process.env, ...extra, [pathKey]: filtered };
+}
+
+function spawnHost(cmd, args, options = {}) {
+  return spawn(cmd, args, {
+    ...options,
+    env: hostToolEnv(options.env),
+    shell: options.shell === true,
+  });
+}
+
+async function execHost(cmd, args, options = {}) {
+  return execFileAsync(cmd, args, {
+    timeout: 4000,
+    maxBuffer: 64 * 1024,
+    ...options,
+    env: hostToolEnv(options.env),
   });
 }
 
@@ -194,6 +224,11 @@ function isMakeProject(projectType) {
 
 function isScriptProject(projectType) {
   return (
+    projectType === 'script-c' ||
+    projectType === 'script-cpp' ||
+    projectType === 'script-rust' ||
+    projectType === 'script-asm' ||
+    // legacy
     projectType === 'script-python' ||
     projectType === 'script-bash' ||
     projectType === 'script-js' ||
@@ -212,6 +247,10 @@ function scriptEntry(projectDir, projectType, filePath) {
     }
   } catch {}
   const candidates = {
+    'script-c': ['main.c', 'src/main.c'],
+    'script-cpp': ['main.cpp', 'src/main.cpp'],
+    'script-rust': ['main.rs', 'src/main.rs'],
+    'script-asm': ['main.S', 'main.s', 'src/main.S', 'src/main.s'],
     'script-python': ['main.py', 'src/main.py'],
     python: ['main.py', 'src/main.py'],
     'script-bash': ['main.sh', 'src/main.sh', 'run.sh'],
@@ -222,8 +261,11 @@ function scriptEntry(projectDir, projectType, filePath) {
     const p = path.join(projectDir, rel);
     if (fs.existsSync(p)) return p;
   }
-  // Fallback: first matching extension in project root
   const exts = {
+    'script-c': ['.c'],
+    'script-cpp': ['.cpp', '.cc', '.cxx'],
+    'script-rust': ['.rs'],
+    'script-asm': ['.s', '.S'],
     'script-python': ['.py'],
     python: ['.py'],
     'script-bash': ['.sh'],
@@ -233,7 +275,7 @@ function scriptEntry(projectDir, projectType, filePath) {
   try {
     for (const name of fs.readdirSync(projectDir)) {
       const lower = name.toLowerCase();
-      if ((exts[projectType] || []).some(e => lower.endsWith(e))) {
+      if ((exts[projectType] || []).some(e => lower.endsWith(e.toLowerCase()))) {
         return path.join(projectDir, name);
       }
     }
@@ -241,7 +283,46 @@ function scriptEntry(projectDir, projectType, filePath) {
   return null;
 }
 
-function scriptCommand(projectType, entry) {
+async function resolveHostCompiler(kind) {
+  const lists = {
+    c: ['gcc', 'cc', 'clang'],
+    cpp: ['g++', 'c++', 'clang++'],
+    asm: ['gcc', 'cc', 'clang'],
+    rust: ['rustc'],
+  };
+  for (const cmd of lists[kind] || []) {
+    try {
+      await execHost(cmd, ['--version'], { timeout: 4000 });
+      return cmd;
+    } catch {}
+  }
+  return null;
+}
+
+function scriptBinaryPath(projectDir, entry) {
+  const base = path.basename(entry, path.extname(entry));
+  const outDir = path.join(projectDir, 'build');
+  const exe = process.platform === 'win32' ? `${base}.exe` : base;
+  return { outDir, outPath: path.join(outDir, exe) };
+}
+
+function scriptCompileSpec(projectType, entry, outPath) {
+  if (projectType === 'script-c') {
+    return { kind: 'c', args: ['-O2', '-g', '-Wall', entry, '-o', outPath] };
+  }
+  if (projectType === 'script-cpp') {
+    return { kind: 'cpp', args: ['-O2', '-g', '-Wall', entry, '-o', outPath] };
+  }
+  if (projectType === 'script-asm') {
+    return { kind: 'asm', args: ['-O2', '-g', entry, '-o', outPath] };
+  }
+  if (projectType === 'script-rust') {
+    return { kind: 'rust', args: ['-O', '-g', entry, '-o', outPath] };
+  }
+  return null;
+}
+
+function legacyScriptCommand(projectType, entry) {
   if (projectType === 'script-python' || projectType === 'python') {
     return { cmd: 'python', args: [entry] };
   }
@@ -252,6 +333,44 @@ function scriptCommand(projectType, entry) {
     return { cmd: 'node', args: [entry] };
   }
   return null;
+}
+
+function runProcess(cmd, args, cwd, onOutput, { host = false } = {}) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (currentRunProc) {
+        try { currentRunProc.kill('SIGTERM'); } catch {}
+        currentRunProc = null;
+      }
+      const proc = host
+        ? spawnHost(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawnTool(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      currentRunProc = proc;
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (data) => {
+        const text = data.toString();
+        stdout += text;
+        onOutput?.({ type: 'stdout', text });
+      });
+      proc.stderr.on('data', (data) => {
+        const text = data.toString();
+        stderr += text;
+        onOutput?.({ type: 'stderr', text });
+      });
+      proc.on('close', (code) => {
+        currentRunProc = null;
+        resolve({ code: code ?? 1, stdout, stderr });
+      });
+      proc.on('error', (err) => {
+        currentRunProc = null;
+        reject(new Error(`${cmd} not found or failed to start: ${err.message}`));
+      });
+    } catch (err) {
+      currentRunProc = null;
+      reject(err);
+    }
+  });
 }
 
 let currentRunProc = null;
@@ -391,50 +510,54 @@ function runScript(projectDir, projectType, filePath, onOutput) {
   return new Promise(async (resolve, reject) => {
     const entry = scriptEntry(projectDir, projectType, filePath);
     if (!entry) {
-      reject(new Error('No script entry found (main.py / main.sh / main.js).'));
+      reject(new Error('No script entry found (.c / .cpp / .rs / .S).'));
       return;
     }
-    const spec = scriptCommand(projectType, entry);
-    if (!spec) {
+
+    const legacy = legacyScriptCommand(projectType, entry);
+    if (legacy) {
+      onOutput?.({ type: 'stdout', text: `Running ${path.basename(entry)}...\n` });
+      try {
+        const result = await runProcess(legacy.cmd, legacy.args, projectDir, onOutput);
+        if (result.code === 0) resolve(result);
+        else reject(new Error(`Script exited with code ${result.code}`));
+      } catch (err) {
+        reject(err);
+      }
+      return;
+    }
+
+    const { outDir, outPath } = scriptBinaryPath(projectDir, entry);
+    const compile = scriptCompileSpec(projectType, entry, outPath);
+    if (!compile) {
       reject(new Error(`Unsupported script type: ${projectType}`));
       return;
     }
 
-    onOutput?.({ type: 'stdout', text: `Running ${path.basename(entry)}...\n` });
-
     try {
-      if (currentRunProc) {
-        try { currentRunProc.kill('SIGTERM'); } catch {}
-        currentRunProc = null;
+      fs.mkdirSync(outDir, { recursive: true });
+      const compiler = await resolveHostCompiler(compile.kind);
+      if (!compiler) {
+        const hint =
+          compile.kind === 'rust'
+            ? 'Install rustc (rustup): https://rustup.rs'
+            : 'Install a host C/C++ toolchain (gcc/clang).';
+        reject(new Error(`Host compiler not found for ${projectType}. ${hint}`));
+        return;
       }
-      const proc = spawnTool(spec.cmd, spec.args, {
-        cwd: projectDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      currentRunProc = proc;
-      let stdout = '';
-      let stderr = '';
-      proc.stdout.on('data', (data) => {
-        const text = data.toString();
-        stdout += text;
-        onOutput?.({ type: 'stdout', text });
-      });
-      proc.stderr.on('data', (data) => {
-        const text = data.toString();
-        stderr += text;
-        onOutput?.({ type: 'stderr', text });
-      });
-      proc.on('close', (code) => {
-        currentRunProc = null;
-        if (code === 0) resolve({ code, stdout, stderr });
-        else reject(new Error(`Script exited with code ${code}`));
-      });
-      proc.on('error', (err) => {
-        currentRunProc = null;
-        reject(new Error(`${spec.cmd} not found or failed to start: ${err.message}`));
-      });
+
+      onOutput?.({ type: 'stdout', text: `Compiling ${path.basename(entry)} with ${compiler}...\n` });
+      const built = await runProcess(compiler, compile.args, projectDir, onOutput, { host: true });
+      if (built.code !== 0) {
+        reject(new Error(`Compile failed with code ${built.code}`));
+        return;
+      }
+
+      onOutput?.({ type: 'stdout', text: `Running ${path.basename(outPath)}...\n` });
+      const result = await runProcess(outPath, [], projectDir, onOutput, { host: true });
+      if (result.code === 0) resolve(result);
+      else reject(new Error(`Script exited with code ${result.code}`));
     } catch (err) {
-      currentRunProc = null;
       reject(err);
     }
   });

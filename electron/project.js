@@ -436,39 +436,67 @@ make flash  # OpenOCD
 
 function buildScriptTemplates() {
   return {
-    'script-python': {
-      name: 'Script — Python (single file)',
-      ext: '.py',
+    'script-c': {
+      name: 'Script — C (single file)',
+      ext: '.c',
       files: {
-        '$entry$': (name) => `#!/usr/bin/env python3
-"""${name} — EmbedIDE single-file script. Run with Build / Debug."""
+        '$entry$': (name) => `#include <stdio.h>
 
-def main() -> None:
-    print("Hello from ${name}")
-
-if __name__ == "__main__":
-    main()
+/* ${name} — EmbedIDE single-file C. Build / Debug compiles and runs on host. */
+int main(void) {
+    printf("Hello from ${name}\\n");
+    return 0;
+}
 `,
       },
     },
-    'script-bash': {
-      name: 'Script — Bash (single file)',
-      ext: '.sh',
+    'script-cpp': {
+      name: 'Script — C++ (single file)',
+      ext: '.cpp',
       files: {
-        '$entry$': (name) => `#!/usr/bin/env bash
-# ${name} — EmbedIDE single-file script. Run with Build / Debug.
-set -euo pipefail
-echo "Hello from ${name}"
+        '$entry$': (name) => `#include <iostream>
+
+/* ${name} — EmbedIDE single-file C++. Build / Debug compiles and runs on host. */
+int main() {
+    std::cout << "Hello from ${name}\\n";
+    return 0;
+}
 `,
       },
     },
-    'script-js': {
-      name: 'Script — JavaScript (single file)',
-      ext: '.js',
+    'script-rust': {
+      name: 'Script — Rust (single file)',
+      ext: '.rs',
       files: {
-        '$entry$': (name) => `#!/usr/bin/env node
-// ${name} — EmbedIDE single-file script. Run with Build / Debug.
-console.log('Hello from ${name}')
+        '$entry$': (name) => `// ${name} — EmbedIDE single-file Rust. Build / Debug compiles and runs on host.
+fn main() {
+    println!("Hello from ${name}");
+}
+`,
+      },
+    },
+    'script-asm': {
+      name: 'Script — Assembler (single file)',
+      ext: '.S',
+      files: {
+        '$entry$': (name) => `/* ${name} — EmbedIDE single-file ASM (host). Build / Debug assembles and runs. */
+#if defined(__APPLE__)
+#  define CNAME(x) _##x
+#else
+#  define CNAME(x) x
+#endif
+
+    .section .rodata
+msg:
+    .asciz "Hello from ${name}\\n"
+
+    .text
+    .globl CNAME(main)
+CNAME(main):
+    lea     msg(%rip), %rdi
+    call    CNAME(puts)
+    xor     %eax, %eax
+    ret
 `,
       },
     },
@@ -1257,9 +1285,10 @@ const TEMPLATES_META = {
   'os-rust': { name: 'OS / Kernel — Rust', ext: '.rs', category: 'os', needsBoard: true, lang: 'rust' },
   'os-asm': { name: 'OS / Kernel — ASM', ext: '.S', category: 'os', needsBoard: true, lang: 'asm' },
   'os-zig': { name: 'OS / Kernel — Zig', ext: '.zig', category: 'os', needsBoard: true, lang: 'zig' },
-  'script-python': { name: 'Script — Python (1 file)', ext: '.py', category: 'script', needsBoard: false, lang: 'python' },
-  'script-bash': { name: 'Script — Bash (1 file)', ext: '.sh', category: 'script', needsBoard: false, lang: 'bash' },
-  'script-js': { name: 'Script — JavaScript (1 file)', ext: '.js', category: 'script', needsBoard: false, lang: 'javascript' },
+  'script-c': { name: 'Script — C (1 file)', ext: '.c', category: 'script', needsBoard: false, lang: 'c' },
+  'script-cpp': { name: 'Script — C++ (1 file)', ext: '.cpp', category: 'script', needsBoard: false, lang: 'cpp' },
+  'script-rust': { name: 'Script — Rust (1 file)', ext: '.rs', category: 'script', needsBoard: false, lang: 'rust' },
+  'script-asm': { name: 'Script — ASM (1 file)', ext: '.S', category: 'script', needsBoard: false, lang: 'asm' },
 }
 
 function readProjectMeta(projectDir) {
@@ -1316,9 +1345,6 @@ function createProject(rootDir, name, type, boardId = DEFAULT_BOARD_ID) {
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     const content = contentFn(name)
     fs.writeFileSync(fullPath, content, 'utf8');
-    if (rel.endsWith('.sh') || rel.endsWith('.py')) {
-      try { fs.chmodSync(fullPath, 0o755) } catch {}
-    }
   }
 
   const meta = {

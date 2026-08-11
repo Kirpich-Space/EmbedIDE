@@ -26,9 +26,10 @@ const TYPE_ICONS: Record<string, string> = {
   'os-rust': 'Rs',
   'os-asm': 'Asm',
   'os-zig': 'Zig',
-  'script-python': 'Py',
-  'script-bash': 'Sh',
-  'script-js': 'JS',
+  'script-c': 'C',
+  'script-cpp': 'C++',
+  'script-rust': 'Rs',
+  'script-asm': 'Asm',
 }
 
 const CATEGORY_ORDER = ['firmware', 'driver', 'os', 'script'] as const

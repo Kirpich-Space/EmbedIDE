@@ -28,16 +28,17 @@ const EXTENSIONS: Record<string, string[]> = {
   'os-zig': ['.zig'],
   driver: ['.c', '.h'],
   os: ['.c', '.h'],
-  'script-python': ['.py'],
-  'script-bash': ['.sh'],
-  'script-js': ['.js'],
+  'script-c': ['.c'],
+  'script-cpp': ['.cpp'],
+  'script-rust': ['.rs'],
+  'script-asm': ['.S', '.s'],
 }
 
-const SCRIPT_EXTS = ['.py', '.sh', '.js'] as const
+const SCRIPT_EXTS = ['.c', '.cpp', '.rs', '.S'] as const
 
 export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit, onClose }: FileDialogProps) {
   const { t } = useTranslation()
-  const [name, setName] = useState(initialName || (mode === 'create-script' ? 'script.py' : ''))
+  const [name, setName] = useState(initialName || (mode === 'create-script' ? 'script.c' : ''))
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -60,8 +61,11 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
   const handleSubmit = useCallback(async () => {
     if (!name.trim() || loadingRef.current) return
     let finalName = name.trim()
-    if (mode === 'create-script' && !SCRIPT_EXTS.some(e => finalName.toLowerCase().endsWith(e))) {
-      finalName += '.py'
+    if (mode === 'create-script' && !SCRIPT_EXTS.some(e => {
+      const lower = finalName.toLowerCase()
+      return lower.endsWith(e.toLowerCase())
+    })) {
+      finalName += '.c'
     }
     loadingRef.current = true
     setLoading(true)
@@ -133,7 +137,7 @@ export function FileDialog({ mode, initialName, parentDir, projectType, onSubmit
               {extensions.map(ext => (
                 <button
                   key={ext}
-                  className={`dialog-ext-btn ${name.toLowerCase().endsWith(ext) ? 'dialog-ext-active' : ''}`}
+                  className={`dialog-ext-btn ${name.toLowerCase().endsWith(ext.toLowerCase()) ? 'dialog-ext-active' : ''}`}
                   onClick={() => appendExt(ext)}
                 >
                   {ext}

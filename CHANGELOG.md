@@ -1,13 +1,18 @@
-## 2.0.4 — 2026-08-11
+## 2.5.0 — 2026-08-11
 
 ### Added
-- **Bundled toolchain**: ARM GCC, OpenOCD, Zig, make (via `npm run toolchain:fetch`; packed into Linux/Windows/macOS builds)
-- **Single-file scripts**: New Project script templates and explorer “New Script” (`.py` / `.sh` / `.js`)
+- **Single-file host scripts**: C / C++ / Rust / ASM (one source file; Build/Debug compiles and runs on the host)
+- **Bundled toolchain**: ARM GCC, OpenOCD, Zig, make (via `npm run toolchain:fetch`; packed into Linux/Windows/macOS builds when present)
 - AI file-edit **confirmation dialog**; Debug (F5) compiles then OpenOCD+GDB; Build/Run menu
 
 ### Fixed
 - Flash always reported “OpenOCD not found” (async detect not awaited)
 - Bottom Output/Serial/Memory/Peripheral panels stacking as a black strip after build
+- Host script builds no longer pick up the bundled ARM `as` from PATH
+
+## 2.0.4 — 2026-08-11
+
+Superseded by 2.5.0 (tagged but not published as a full release).
 
 ## 2.0.3 — 2026-08-11
 

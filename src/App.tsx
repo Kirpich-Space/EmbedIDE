@@ -510,12 +510,14 @@ function AppContent() {
     if (fileDialog.mode === 'create-script') {
       const base = name.replace(/\.[^.]+$/, '')
       const lower = name.toLowerCase()
-      if (lower.endsWith('.py')) {
-        starter = `#!/usr/bin/env python3\n"""${base} — EmbedIDE script."""\n\ndef main() -> None:\n    print("Hello from ${base}")\n\nif __name__ == "__main__":\n    main()\n`
-      } else if (lower.endsWith('.sh')) {
-        starter = `#!/usr/bin/env bash\n# ${base} — EmbedIDE script\nset -euo pipefail\necho "Hello from ${base}"\n`
-      } else if (lower.endsWith('.js') || lower.endsWith('.mjs')) {
-        starter = `#!/usr/bin/env node\n// ${base} — EmbedIDE script\nconsole.log('Hello from ${base}')\n`
+      if (lower.endsWith('.c')) {
+        starter = `#include <stdio.h>\n\nint main(void) {\n    printf("Hello from ${base}\\n");\n    return 0;\n}\n`
+      } else if (lower.endsWith('.cpp') || lower.endsWith('.cc') || lower.endsWith('.cxx')) {
+        starter = `#include <iostream>\n\nint main() {\n    std::cout << "Hello from ${base}\\n";\n    return 0;\n}\n`
+      } else if (lower.endsWith('.rs')) {
+        starter = `fn main() {\n    println!("Hello from ${base}");\n}\n`
+      } else if (lower.endsWith('.s')) {
+        starter = `#if defined(__APPLE__)\n#  define CNAME(x) _##x\n#else\n#  define CNAME(x) x\n#endif\n\n    .section .rodata\nmsg:\n    .asciz "Hello from ${base}\\n"\n\n    .text\n    .globl CNAME(main)\nCNAME(main):\n    lea     msg(%rip), %rdi\n    call    CNAME(puts)\n    xor     %eax, %eax\n    ret\n`
       }
       if (starter) {
         await window.electronAPI!.writeProjectFile(proj.dir, `${proj.dir}/${relPath}`, starter)
