@@ -112,22 +112,95 @@ for name in gcc openocd zig; do
 done
 
 echo ""
-echo "[host tools]"
-if command -v make >/dev/null 2>&1; then
-  cp "$(command -v make)" "$BIN/make"
-  chmod a+x "$BIN/make"
-  echo "  ✓ make"
-elif [[ -x "$(dirname "$0")/bootstrap/linux-x64/make" ]]; then
-  cp "$(dirname "$0")/bootstrap/linux-x64/make" "$BIN/make"
-  chmod a+x "$BIN/make"
-  echo "  ✓ make (bootstrap)"
-elif [[ -x "$(dirname "$0")/../bootstrap/linux-x64/make" ]]; then
-  cp "$(dirname "$0")/../bootstrap/linux-x64/make" "$BIN/make"
-  chmod a+x "$BIN/make"
-  echo "  ✓ make (bootstrap)"
-else
-  echo "  ! make not found — install make from your distro if builds fail"
-fi
+echo "[make]"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+ensure_make() {
+  if [[ -x "$BIN/make" ]] && "$BIN/make" --version >/dev/null 2>&1; then
+    echo "  = make already present"
+    return 0
+  fi
+
+  # 1) Portable bootstrap shipped in the package
+  local cand
+  for cand in \
+    "$SCRIPT_DIR/bootstrap/linux-x64/make" \
+    "$SCRIPT_DIR/bootstrap/make" \
+    "$SCRIPT_DIR/../bootstrap/linux-x64/make" \
+    "$SCRIPT_DIR/../bootstrap/make" \
+    "${EMBEDIDE_BOOTSTRAP_MAKE:-}"
+  do
+    [[ -n "$cand" && -x "$cand" ]] || continue
+    cp "$cand" "$BIN/make"
+    chmod a+x "$BIN/make"
+    if "$BIN/make" --version >/dev/null 2>&1; then
+      echo "  ✓ make (bootstrap)"
+      return 0
+    fi
+  done
+
+  # 2) Host make (real binary, not our incomplete dest)
+  if command -v make >/dev/null 2>&1; then
+    local host
+    host="$(command -v make)"
+    if [[ "$(realpath "$host" 2>/dev/null || echo "$host")" != "$(realpath "$BIN/make" 2>/dev/null || echo "")" ]]; then
+      cp "$host" "$BIN/make" 2>/dev/null || true
+      chmod a+x "$BIN/make" 2>/dev/null || true
+      if "$BIN/make" --version >/dev/null 2>&1; then
+        echo "  ✓ make (host)"
+        return 0
+      fi
+    fi
+  fi
+
+  # 3) Download GNU make and bootstrap-build with zig (already installed) or cc
+  echo "  ↓ downloading GNU make 4.4.1 source…"
+  local srcTar="$CACHE/make-4.4.1.tar.gz"
+  local buildDir="$CACHE/make-4.4.1-build"
+  if [[ ! -f "$srcTar" ]] || [[ "$(stat -c%s "$srcTar" 2>/dev/null || echo 0)" -lt 1000 ]]; then
+    download "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz" "$srcTar"
+  fi
+  rm -rf "$buildDir"
+  mkdir -p "$buildDir"
+  tar -xzf "$srcTar" -C "$buildDir" --strip-components=1
+
+  local zig=""
+  for cand in "$BIN/zig" "$DEST/zig/bin/zig"; do
+    [[ -x "$cand" ]] && zig="$cand" && break
+  done
+  local cc="cc"
+  if [[ -n "$zig" ]]; then
+    cc="$zig cc"
+    echo "  ✦ building make with zig cc…"
+  elif command -v gcc >/dev/null 2>&1; then
+    cc="gcc"
+    echo "  ✦ building make with gcc…"
+  elif command -v clang >/dev/null 2>&1; then
+    cc="clang"
+    echo "  ✦ building make with clang…"
+  else
+    echo "  ! no compiler to build make" >&2
+    return 1
+  fi
+
+  (
+    cd "$buildDir"
+    # build.sh bootstraps a minimal make without requiring make
+    CC="$cc" sh build.sh
+    if [[ -x ./make ]]; then
+      ./make -j"$(nproc 2>/dev/null || echo 2)" || true
+    fi
+  )
+  if [[ -x "$buildDir/make" ]]; then
+    cp "$buildDir/make" "$BIN/make"
+    chmod a+x "$BIN/make"
+    echo "  ✓ make (built 4.4.1)"
+    return 0
+  fi
+  echo "  ! failed to install make" >&2
+  return 1
+}
+ensure_make || true
+
 if command -v python3 >/dev/null 2>&1; then
   ln -sf "$(command -v python3)" "$BIN/python3" 2>/dev/null || true
 fi

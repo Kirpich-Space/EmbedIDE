@@ -77,6 +77,30 @@ foreach ($tool in @("cargo.exe", "rustc.exe", "rustup.exe")) {
   if (Test-Path $src) { Copy-Item $src (Join-Path $Bin $tool) -Force }
 }
 
+# make (required for firmware builds)
+Write-Host ""
+Write-Host "[make]"
+$makeExe = Join-Path $Bin "make.exe"
+if (-not (Test-Path $makeExe)) {
+  $makeZip = Join-Path $Cache "make-4.4.1-without-guile-w32-bin.zip"
+  $makeUrl = "https://downloads.sourceforge.net/project/ezwinports/make-4.4.1-without-guile-w32-bin.zip"
+  if (-not (Test-Path $makeZip) -or (Get-Item $makeZip).Length -lt 1000) {
+    Download $makeUrl $makeZip
+  }
+  $makeUnpack = Join-Path $Cache "make-win-unpack"
+  if (Test-Path $makeUnpack) { Remove-Item $makeUnpack -Recurse -Force }
+  Expand-Archive -LiteralPath $makeZip -DestinationPath $makeUnpack -Force
+  $found = Get-ChildItem -Path $makeUnpack -Filter "make.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found) {
+    Copy-Item $found.FullName $makeExe -Force
+    Write-Host "  ✓ make.exe"
+  } else {
+    Write-Warning "make.exe not found in archive — firmware builds need make"
+  }
+} else {
+  Write-Host "  = make.exe already present"
+}
+
 @{
   platform = "win-x64"
   fetchedAt = (Get-Date).ToUniversalTime().ToString("o")

@@ -43,6 +43,11 @@ if [[ -x "$SCRIPT" ]] || [[ -f "$SCRIPT" ]]; then
   # Prefer bootstrap make shipped next to script
   if [[ -d "$BOOTSTRAP" ]]; then
     export PATH="$BOOTSTRAP/linux-x64:$BOOTSTRAP:$PATH"
+    if [[ -x "$BOOTSTRAP/linux-x64/make" ]]; then
+      export EMBEDIDE_BOOTSTRAP_MAKE="$BOOTSTRAP/linux-x64/make"
+    elif [[ -x "$BOOTSTRAP/make" ]]; then
+      export EMBEDIDE_BOOTSTRAP_MAKE="$BOOTSTRAP/make"
+    fi
   fi
   if ! bash "$SCRIPT" "$DEST"; then
     echo "WARNING: EmbedIDE toolchain download failed during install." >&2
