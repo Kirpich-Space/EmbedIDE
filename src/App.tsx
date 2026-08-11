@@ -146,12 +146,11 @@ function AppContent() {
   useEffect(() => {
     const api = window.electronAPI
     if (!api?.needsToolchainInstall) return
+    // Only show repair dialog if tools are missing (e.g. AppImage without setup, or failed postinst).
+    // Do NOT auto-download — installers download during package setup.
     api.needsToolchainInstall().then(needs => {
       if (needs) setToolchainSetupOpen(true)
     }).catch(() => {})
-    const offP = api.onToolchainInstallProgress?.(p => {
-      if (p?.auto) setToolchainSetupOpen(true)
-    })
     const offC = api.onToolchainInstallComplete?.(data => {
       if (data.ok) {
         api.detectToolchains().then(setToolchains).catch(() => {})
@@ -159,7 +158,6 @@ function AppContent() {
       }
     })
     return () => {
-      offP?.()
       offC?.()
     }
   }, [])

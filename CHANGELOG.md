@@ -1,4 +1,13 @@
+## 2.6.1 — 2026-08-11
+
+### Fixed
+- Compilers download during **package installation** (deb/pacman/rpm `after-install`, Windows NSIS, `EmbedIDE-Setup.sh`), not on first IDE launch
+
+### Changed
+- Removed first-launch auto-download; Settings → Toolchain remains a repair fallback
+
 ## 2.6.0 — 2026-08-11
+
 
 ### Changed
 - **Slim installers**: packages no longer ship the multi‑GB toolchain. On first launch EmbedIDE **downloads** ARM GCC, GDB, OpenOCD, Zig, make and Rust into the user data folder (progress UI + Settings → Download / repair).

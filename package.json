@@ -1,6 +1,6 @@
 {
   "name": "embed-ide",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "private": false,
   "description": "EmbedIDE — Offline-first engineering IDE for embedded flight computers",
   "author": {
@@ -44,7 +44,7 @@
     "toolchain:fetch": "node scripts/fetch-toolchains.mjs",
     "toolchain:fetch:rust": "EMBEDIDE_FETCH_RUST=1 node scripts/fetch-toolchains.mjs",
     "pack": "npm run bootstrap:prepare && vite build && electron-builder --dir",
-    "dist:linux": "npm run bootstrap:prepare && vite build && electron-builder --linux AppImage deb rpm pacman tar.gz",
+    "dist:linux": "npm run bootstrap:prepare && vite build && electron-builder --linux AppImage deb pacman tar.gz",
     "dist:fedora": "npm run bootstrap:prepare && vite build && electron-builder --linux rpm",
     "dist:arch": "npm run bootstrap:prepare && vite build && electron-builder --linux pacman AppImage tar.gz",
     "dist:void": "npm run bootstrap:prepare && vite build && electron-builder --linux AppImage tar.gz",
@@ -53,7 +53,8 @@
     "dist:mac": "npm run bootstrap:prepare && vite build && electron-builder --mac dmg zip",
     "dist:all": "npm run bootstrap:prepare && vite build && electron-builder --linux AppImage deb rpm pacman tar.gz --win nsis portable",
     "postinstall": "electron-builder install-app-deps",
-    "bootstrap:prepare": "node scripts/prepare-bootstrap.mjs"
+    "bootstrap:prepare": "node scripts/prepare-bootstrap.mjs",
+    "dist:setup": "npm run dist:linux && cp packaging/linux/EmbedIDE-Setup.sh packaging/linux/install-toolchain.sh release/"
   },
   "build": {
     "appId": "com.kirpichspace.embedide",
@@ -79,6 +80,14 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "packaging/linux/install-toolchain.sh",
+        "to": "install-toolchain.sh"
+      },
+      {
+        "from": "packaging/windows/install-toolchain.ps1",
+        "to": "install-toolchain.ps1"
       }
     ],
     "linux": {
@@ -117,7 +126,7 @@
       "category": "Development",
       "icon": "build/icons/512.png",
       "synopsis": "Offline-first IDE for Cortex-M firmware",
-      "description": "EmbedIDE — engineering IDE for embedded flight computers (C/C++/Rust/ASM/Zig, STM32 and other Cortex-M). On first launch downloads ARM GCC, OpenOCD, Zig and Rust.",
+      "description": "EmbedIDE — engineering IDE for embedded flight computers. The package installer downloads ARM GCC, OpenOCD, Zig and Rust during installation.",
       "desktop": {
         "entry": {
           "Name": "EmbedIDE",
@@ -141,7 +150,8 @@
         "mesa-libGL",
         "nss",
         "alsa-lib"
-      ]
+      ],
+      "afterInstall": "packaging/linux/after-install.sh"
     },
     "pacman": {
       "depends": [
@@ -155,7 +165,8 @@
         "mesa",
         "nss",
         "alsa-lib"
-      ]
+      ],
+      "afterInstall": "packaging/linux/after-install.sh"
     },
     "win": {
       "target": [
@@ -211,6 +222,9 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "artifactName": "${name}-${version}-macos-${arch}.${ext}"
+    },
+    "deb": {
+      "afterInstall": "packaging/linux/after-install.sh"
     }
   },
   "dependencies": {},

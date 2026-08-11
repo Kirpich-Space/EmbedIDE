@@ -444,7 +444,7 @@ function makeToolchainOverrides() {
 }
 
 function missingBundledHint(tool) {
-  return `${tool} not found. Open Settings → Toolchain and click Download, or wait for the first-launch installer.`;
+  return `${tool} not found. Reinstall EmbedIDE (deb/pacman/setup downloads compilers during install), or use Settings → Toolchain → Download / repair.`;
 }
 
 function buildProject(projectDir, projectType, onOutput) {

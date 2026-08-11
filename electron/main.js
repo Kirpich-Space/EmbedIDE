@@ -204,29 +204,7 @@ function buildAppMenu() {
 app.whenReady().then(() => {
   buildAppMenu()
   createWindow()
-  // Slim packages: auto-download compilers on first launch if missing
-  setTimeout(() => {
-    try {
-      if (!app.isPackaged) return
-      if (!needsToolchainInstall() || isInstallRunning()) return
-      const send = (p) => {
-        try { mainWindow?.webContents.send('toolchain:install-progress', p) } catch {}
-      }
-      send({ phase: 'start', percent: 0, message: 'Downloading compilers…', auto: true })
-      installToolchain({
-        includeRust: true,
-        onProgress: send,
-      }).then((r) => {
-        send({ phase: 'done', percent: 100, message: 'Toolchain ready', root: r.root, auto: true })
-        mainWindow?.webContents.send('toolchain:install-complete', { ok: true, ...r })
-      }).catch((err) => {
-        send({ phase: 'error', percent: 0, message: err.message || String(err), auto: true })
-        mainWindow?.webContents.send('toolchain:install-complete', { ok: false, error: err.message || String(err) })
-      })
-    } catch (e) {
-      console.warn('Auto toolchain install failed to start:', e.message)
-    }
-  }, 1500)
+  // Toolchain is installed by the OS package postinst / setup installer — not on first IDE launch.
 });
 
 app.on('window-all-closed', () => {
