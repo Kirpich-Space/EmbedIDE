@@ -1,3 +1,8 @@
+## 2.0.3 — 2026-08-11
+
+### Fixed
+- New Project dialog: board picker was clipped (dialog body now scrolls; boards stay reachable)
+
 ## 2.0.2 — 2026-08-10
 
 ### Changed

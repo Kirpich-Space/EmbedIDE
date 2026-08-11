@@ -60,17 +60,21 @@ export function ProjectDialog({ onCreate, onClose }: ProjectDialogProps) {
         setType(list[0].id)
       }
     })
-    window.electronAPI?.listBoards().then(list => {
-      setBoards(list)
-      if (list.length && !list.find(b => b.id === boardId)) {
-        setBoardId(list[0].id)
-      }
-    })
+    window.electronAPI?.listBoards()
+      .then(list => {
+        const next = Array.isArray(list) ? list : []
+        setBoards(next)
+        if (next.length && !next.find(b => b.id === boardId)) {
+          setBoardId(next[0].id)
+        }
+      })
+      .catch(() => setBoards([]))
     window.electronAPI?.getDefaultProjectsDir().then(setProjectsDir)
     inputRef.current?.select()
   }, [])
 
-  const needsBoard = true
+  const selectedTemplate = templates.find(t => t.id === type)
+  const needsBoard = selectedTemplate ? selectedTemplate.needsBoard !== false : true
 
   const grouped = useMemo(() => {
     const map = new Map<string, TemplateItem[]>()
