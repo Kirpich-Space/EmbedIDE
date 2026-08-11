@@ -51,6 +51,12 @@ function candidateRoots() {
         roots.push(path.join(process.resourcesPath, 'toolchain'))
       }
       roots.push(path.join(app.getPath('userData'), 'toolchain'))
+      // Legacy / installer paths if userData name ever diverged (EmbedIDE vs embed-ide)
+      try {
+        const appData = app.getPath('appData')
+        roots.push(path.join(appData, 'embed-ide', 'toolchain'))
+        roots.push(path.join(appData, 'EmbedIDE', 'toolchain'))
+      } catch {}
     }
   } catch {
     roots.push(path.join(__dirname, '..', 'vendor', 'toolchain', platformKey()))

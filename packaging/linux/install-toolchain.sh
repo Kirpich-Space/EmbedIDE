@@ -212,7 +212,7 @@ if [[ "$INCLUDE_RUST" == "1" ]]; then
   export CARGO_HOME="$DEST/rust/cargo"
   mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable \
-    -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf
+    -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf -t thumbv8m.main-none-eabi -t thumbv8m.main-none-eabihf
   for tool in cargo rustc rustup; do
     if [[ -e "$CARGO_HOME/bin/$tool" ]]; then
       rm -f "$BIN/$tool"

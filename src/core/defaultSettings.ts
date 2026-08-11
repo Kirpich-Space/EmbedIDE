@@ -33,7 +33,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   compactUi: false,
   reduceMotion: false,
   showStatusBar: true,
-  glassEffects: true,
+  glassEffects: false,
 
   autoSave: false,
   autoSaveDelayMs: 1500,

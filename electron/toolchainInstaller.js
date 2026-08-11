@@ -58,11 +58,13 @@ function downloadFile(url, dest, onProgress, label) {
         reject(new Error('Too many redirects'))
         return
       }
-      const lib = u.startsWith('https') ? https : http
+        const lib = u.startsWith('https') ? https : http
       const req = lib.get(u, { headers: { 'User-Agent': 'EmbedIDE-toolchain-installer' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume()
-          get(res.headers.location, redirects + 1)
+          let next = res.headers.location
+          try { next = new URL(next, u).href } catch {}
+          get(next, redirects + 1)
           return
         }
         if (res.statusCode !== 200) {
@@ -326,7 +328,7 @@ async function installRust(outRoot, onProgress) {
     RUSTUP_HOME: rustupHome,
     CARGO_HOME: cargoHome,
   }
-  const script = `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf`
+  const script = `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf -t thumbv8m.main-none-eabi -t thumbv8m.main-none-eabihf`
   if (process.platform === 'win32') {
     // Windows: download rustup-init.exe
     const init = path.join(getCacheDir(), 'rustup-init.exe')
@@ -339,7 +341,7 @@ async function installRust(outRoot, onProgress) {
     execFileSync(init, [
       '-y', '--no-modify-path', '--default-toolchain', 'stable',
       '-t', 'thumbv6m-none-eabi', '-t', 'thumbv7m-none-eabi',
-      '-t', 'thumbv7em-none-eabi', '-t', 'thumbv7em-none-eabihf',
+      '-t', 'thumbv7em-none-eabi', '-t', 'thumbv7em-none-eabihf', '-t', 'thumbv8m.main-none-eabi', '-t', 'thumbv8m.main-none-eabihf',
     ], { env, stdio: 'ignore' })
   } else {
     execFileSync('bash', ['-lc', script], { env, stdio: 'ignore' })
@@ -505,7 +507,10 @@ function isInstallRunning() {
 function needsToolchainInstall() {
   invalidateCache()
   const st = getBundledStatus()
-  return !(st.bundled && st.tools?.['arm-none-eabi-gcc'] && st.tools?.openocd)
+  if (!(st.bundled && st.tools?.['arm-none-eabi-gcc'] && st.tools?.openocd)) return true
+  // make is required for virtually all firmware templates
+  if (!st.tools?.make) return true
+  return false
 }
 
 module.exports = {

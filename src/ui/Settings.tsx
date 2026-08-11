@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
+import { useState, useEffect, useCallback, useMemo, startTransition, type CSSProperties } from 'react'
 import { useTheme } from '../themes/ThemeProvider'
 import { themes } from '../themes/themes'
 import type { EditorSettings } from '../core/types'
@@ -64,16 +64,19 @@ function Toggle({
 }
 
 function SliderField({
-  label, value, min, max, step, display, onChange,
+  label, value, min, max, step, format, onChange,
 }: {
   label: string
   value: number
   min: number
   max: number
   step: number
-  display: string
+  format: (v: number) => string
   onChange: (v: number) => void
 }) {
+  const [local, setLocal] = useState(value)
+  useEffect(() => { setLocal(value) }, [value])
+
   return (
     <div className="settings-field">
       <label className="settings-label">{label}</label>
@@ -83,11 +86,14 @@ function SliderField({
           min={min}
           max={max}
           step={step}
-          value={value}
-          onChange={e => onChange(Number(e.target.value))}
+          value={local}
+          onChange={e => setLocal(Number(e.target.value))}
+          onPointerUp={() => { if (local !== value) onChange(local) }}
+          onKeyUp={() => { if (local !== value) onChange(local) }}
+          onBlur={() => { if (local !== value) onChange(local) }}
           className="settings-slider"
         />
-        <span className="settings-value">{display}</span>
+        <span className="settings-value">{format(local)}</span>
       </div>
     </div>
   )
@@ -118,7 +124,9 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
     : provider.subscriptionNote === 'gemini' ? t('settings.aiSubscriptionNoteGemini')
     : provider.subscriptionNote === 'xai' ? t('settings.aiSubscriptionNoteXai')
     : null
-  const set = (partial: Partial<EditorSettings>) => onEditorSettingsChange({ ...editorSettings, ...partial })
+  const set = (partial: Partial<EditorSettings>) => {
+    startTransition(() => onEditorSettingsChange({ ...editorSettings, ...partial }))
+  }
 
   const refreshCliStatus = useCallback(async () => {
     if (!subSupported || !window.electronAPI?.aiCliStatus) {
@@ -213,7 +221,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
       void refreshOllama()
     }
     if (activeTab === 'toolchain') {
-      window.electronAPI?.detectToolchains().then(setTcInfo).catch(() => setTcInfo(null))
+      window.electronAPI?.detectToolchains({ force: true }).then(setTcInfo).catch(() => setTcInfo(null))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, editorSettings.aiEnabled, providerId, editorSettings.aiEndpoint])
@@ -225,7 +233,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
       if (p.message) setTcInstallMsg(p.message)
       if (p.phase === 'done') {
         setTcInstalling(false)
-        window.electronAPI?.detectToolchains().then(setTcInfo)
+        window.electronAPI?.detectToolchains({ force: true }).then(setTcInfo)
       }
       if (p.phase === 'error') setTcInstalling(false)
     })
@@ -264,7 +272,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
 
         <div className="settings-body">
           {activeTab === 'general' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.generalPrefs')}</span>
 
               <div className="settings-field">
@@ -297,7 +305,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   min={500}
                   max={5000}
                   step={100}
-                  display={`${(editorSettings.autoSaveDelayMs / 1000).toFixed(1)}s`}
+                  format={v => `${(v / 1000).toFixed(1)}s`}
                   onChange={v => set({ autoSaveDelayMs: v })}
                 />
               )}
@@ -335,7 +343,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
           )}
 
           {activeTab === 'editor' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.editorPrefs')}</span>
 
               <SliderField
@@ -344,7 +352,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={10}
                 max={28}
                 step={1}
-                display={`${editorSettings.fontSize}px`}
+                format={v => `${v}px`}
                 onChange={v => set({ fontSize: v })}
               />
 
@@ -354,7 +362,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={110}
                 max={220}
                 step={5}
-                display={editorSettings.lineHeight.toFixed(2)}
+                format={v => v.toFixed(2)}
                 onChange={v => set({ lineHeight: v / 100 })}
               />
 
@@ -364,7 +372,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={2}
                 max={8}
                 step={1}
-                display={`${editorSettings.tabSize} ${t('settings.spaces')}`}
+                format={v => `${v} ${t('settings.spaces')}`}
                 onChange={v => set({ tabSize: v })}
               />
 
@@ -374,7 +382,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={1}
                 max={4}
                 step={1}
-                display={`${editorSettings.caretWidth}px`}
+                format={v => `${v}px`}
                 onChange={v => set({ caretWidth: v })}
               />
 
@@ -417,14 +425,14 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={0}
                 max={2000}
                 step={100}
-                display={editorSettings.cursorBlinkRate === 0 ? t('settings.off') : `${editorSettings.cursorBlinkRate}${t('settings.ms')}`}
+                format={v => v === 0 ? t('settings.off') : `${v}${t('settings.ms')}`}
                 onChange={v => set({ cursorBlinkRate: v })}
               />
             </div>
           )}
 
           {activeTab === 'appearance' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.appearancePrefs')}</span>
 
               <div className="settings-field">
@@ -493,7 +501,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 min={85}
                 max={125}
                 step={5}
-                display={`${editorSettings.uiScale}%`}
+                format={v => `${v}%`}
                 onChange={v => set({ uiScale: v })}
               />
 
@@ -507,7 +515,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
           )}
 
           {activeTab === 'themes' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.colorTheme')}</span>
               <div className="settings-themes">
                 {themes.map(th => (
@@ -550,7 +558,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
           )}
 
           {activeTab === 'ai' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.aiPrefs')}</span>
 
               <Toggle
@@ -731,7 +739,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
           )}
 
           {activeTab === 'toolchain' && (
-            <div className="settings-section animate-fade-in">
+            <div className="settings-section">
               <span className="settings-section-title">{t('settings.toolchainTitle')}</span>
               <p className="settings-hint">{t('settings.toolchainHint')}</p>
               <div className="settings-field" style={{ marginTop: 12 }}>
@@ -771,7 +779,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                         const r = await window.electronAPI?.installToolchain({ includeRust: true, force: true })
                         if (r && !r.ok) setTcInstallMsg(r.error || t('toolchainSetup.failed'))
                         else setTcInstallMsg(t('toolchainSetup.success'))
-                        window.electronAPI?.detectToolchains().then(setTcInfo)
+                        window.electronAPI?.detectToolchains({ force: true }).then(setTcInfo)
                       } catch (e) {
                         setTcInstallMsg(e instanceof Error ? e.message : String(e))
                       } finally {
@@ -784,7 +792,7 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                   <button
                     className="project-btn"
                     type="button"
-                    onClick={() => window.electronAPI?.detectToolchains().then(setTcInfo)}
+                    onClick={() => window.electronAPI?.detectToolchains({ force: true }).then(setTcInfo)}
                   >
                     {t('settings.toolchainRefresh')}
                   </button>

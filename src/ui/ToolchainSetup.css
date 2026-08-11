@@ -5,9 +5,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg, #0c0c0c) 72%, transparent);
-  backdrop-filter: blur(6px);
+  background: color-mix(in srgb, var(--bg, #0c0c0c) 78%, transparent);
+  /* blur only with glass — default is solid dim for performance */
   padding: 24px;
+}
+
+html:not(.ui-no-glass) .tc-setup-overlay {
+  backdrop-filter: blur(6px);
 }
 
 .tc-setup-card {

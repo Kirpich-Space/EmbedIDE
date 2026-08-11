@@ -3,7 +3,7 @@
 # This is the installer path for AppImage/tar users (not first-launch of the IDE).
 set -euo pipefail
 
-VERSION="${EMBEDIDE_VERSION:-2.6.1}"
+VERSION="${EMBEDIDE_VERSION:-2.6.2}"
 PREFIX="${EMBEDIDE_PREFIX:-$HOME/.local}"
 APP_DIR="$PREFIX/share/embed-ide"
 BIN_DIR="$PREFIX/bin"
@@ -11,6 +11,7 @@ DATA_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/embed-ide"
 TOOLCHAIN_DEST="$DATA_DIR/toolchain"
 RELEASE_BASE="${EMBEDIDE_RELEASE_BASE:-https://github.com/Kirpich-Space/EmbedIDE/releases/download/v${VERSION}}"
 APPIMAGE_NAME="embed-ide-${VERSION}-linux-x86_64.AppImage"
+ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -18,7 +19,7 @@ echo "════════════════════════�
 echo " EmbedIDE ${VERSION} — setup installer"
 echo "══════════════════════════════════════════════"
 
-mkdir -p "$APP_DIR" "$BIN_DIR" "$DATA_DIR"
+mkdir -p "$APP_DIR" "$BIN_DIR" "$DATA_DIR" "$ICON_DIR"
 
 # Prefer AppImage next to this script / cwd, else download
 APPIMAGE_SRC=""
@@ -45,6 +46,39 @@ chmod a+x "$APPIMAGE_DST"
 
 ln -sfn "$APPIMAGE_DST" "$BIN_DIR/embed-ide"
 
+# Desktop icon (AppImage may not expose hicolor icons to the host)
+ICON_DST="$ICON_DIR/EmbedIDE.png"
+ICON_SRC=""
+for cand in \
+  "$SCRIPT_DIR/../../build/icons/256.png" \
+  "$SCRIPT_DIR/../icons/256.png" \
+  "$APP_DIR/icons/256.png"
+do
+  if [[ -f "$cand" ]]; then ICON_SRC="$cand"; break; fi
+done
+if [[ -z "$ICON_SRC" ]]; then
+  # Extract from AppImage if possible
+  if command -v "$APPIMAGE_DST" >/dev/null 2>&1 || [[ -x "$APPIMAGE_DST" ]]; then
+    TMP_ICON="$(mktemp -d)"
+    (cd "$TMP_ICON" && "$APPIMAGE_DST" --appimage-extract 'usr/share/icons/hicolor/*/apps/*.png' 2>/dev/null) || true
+    ICON_SRC="$(find "$TMP_ICON" -type f -name '*.png' 2>/dev/null | head -n1 || true)"
+    if [[ -n "${ICON_SRC:-}" && -f "$ICON_SRC" ]]; then
+      cp -f "$ICON_SRC" "$ICON_DST"
+    fi
+    rm -rf "$TMP_ICON"
+  fi
+elif [[ -f "$ICON_SRC" ]]; then
+  cp -f "$ICON_SRC" "$ICON_DST"
+fi
+# Also try downloading icon from the same release tag
+if [[ ! -f "$ICON_DST" ]]; then
+  curl -fsSL -o "$ICON_DST" \
+    "https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/v${VERSION}/build/icons/256.png" \
+    || curl -fsSL -o "$ICON_DST" \
+    "https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/build/icons/256.png" \
+    || rm -f "$ICON_DST"
+fi
+
 # Desktop entry
 mkdir -p "$HOME/.local/share/applications"
 cat > "$HOME/.local/share/applications/embed-ide.desktop" <<EOF
@@ -58,6 +92,7 @@ Type=Application
 Categories=Development;IDE;
 StartupWMClass=EmbedIDE
 EOF
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
 # Toolchain download DURING setup
 TC_SCRIPT=""

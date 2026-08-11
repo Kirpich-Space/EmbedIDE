@@ -1,3 +1,19 @@
+## 2.6.2 — 2026-08-11
+
+### Fixed
+- **userData path**: keep config/toolchain under `embed-ide` while display name stays EmbedIDE (installers and app share the same folder)
+- Windows: hardware acceleration off by default again (black-screen risk); override with `EMBEDIDE_ENABLE_GPU=1`
+- Serial monitor: resolve bundled/`python.exe` on Windows instead of always `python3`
+- `needsToolchainInstall` also requires **make**
+- Debug (F5): busy state no longer cleared mid-session when the build step finishes
+- HTTP redirects in toolchain downloader: resolve relative `Location` URLs
+- Setup.sh installs desktop icon; rustup targets include `thumbv8m.main-*`
+- i18n: toolchain hints match install-time download (not first-launch)
+
+### Changed
+- Settings migrate from legacy `EmbedIDE` userData folder when present
+- UI perf: less focus polling / slider debounce / glass off by default (from 2.6.1 follow-ups)
+
 ## 2.6.1 — 2026-08-11
 
 ### Fixed

@@ -71,7 +71,7 @@ export function FancySelect({
         aria-label={ariaLabel}
         aria-disabled={disabled || undefined}
       >
-        {options.map((opt, i) => {
+        {options.map((opt) => {
           const active = opt.value === value
           return (
             <button
@@ -80,7 +80,6 @@ export function FancySelect({
               role="option"
               aria-selected={active}
               className={`fancy-select-card ${active ? 'fancy-select-card-active' : ''}`}
-              style={{ animationDelay: `${i * 28}ms` }}
               disabled={disabled}
               onClick={() => onChange(opt.value)}
             >

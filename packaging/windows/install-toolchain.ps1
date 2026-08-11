@@ -70,7 +70,7 @@ if (-not (Test-Path $rustup)) {
   Download "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" $rustup
 }
 & $rustup -y --no-modify-path --default-toolchain stable `
-  -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf
+  -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf -t thumbv8m.main-none-eabi -t thumbv8m.main-none-eabihf
 
 foreach ($tool in @("cargo.exe", "rustc.exe", "rustup.exe")) {
   $src = Join-Path $env:CARGO_HOME "bin\$tool"

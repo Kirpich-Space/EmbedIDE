@@ -73,9 +73,23 @@ async function execTool(cmd, args, options = {}) {
   });
 }
 
-async function detectToolchains() {
-  prependBundledToolchainToPath();
-  invalidateCache();
+let detectCache = null;
+let detectCacheAt = 0;
+const DETECT_TTL_MS = 60_000;
+
+async function detectToolchains(opts = {}) {
+  const force = !!(opts && opts.force);
+  if (!force && detectCache && (Date.now() - detectCacheAt) < DETECT_TTL_MS) {
+    return detectCache;
+  }
+
+  if (force) {
+    invalidateCache();
+  } else {
+    // Ensure PATH/bins are set once; avoid wiping resolver cache on every poll
+    prependBundledToolchainToPath();
+  }
+
   const result = {
     rust: false,
     armGcc: false,
@@ -89,7 +103,7 @@ async function detectToolchains() {
 
   const check = async (cmd, key, args = ['--version']) => {
     try {
-      const { stdout, stderr } = await execTool(cmd, args, { timeout: 8000 });
+      const { stdout, stderr } = await execTool(cmd, args, { timeout: 2500 });
       result[key] = true;
       const line = String(stdout || stderr || '')
         .split(/\r?\n/)
@@ -98,7 +112,6 @@ async function detectToolchains() {
       result[key + 'Version'] = line;
       result[key + 'Bundled'] = isBundled(cmd);
     } catch (err) {
-      // Some tools print --version to stderr and still exit 0; execFile may still surface output on errors
       const out = String(err?.stdout || err?.stderr || '');
       if (out.trim()) {
         result[key] = true;
@@ -118,10 +131,11 @@ async function detectToolchains() {
     check('zig', 'zig', ['version']),
   ]);
 
-  if (result.rust) {
+  // rustup target list is slow — only on forced refresh or first success
+  if (result.rust && (force || !detectCache?.rustEmbeddedTargets)) {
     try {
       const { stdout } = await execTool('rustup', ['target', 'list', '--installed'], {
-        timeout: 8000,
+        timeout: 4000,
         maxBuffer: 256 * 1024,
       });
       result.rustEmbeddedTargets = String(stdout)
@@ -129,9 +143,18 @@ async function detectToolchains() {
         .map(l => l.trim())
         .filter(l => l.includes('thumb') || l.includes('cortex'));
     } catch {}
+  } else if (detectCache?.rustEmbeddedTargets) {
+    result.rustEmbeddedTargets = detectCache.rustEmbeddedTargets;
   }
 
+  detectCache = result;
+  detectCacheAt = Date.now();
   return result;
+}
+
+function clearDetectCache() {
+  detectCache = null;
+  detectCacheAt = 0;
 }
 
 function spawnProcess(cmd, args, cwd, onOutput) {
@@ -465,7 +488,7 @@ function buildProject(projectDir, projectType, onOutput) {
       return;
     }
 
-    const tc = await detectToolchains();
+    const tc = await detectToolchains({ force: true });
 
     if (isRustProject(projectType)) {
       if (!tc.rust) {
@@ -673,8 +696,7 @@ async function startDebugSession(projectDir, projectType, config = {}, onOutput)
   }
 
   prependBundledToolchainToPath();
-  invalidateCache();
-  const tc = await detectToolchains();
+  const tc = await detectToolchains({ force: true });
   if (!tc.openocd) {
     throw new Error(missingBundledHint('OpenOCD'));
   }
@@ -878,8 +900,7 @@ async function flashBoard(projectDir, projectType, config = {}, onOutput) {
   }
 
   prependBundledToolchainToPath();
-  invalidateCache();
-  const tc = await detectToolchains();
+  const tc = await detectToolchains({ force: true });
   if (!tc.openocd) {
     throw new Error(missingBundledHint('OpenOCD'));
   }
@@ -919,6 +940,7 @@ async function flashBoard(projectDir, projectType, config = {}, onOutput) {
 
 module.exports = {
   detectToolchains,
+  clearDetectCache,
   buildProject,
   flashBoard,
   cancelBuild,

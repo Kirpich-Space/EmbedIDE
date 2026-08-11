@@ -124,6 +124,7 @@ function AppContent() {
   const projectRef = useRef(project)
   const editorSettingsRef = useRef(editorSettings)
   const buildCancelRef = useRef(false)
+  const debugBusyRef = useRef(false)
   openTabsRef.current = openTabs
   activeTabIdRef.current = activeTabId
   projectRef.current = project
@@ -134,13 +135,9 @@ function AppContent() {
       window.electronAPI?.detectToolchains().then(setToolchains).catch(() => {})
     }
     refresh()
-    const onFocus = () => refresh()
-    window.addEventListener('focus', onFocus)
-    const id = window.setInterval(refresh, 60000)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      window.clearInterval(id)
-    }
+    // Avoid re-spawning toolchain probes on every window focus (was a major UI hitch).
+    const id = window.setInterval(refresh, 5 * 60_000)
+    return () => window.clearInterval(id)
   }, [])
 
   useEffect(() => {
@@ -210,15 +207,16 @@ function AppContent() {
 
   // Never persist API keys in localStorage; wait until disk settings loaded
   // so we don't wipe aiKey with the empty default on first mount.
-  // Debounce disk writes — Settings/AI keystrokes used to thrash IPC + fs.
+  // Debounce ALL persistence — Settings sliders used to thrash localStorage + IPC every frame.
   useEffect(() => {
     if (!settingsReady) return
-    const { aiKey: _omit, ...safe } = editorSettings
-    localStorage.setItem('embed-ide-editor-settings', JSON.stringify(safe))
-    const persist: Record<string, unknown> = { ...editorSettings }
     const timer = window.setTimeout(() => {
-      window.electronAPI?.saveSettings(persist)
-    }, 400)
+      const { aiKey: _omit, ...safe } = editorSettings
+      try {
+        localStorage.setItem('embed-ide-editor-settings', JSON.stringify(safe))
+      } catch {}
+      window.electronAPI?.saveSettings({ ...editorSettings })
+    }, 450)
     return () => window.clearTimeout(timer)
   }, [editorSettings, settingsReady])
 
@@ -253,7 +251,8 @@ function AppContent() {
     })
 
     const unsubBuildComplete = api.onBuildComplete((data) => {
-      setIsBuilding(false)
+      // Debug runs build then OpenOCD/GDB — keep busy until debug handler finishes
+      if (!debugBusyRef.current) setIsBuilding(false)
       if (data.cancelled || buildCancelRef.current) {
         buildCancelRef.current = false
         return
@@ -695,6 +694,7 @@ function AppContent() {
       timestamp: Date.now(),
       source: 'build',
     }])
+    debugBusyRef.current = true
     setIsBuilding(true)
     try {
       const active = activeTabIdRef.current
@@ -707,7 +707,6 @@ function AppContent() {
         if (built && built.success === false) {
           const err = (built as { error?: string }).error || tRef.current('build.failed', { code: -1 })
           addOutput({ type: 'error', text: err, timestamp: Date.now(), source: 'build' })
-          setIsBuilding(false)
           return
         }
       }
@@ -721,10 +720,11 @@ function AppContent() {
       } else if (result?.success) {
         addOutput({ type: 'success', text: tRef.current('debug.done'), timestamp: Date.now(), source: 'build' })
       }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
       addOutput({ type: 'error', text: msg, timestamp: Date.now(), source: 'build' })
     } finally {
+      debugBusyRef.current = false
       setIsBuilding(false)
     }
   }, [addOutput, saveAllDirty])
@@ -956,7 +956,9 @@ function AppContent() {
           {settingsOpen && (
             <Settings
               editorSettings={editorSettings}
-              onEditorSettingsChange={s => setEditorSettings(normalizeEditorSettings(s))}
+              onEditorSettingsChange={s => {
+                startTransition(() => setEditorSettings(normalizeEditorSettings(s)))
+              }}
               onClose={() => setSettingsOpen(false)}
             />
           )}

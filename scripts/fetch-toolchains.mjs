@@ -231,7 +231,7 @@ async function main() {
       RUSTUP_HOME: rustupHome,
       CARGO_HOME: cargoHome,
     }
-    execFileSync('bash', ['-lc', `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf`], {
+    execFileSync('bash', ['-lc', `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable -t thumbv6m-none-eabi -t thumbv7m-none-eabi -t thumbv7em-none-eabi -t thumbv7em-none-eabihf -t thumbv8m.main-none-eabi -t thumbv8m.main-none-eabihf`], {
       env,
       stdio: 'inherit',
     })

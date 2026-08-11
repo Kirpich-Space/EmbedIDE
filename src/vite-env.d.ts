@@ -100,7 +100,7 @@ interface ElectronAPI {
   isMaximized: () => Promise<boolean>
   onMaximizedChange: (callback: (isMaximized: boolean) => void) => () => void
 
-  detectToolchains: () => Promise<ToolchainInfo>
+  detectToolchains: (opts?: { force?: boolean }) => Promise<ToolchainInfo>
   needsToolchainInstall: () => Promise<boolean>
   toolchainInstallStatus: () => Promise<{
     running: boolean

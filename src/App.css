@@ -614,7 +614,8 @@ html.ui-reduce-motion *::after {
 }
 
 html.ui-no-glass .settings-overlay,
-html.ui-no-glass .fancy-select-dropdown {
+html.ui-no-glass .fancy-select-dropdown,
+html.ui-no-glass .tc-setup-overlay {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }

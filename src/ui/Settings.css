@@ -6,9 +6,13 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(10px) saturate(1.1);
-  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  /* No blur by default — expensive with software rendering / Linux DEs */
   animation: fadeIn var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+
+html:not(.ui-no-glass) .settings-overlay {
+  backdrop-filter: blur(8px) saturate(1.05);
+  -webkit-backdrop-filter: blur(8px) saturate(1.05);
 }
 
 .settings-modal {

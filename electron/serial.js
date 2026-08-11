@@ -3,9 +3,31 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const PYTHON_CMD = process.platform === 'win32'
-  ? (() => { try { require('child_process').execSync('python --version', { stdio: 'ignore' }); return 'python' } catch { return 'python3' } })()
-  : 'python3'
+function resolvePythonCmd() {
+  try {
+    const { resolveTool, getToolchainEnv } = require('./bundledToolchain')
+    const resolved = resolveTool('python')
+    if (resolved && resolved !== 'python' && resolved !== 'python3' && fs.existsSync(resolved)) {
+      return resolved
+    }
+    // Prefer PATH after toolchain prepend
+    const env = getToolchainEnv()
+    const which = process.platform === 'win32' ? 'where' : 'which'
+    const names = process.platform === 'win32' ? ['python.exe', 'python', 'python3'] : ['python3', 'python']
+    for (const name of names) {
+      try {
+        const out = require('child_process').execFileSync(which, [name], {
+          encoding: 'utf8',
+          env,
+          timeout: 3000,
+        })
+        const first = String(out).split(/\r?\n/).map(s => s.trim()).find(Boolean)
+        if (first) return first
+      } catch {}
+    }
+  } catch {}
+  return process.platform === 'win32' ? 'python' : 'python3'
+}
 
 let pythonScript = '';
 let activeProcess = null;
@@ -83,7 +105,7 @@ if __name__ == "__main__":
 function listSerialPorts() {
   return new Promise((resolve, reject) => {
     const script = getPythonScript();
-    const proc = spawn(PYTHON_CMD, [script, 'list']);
+    const proc = spawn(resolvePythonCmd(), [script, 'list']);
     let output = '';
     proc.stdout.on('data', d => output += d.toString());
     proc.on('close', code => {
@@ -101,7 +123,7 @@ function connectSerial(port, baud, onData, onError) {
   const script = getPythonScript();
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(PYTHON_CMD, [script, port, String(baud)]);
+    const proc = spawn(resolvePythonCmd(), [script, port, String(baud)]);
     activeProcess = proc;
     let settled = false;
 

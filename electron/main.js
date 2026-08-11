@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron');
 const path = require('path');
-const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession } = require('./toolchain');
+const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession, clearDetectCache } = require('./toolchain');
 const { prependBundledToolchainToPath, getBundledStatus } = require('./bundledToolchain');
 const { installToolchain, needsToolchainInstall, isInstallRunning, getInstallProgress } = require('./toolchainInstaller');
 const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
@@ -11,6 +11,8 @@ const fs = require('fs');
 
 const APP_NAME = 'EmbedIDE';
 const APP_ID = 'com.kirpichspace.embedide';
+/** Stable config dir — must match installers (Setup.sh / NSIS / ps1). */
+const USER_DATA_DIR = 'embed-ide';
 
 // Identity before ready — otherwise taskbar/dock shows "Electron"
 try {
@@ -18,11 +20,21 @@ try {
   if (typeof process.setName === 'function') process.setName(APP_NAME);
 } catch {}
 try { process.title = APP_NAME; } catch {}
+// Keep userData at …/embed-ide so package installers and the app share toolchain/settings
+try {
+  app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_DIR));
+} catch {}
 if (process.platform === 'win32') {
   try { app.setAppUserModelId(APP_ID); } catch {}
 }
 
-app.disableHardwareAcceleration();
+// GPU: keep Windows software path by default (black-screen history). Linux/mac use GPU.
+// Force off everywhere: EMBEDIDE_DISABLE_GPU=1 — force on: EMBEDIDE_ENABLE_GPU=1
+if (process.env.EMBEDIDE_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration();
+} else if (process.platform === 'win32' && process.env.EMBEDIDE_ENABLE_GPU !== '1') {
+  app.disableHardwareAcceleration();
+}
 
 try {
   prependBundledToolchainToPath();
@@ -286,7 +298,7 @@ ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 
 // Toolchain detection + installer
-ipcMain.handle('toolchain:detect', () => detectToolchains());
+ipcMain.handle('toolchain:detect', (_e, opts) => detectToolchains(opts || {}));
 ipcMain.handle('toolchain:needs-install', () => needsToolchainInstall());
 ipcMain.handle('toolchain:install-status', () => ({
   running: isInstallRunning(),
@@ -303,6 +315,7 @@ ipcMain.handle('toolchain:install', async (_e, opts = {}) => {
       force: !!opts?.force,
       onProgress: send,
     })
+    clearDetectCache()
     mainWindow?.webContents.send('toolchain:install-complete', { ok: true, ...result })
     return { ok: true, ...result }
   } catch (err) {
@@ -550,6 +563,16 @@ ipcMain.handle('settings:load', () => {
   try {
     if (fs.existsSync(SETTINGS_PATH)) {
       return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    }
+    // Migrate settings if an older build used Electron's default EmbedIDE userData dir
+    const legacy = path.join(app.getPath('appData'), 'EmbedIDE', 'settings.json');
+    if (fs.existsSync(legacy)) {
+      const data = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+      try {
+        fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(data), 'utf8');
+      } catch {}
+      return data;
     }
   } catch {}
   return {};

@@ -308,11 +308,16 @@
   padding: 6px;
   border-radius: var(--radius-md, 8px);
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
-  backdrop-filter: blur(12px) saturate(1.15);
-  -webkit-backdrop-filter: blur(12px) saturate(1.15);
+  background: var(--bg-panel);
+  /* blur only when glass effects enabled */
   box-shadow: var(--shadow-lg), var(--island-rim);
   animation: fancyDropIn var(--dur-med, 220ms) var(--ease-spring, ease-out);
+}
+
+html:not(.ui-no-glass) .fancy-select-dropdown {
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
 }
 
 @keyframes fancyDropIn {

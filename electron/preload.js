@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMaximizedChange: (cb) => on('window:maximized-change', cb),
 
   // Toolchain
-  detectToolchains: () => ipcRenderer.invoke('toolchain:detect'),
+  detectToolchains: (opts) => ipcRenderer.invoke('toolchain:detect', opts || {}),
   needsToolchainInstall: () => ipcRenderer.invoke('toolchain:needs-install'),
   toolchainInstallStatus: () => ipcRenderer.invoke('toolchain:install-status'),
   installToolchain: (opts) => ipcRenderer.invoke('toolchain:install', opts || {}),

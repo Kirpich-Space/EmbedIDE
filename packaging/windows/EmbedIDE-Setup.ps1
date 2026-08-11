@@ -1,6 +1,6 @@
-# EmbedIDE 2.6.1 Windows setup — installs app AND downloads compilers during setup (not on first launch).
+# EmbedIDE 2.6.2 Windows setup — installs app AND downloads compilers during setup (not on first launch).
 # Run:  Right-click → Run with PowerShell
-#   or: powershell -ExecutionPolicy Bypass -File embed-ide-2.6.1-windows-x64-setup.ps1
+#   or: powershell -ExecutionPolicy Bypass -File embed-ide-2.6.2-windows-x64-setup.ps1
 param(
   [string]$InstallDir = "$env:LOCALAPPDATA\Programs\EmbedIDE",
   [string]$PortableZip = "",
@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "2.6.1"
+$Version = "2.6.2"
 $ReleaseBase = "https://github.com/Kirpich-Space/EmbedIDE/releases/download/v$Version"
 $ZipName = "embed-ide-$Version-windows-x64-portable.zip"
 $ToolchainDest = Join-Path $env:APPDATA "embed-ide\toolchain"
