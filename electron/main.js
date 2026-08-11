@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron');
 const path = require('path');
 const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession } = require('./toolchain');
 const { prependBundledToolchainToPath, getBundledStatus } = require('./bundledToolchain');
@@ -8,6 +8,19 @@ const { createProject, listProjectFiles, readProjectFile, writeProjectFile, crea
 const { listBoards, getBoard, getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { getCliStatus, chatViaCli, cancelCliChat } = require('./aiCli');
 const fs = require('fs');
+
+const APP_NAME = 'EmbedIDE';
+const APP_ID = 'com.kirpichspace.embedide';
+
+// Identity before ready — otherwise taskbar/dock shows "Electron"
+try {
+  app.setName(APP_NAME);
+  if (typeof process.setName === 'function') process.setName(APP_NAME);
+} catch {}
+try { process.title = APP_NAME; } catch {}
+if (process.platform === 'win32') {
+  try { app.setAppUserModelId(APP_ID); } catch {}
+}
 
 app.disableHardwareAcceleration();
 
@@ -21,6 +34,34 @@ let mainWindow;
 let serialConnection = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
+
+function resolveAppIconPath() {
+  const names = ['512.png', '256.png', '128.png', 'icon.png', 'icon.ico'];
+  const roots = [];
+  try {
+    if (process.resourcesPath) roots.push(path.join(process.resourcesPath, 'icons'));
+  } catch {}
+  roots.push(path.join(__dirname, '..', 'build', 'icons'));
+  roots.push(path.join(__dirname, '..', 'build'));
+  for (const root of roots) {
+    for (const name of names) {
+      const p = path.join(root, name);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+function loadAppIcon() {
+  const p = resolveAppIconPath();
+  if (!p) return null;
+  try {
+    const img = nativeImage.createFromPath(p);
+    return img && !img.isEmpty() ? img : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Resolve targetPath under projectDir; reject traversal / absolute escapes. */
 function assertInsideProject(projectDir, targetPath) {
@@ -40,6 +81,7 @@ function assertInsideProject(projectDir, targetPath) {
 
 function createWindow() {
   const isWin = process.platform === 'win32'
+  const icon = loadAppIcon()
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -50,14 +92,18 @@ function createWindow() {
     show: true,
     backgroundColor: '#000000',
     backgroundThrottling: false,
-    title: 'EmbedIDE',
-    icon: path.join(__dirname, '..', 'build', 'icons', '256.png'),
+    title: APP_NAME,
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+
+  if (icon) {
+    try { mainWindow.setIcon(icon); } catch {}
+  }
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL);
@@ -67,6 +113,12 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (!mainWindow.isVisible()) mainWindow.show();
+    try { mainWindow.setTitle(APP_NAME); } catch {}
+  });
+
+  mainWindow.on('page-title-updated', (e) => {
+    e.preventDefault();
+    try { mainWindow.setTitle(APP_NAME); } catch {}
   });
 
   mainWindow.on('maximize', () => mainWindow.webContents.send('window:maximized-change', true));
@@ -191,6 +243,7 @@ function buildAppMenu() {
               title: 'About EmbedIDE',
               message: `EmbedIDE v${app.getVersion()}`,
               detail: 'An embedded development IDE for Rust, C, C++, Assembly, and Zig.',
+              ...(loadAppIcon() ? { icon: loadAppIcon() } : {}),
             });
           },
         },
@@ -202,6 +255,14 @@ function buildAppMenu() {
 }
 
 app.whenReady().then(() => {
+  // Dock / panel identity (esp. macOS + some Linux DEs)
+  try {
+    const icon = loadAppIcon();
+    if (icon && process.platform === 'darwin' && app.dock) {
+      app.dock.setIcon(icon);
+      app.dock.setBadge('');
+    }
+  } catch {}
   buildAppMenu()
   createWindow()
   // Toolchain is installed by the OS package postinst / setup installer — not on first IDE launch.

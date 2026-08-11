@@ -52,11 +52,11 @@ cat > "$HOME/.local/share/applications/embed-ide.desktop" <<EOF
 Name=EmbedIDE
 Comment=Offline-first IDE for Cortex-M firmware
 Exec=$APPIMAGE_DST --no-sandbox %U
-Icon=embed-ide
+Icon=EmbedIDE
 Terminal=false
 Type=Application
 Categories=Development;IDE;
-StartupWMClass=embed-ide
+StartupWMClass=EmbedIDE
 EOF
 
 # Toolchain download DURING setup

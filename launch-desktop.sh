@@ -44,7 +44,8 @@ if [[ -d "$TC_BIN" ]]; then
   fi
 fi
 
-ELECTRON_BIN="$ROOT/node_modules/electron/dist/electron"
+ELECTRON_DIST="$ROOT/node_modules/electron/dist"
+ELECTRON_BIN="$ELECTRON_DIST/electron"
 if [[ ! -x "$ELECTRON_BIN" ]]; then
   if command -v npm >/dev/null 2>&1; then
     npm install-scripts approve electron >/dev/null 2>&1 || true
@@ -59,10 +60,32 @@ if [[ ! -x "$ELECTRON_BIN" ]]; then
   exit 1
 fi
 
+# Rename process identity so the panel shows EmbedIDE (not Electron)
+EMBEDIDE_BIN="$ELECTRON_DIST/EmbedIDE"
+if [[ ! -e "$EMBEDIDE_BIN" ]]; then
+  ln -sfn electron "$EMBEDIDE_BIN" 2>/dev/null || true
+fi
+if [[ -x "$EMBEDIDE_BIN" || -L "$EMBEDIDE_BIN" ]]; then
+  ELECTRON_BIN="$EMBEDIDE_BIN"
+fi
+
+# Desktop icon for local launches (Icon=embedide in .desktop)
+ICON_SRC="$ROOT/build/icons/512.png"
+ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
+if [[ -f "$ICON_SRC" ]]; then
+  mkdir -p "$ICON_DIR" 2>/dev/null || true
+  cp -f "$ICON_SRC" "$ICON_DIR/embedide.png" 2>/dev/null || true
+  cp -f "$ICON_SRC" "$ICON_DIR/EmbedIDE.png" 2>/dev/null || true
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+  fi
+fi
+
 if [[ ! -f "$ROOT/dist/index.html" ]]; then
   if command -v npx >/dev/null 2>&1; then
     npx --yes vite build
   fi
 fi
 
-exec "$ELECTRON_BIN" "$ROOT" --no-sandbox "$@"
+# --class / --name force WM_CLASS so StartupWMClass matches
+exec "$ELECTRON_BIN" "$ROOT" --no-sandbox --class=EmbedIDE --name=EmbedIDE "$@"
