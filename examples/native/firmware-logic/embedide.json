@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "firmware-logic",
+  "buildSystem": "cargo",
+  "native": {
+    "version": 1,
+    "theme": "mono",
+    "targets": [{ "name": "Host logic build (no hardware)" }],
+    "tasks": {
+      "Test firmware logic": { "program": "cargo", "args": ["test", "--offline"] }
+    }
+  }
+}

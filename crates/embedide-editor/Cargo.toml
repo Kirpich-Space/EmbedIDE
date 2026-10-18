@@ -1,0 +1,20 @@
+[package]
+name = "embedide-editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+unicode-segmentation = "1.12"
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "buffer"
+harness = false
+
+[[bench]]
+name = "engine"
+harness = false

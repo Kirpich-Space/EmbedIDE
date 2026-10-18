@@ -1,0 +1,201 @@
+/* Memory Analyzer */
+.memory-analyzer {
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  margin: 0;
+  overflow: auto;
+  flex: 1;
+  color: var(--text);
+}
+
+.memory-analyzer .panel-header {
+  padding: 10px 14px;
+  border-bottom: var(--panel-edge);
+}
+
+.memory-content {
+  padding: 12px 14px;
+}
+
+.memory-section {
+  margin-bottom: 14px;
+}
+
+.memory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.memory-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.memory-bar-bg {
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.memory-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.45s var(--ease-spring, ease);
+  min-width: 2px;
+  box-shadow: 0 0 12px color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.memory-details {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: var(--panel-edge);
+}
+
+.memory-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 11px;
+}
+
+.memory-detail-label {
+  color: var(--text-secondary);
+}
+
+.memory-detail-value {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text);
+}
+
+/* Peripheral Viewer */
+.peripheral-viewer {
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  margin: 0;
+  flex: 1;
+  overflow: auto;
+  color: var(--text);
+}
+
+.peripheral-viewer .panel-header {
+  padding: 10px 14px;
+  border-bottom: var(--panel-edge);
+}
+
+.peripheral-content {
+  padding: 4px 0;
+}
+
+.peripheral-group {
+  border-bottom: var(--panel-edge);
+}
+
+.peripheral-group:last-child {
+  border-bottom: none;
+}
+
+.peripheral-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  user-select: none;
+}
+
+.peripheral-header:hover {
+  background: var(--bg-hover);
+}
+
+.peripheral-expand {
+  font-size: 9px;
+  color: var(--text-secondary);
+  width: 12px;
+}
+
+.peripheral-name {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.peripheral-pins {
+  padding: 2px 0 6px 34px;
+}
+
+.peripheral-pin {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 14px 4px 0;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.pin-name {
+  width: 40px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.pin-mode {
+  width: 36px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-align: center;
+}
+
+.pin-level {
+  width: 44px;
+  font-weight: 500;
+}
+
+.pin-func {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.peripheral-blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 12px;
+}
+
+.peripheral-block-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.peripheral-empty {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.panel-subtitle {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+}
+

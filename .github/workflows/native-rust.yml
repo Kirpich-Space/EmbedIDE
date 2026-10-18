@@ -1,0 +1,93 @@
+name: Native Rust foundation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Cargo.*'
+      - 'crates/**'
+      - 'scripts/check-native-cli.py'
+      - 'scripts/check-editor-offline.py'
+      - 'scripts/check-terminal-pty.py'
+      - 'scripts/check-tui-pty.py'
+      - 'scripts/check-workspace-pty.py'
+      - 'examples/native/**'
+      - '.github/workflows/native-rust.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.*'
+      - 'crates/**'
+      - 'scripts/check-native-cli.py'
+      - 'scripts/check-editor-offline.py'
+      - 'scripts/check-terminal-pty.py'
+      - 'scripts/check-tui-pty.py'
+      - 'scripts/check-workspace-pty.py'
+      - 'examples/native/**'
+      - '.github/workflows/native-rust.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build -p embedide-cli --locked
+      - run: cargo build -p embedide-terminal --locked
+      - if: runner.os != 'Windows'
+        run: python scripts/check-terminal-pty.py --binary target/debug/embedide-terminal
+      - if: runner.os != 'Windows'
+        run: python scripts/check-tui-pty.py --binary target/debug/embedide-terminal
+      - if: runner.os != 'Windows'
+        run: python scripts/check-tui-pty.py --binary target/debug/embedide --cli
+      - if: runner.os != 'Windows'
+        run: python scripts/check-workspace-pty.py --binary target/debug/embedide
+      - if: runner.os != 'Windows'
+        run: python scripts/check-native-cli.py --binary target/debug/embedide
+      - if: runner.os == 'Windows'
+        run: python scripts/check-native-cli.py --binary target/debug/embedide.exe
+
+  musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - run: cargo test --workspace --locked --target x86_64-unknown-linux-musl
+      - run: cargo build -p embedide-cli --release --locked --target x86_64-unknown-linux-musl
+      - run: python3 scripts/check-native-cli.py --binary target/x86_64-unknown-linux-musl/release/embedide
+
+  offline-editor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo fmt --all -- --check
+      - run: cargo fetch --locked
+      - run: python scripts/check-editor-offline.py --terminal --build-terminal target/editor-offline/embedide-terminal
+      - run: python scripts/check-terminal-pty.py --binary target/editor-offline/embedide-terminal

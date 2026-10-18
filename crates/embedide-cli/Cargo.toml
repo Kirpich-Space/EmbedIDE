@@ -1,0 +1,19 @@
+[package]
+name = "embedide-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "embedide"
+path = "src/main.rs"
+
+[dependencies]
+embedide-core.workspace = true
+embedide-terminal.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

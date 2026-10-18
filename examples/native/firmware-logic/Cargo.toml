@@ -1,0 +1,7 @@
+[package]
+name = "firmware-logic"
+version = "0.1.0"
+edition = "2021"
+
+# Keep this disposable example independent of the IDE's own workspace.
+[workspace]
