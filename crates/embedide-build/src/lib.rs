@@ -114,6 +114,50 @@ pub struct Prepared {
     pub(crate) output_root: Option<PathBuf>,
 }
 
+impl Prepared {
+    /// Create the output directory and its clean marker. Call before running
+    /// [`Prepared::steps`] with your own process runner; [`run`] does this itself.
+    pub fn begin(&self) -> Result<()> {
+        if let Some(out) = &self.output_root {
+            std::fs::create_dir_all(out)?;
+            let marker = out.join(OUTPUT_MARKER);
+            if !marker.exists() {
+                std::fs::write(
+                    &marker,
+                    "Created by EmbedIDE; `embed clean` may delete this directory.\n",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Record incremental-build stamps. Call only after every step exited with 0.
+    pub fn commit(&self) {
+        for (path, text) in &self.stamps {
+            let _ = std::fs::write(path, text);
+        }
+    }
+
+    /// The steps as a process plan for `embedide_core::process::ProcessTask`.
+    pub fn plan(&self) -> BuildPlan {
+        BuildPlan {
+            directory: self.root.clone(),
+            system: BuildSystem::Make,
+            steps: self.steps.clone(),
+        }
+    }
+}
+
+/// Toolchains available to builds: PATH and configured search directories,
+/// plus the user's custom entries. Nothing is installed or downloaded.
+pub fn registry(user: &UserConfig, probe: bool) -> Vec<Toolchain> {
+    embedide_toolchains::detect(&embedide_toolchains::DetectOptions {
+        search_dirs: user.toolchains.search_dirs.clone(),
+        custom: user.toolchains.custom.clone(),
+        probe,
+    })
+}
+
 /// Outcome of [`run`].
 #[derive(Debug, Serialize)]
 pub struct Outcome {
@@ -296,16 +340,7 @@ pub fn run(
     mut on_event: impl FnMut(Event<'_>),
 ) -> Result<Outcome> {
     let started = std::time::Instant::now();
-    if let Some(out) = &prepared.output_root {
-        std::fs::create_dir_all(out)?;
-        let marker = out.join(OUTPUT_MARKER);
-        if !marker.exists() {
-            std::fs::write(
-                &marker,
-                "Created by EmbedIDE; `embedide clean` may delete this directory.\n",
-            )?;
-        }
-    }
+    prepared.begin()?;
     if prepared.steps.is_empty() {
         return Ok(Outcome {
             success: true,
@@ -317,14 +352,7 @@ pub fn run(
             dropped_bytes: 0,
         });
     }
-    let task = ProcessTask::start(
-        BuildPlan {
-            directory: prepared.root.clone(),
-            system: BuildSystem::Make,
-            steps: prepared.steps.clone(),
-        },
-        prepared.env.clone(),
-    )?;
+    let task = ProcessTask::start(prepared.plan(), prepared.env.clone())?;
     let mut diags = Vec::new();
     let mut pending = [String::new(), String::new()];
     let mut finished = None;
@@ -361,9 +389,7 @@ pub fn run(
     let code = finished.flatten();
     let success = code == Some(0);
     if success {
-        for (path, text) in &prepared.stamps {
-            let _ = std::fs::write(path, text);
-        }
+        prepared.commit();
     }
     Ok(Outcome {
         success,

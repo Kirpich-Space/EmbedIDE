@@ -1,7 +1,7 @@
-//! `embedide toolchain …`
+//! `embed toolchain …`
 use crate::{fail, Out};
 use clap::Subcommand;
-use embedide_toolchains::{self as tc, CustomToolchain, DetectOptions, Language, Toolchain};
+use embedide_toolchains::{self as tc, CustomToolchain, Language, Toolchain};
 use embedide_workspace::{ConfigFile, UserConfig};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -44,11 +44,7 @@ pub enum ToolchainCmd {
 
 /// Detected toolchains using the user's configuration.
 pub fn registry(user: &UserConfig, probe: bool) -> Vec<Toolchain> {
-    tc::detect(&DetectOptions {
-        search_dirs: user.toolchains.search_dirs.clone(),
-        custom: user.toolchains.custom.clone(),
-        probe,
-    })
+    embedide_build::registry(user, probe)
 }
 
 fn row(t: &Toolchain) -> Value {
@@ -58,7 +54,7 @@ fn row(t: &Toolchain) -> Value {
 
 fn table(out: &Out, list: &[Toolchain], defaults: &std::collections::BTreeMap<String, String>) {
     if list.is_empty() {
-        out.line("No toolchains found. See `embedide toolchain recommend`.");
+        out.line("No toolchains found. See `embed toolchain recommend`.");
         return;
     }
     out.line(&format!(
@@ -130,7 +126,7 @@ pub fn run(cmd: ToolchainCmd, out: &Out) -> crate::CliResult<Value> {
                 .collect();
             if !missing.is_empty() {
                 out.line(&format!(
-                    "No toolchain for: {} (see `embedide toolchain recommend <language>`)",
+                    "No toolchain for: {} (see `embed toolchain recommend <language>`)",
                     missing.join(", ")
                 ));
             }
