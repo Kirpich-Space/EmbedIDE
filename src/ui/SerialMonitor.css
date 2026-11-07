@@ -165,3 +165,44 @@
 .serial-input:focus {
   border-color: var(--accent);
 }
+
+/* Advanced framing row, status row, hex view */
+.serial-advanced,
+.serial-statusbar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+}
+
+.serial-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.serial-status {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.serial-status-open { color: var(--success, #3fb950); }
+.serial-status-lost,
+.serial-status-reconnecting { color: var(--warning, #f5a524); }
+.serial-status-closed,
+.serial-status-connecting { color: var(--text-secondary); }
+
+.serial-status-msg {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.serial-body-hex .serial-line {
+  white-space: pre;
+}

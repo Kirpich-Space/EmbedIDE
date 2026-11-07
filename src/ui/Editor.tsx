@@ -17,6 +17,7 @@ import { useTranslation } from '../core/TranslationContext'
 import { useTheme } from '../themes/ThemeProvider'
 import { createCompletionSource } from './completions'
 import { zigLanguage } from './zigLanguage'
+import { debugGutter, setDebugMarks, type DebugMarks } from './debugGutter'
 
 const langCompartment = new Compartment()
 const themeCompartment = new Compartment()
@@ -170,7 +171,13 @@ interface EditorProps {
   editorSettings: EditorSettings
   /** Build diagnostics for the active file (underlines + gutter) */
   fileDiagnostics?: FileDiagnostic[]
+  /** Breakpoints and stopped line for the active file (owned by the debugger) */
+  debugMarks?: DebugMarks
+  /** Gutter click / F9 on a line of the active file */
+  onToggleBreakpoint?: (tabId: string, line: number) => void
 }
+
+const NO_MARKS: DebugMarks = { breakpoints: [], executionLine: null }
 
 function toCmDiagnostics(doc: { lines: number; line: (n: number) => { from: number; to: number } }, items: FileDiagnostic[]): Diagnostic[] {
   const diags: Diagnostic[] = []
@@ -192,6 +199,7 @@ function toCmDiagnostics(doc: { lines: number; line: (n: number) => { from: numb
 
 export function Editor({
   tabs, activeTabId, onTabSelect, onTabClose, onContentChange, onCursorChange, onSave, editorSettings, fileDiagnostics = [],
+  debugMarks = NO_MARKS, onToggleBreakpoint,
 }: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -201,6 +209,8 @@ export function Editor({
   const onSaveRef = useRef(onSave)
   const onContentChangeRef = useRef(onContentChange)
   const onCursorChangeRef = useRef(onCursorChange)
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint)
+  onToggleBreakpointRef.current = onToggleBreakpoint
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const { t } = useTranslation()
   const { theme } = useTheme()
@@ -277,6 +287,7 @@ export function Editor({
           highlightSelectionMatches(),
           history(),
           lintGutter(),
+          debugGutter((line) => onToggleBreakpointRef.current?.(activeTabIdRef.current, line)),
           highlightCompartment.of(syntaxHighlighting(getSyntaxHighlight())),
           autocompleteCompartment.of(autocompletion({
             override: [completionSource],
@@ -388,6 +399,17 @@ export function Editor({
     const diags = toCmDiagnostics(view.state.doc, fileDiagnostics)
     view.dispatch(setDiagnostics(view.state, diags))
   }, [fileDiagnostics, activeTabId])
+
+  // Breakpoint markers and the current execution line
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ effects: setDebugMarks.of(debugMarks) })
+    if (debugMarks.executionLine && debugMarks.executionLine <= view.state.doc.lines) {
+      const pos = view.state.doc.line(debugMarks.executionLine).from
+      view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) })
+    }
+  }, [debugMarks, activeTabId])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

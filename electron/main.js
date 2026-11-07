@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage, safeStorage } = require('electron');
 const path = require('path');
-const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession, clearDetectCache } = require('./toolchain');
-const { prependBundledToolchainToPath, getBundledStatus } = require('./bundledToolchain');
+const { detectToolchains, buildProject, flashBoard, cancelBuild, runScript, startDebugSession, cancelDebugSession, clearDetectCache, detectElf, resolveBoard, isScriptProject } = require('./toolchain');
+const { prependBundledToolchainToPath, getBundledStatus, resolveTool, getToolchainEnv, findOpenocdScripts, getBundledRoot } = require('./bundledToolchain');
+const { DebugManager, toError } = require('./debugSession');
+const { encodeSettingsForDisk, decodeSettingsFromDisk, writeFileAtomic } = require('./settingsStore');
 const { installToolchain, needsToolchainInstall, isInstallRunning, getInstallProgress } = require('./toolchainInstaller');
-const { listSerialPorts, connectSerial, disconnectSerial } = require('./serial');
+const { SerialService } = require('./serial');
 const { createProject, listProjectFiles, readProjectFile, writeProjectFile, createProjectFile, deleteProjectFile, renameProjectFile, searchInFiles, getTemplateList, readProjectMeta } = require('./project');
 const { listBoards, getBoard, getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { getCliStatus, chatViaCli, cancelCliChat } = require('./aiCli');
@@ -43,7 +45,8 @@ try {
 }
 
 let mainWindow;
-let serialConnection = null;
+let allowWindowClose = false;
+let closeRequestTimer = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
@@ -75,12 +78,33 @@ function loadAppIcon() {
   }
 }
 
-/** Resolve targetPath under projectDir; reject traversal / absolute escapes. */
-function assertInsideProject(projectDir, targetPath) {
+/**
+ * Project roots the user opened (dialog) or created in this session. Every
+ * filesystem, build, flash and debug request from the renderer must name one
+ * of them, so renderer content cannot read or run things elsewhere.
+ */
+const openProjectRoots = new Set();
+
+function trustProjectRoot(dir) {
+  const root = path.resolve(dir);
+  openProjectRoots.add(root);
+  return root;
+}
+
+function requireProjectRoot(projectDir) {
   if (!projectDir || typeof projectDir !== 'string') {
     throw new Error('Project directory required')
   }
   const root = path.resolve(projectDir)
+  if (!openProjectRoots.has(root)) {
+    throw new Error('This folder is not an open EmbedIDE project. Open it with File → Open Project.')
+  }
+  return root
+}
+
+/** Resolve targetPath under projectDir; reject traversal / absolute escapes. */
+function assertInsideProject(projectDir, targetPath) {
+  const root = requireProjectRoot(projectDir)
   const resolved = path.isAbsolute(targetPath)
     ? path.resolve(targetPath)
     : path.resolve(root, targetPath)
@@ -92,6 +116,7 @@ function assertInsideProject(projectDir, targetPath) {
 }
 
 function createWindow() {
+  allowWindowClose = false
   const isWin = process.platform === 'win32'
   const icon = loadAppIcon()
   mainWindow = new BrowserWindow({
@@ -131,6 +156,28 @@ function createWindow() {
   mainWindow.on('page-title-updated', (e) => {
     e.preventDefault();
     try { mainWindow.setTitle(APP_NAME); } catch {}
+  });
+
+  // Ask the renderer before closing so unsaved editor changes are not lost.
+  // If the renderer does not answer (hung or crashed), close anyway.
+  mainWindow.on('close', (e) => {
+    if (allowWindowClose) return;
+    e.preventDefault();
+    if (closeRequestTimer) return;
+    try {
+      mainWindow.webContents.send('app:close-requested');
+    } catch {
+      allowWindowClose = true;
+      mainWindow.close();
+      return;
+    }
+    closeRequestTimer = setTimeout(() => {
+      closeRequestTimer = null;
+      if (mainWindow?.webContents.isCrashed?.()) {
+        allowWindowClose = true;
+        mainWindow.close();
+      }
+    }, 3000);
   });
 
   mainWindow.on('maximize', () => mainWindow.webContents.send('window:maximized-change', true));
@@ -284,6 +331,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// Never leave OpenOCD, GDB, a build or the serial helper running after exit
+app.on('before-quit', () => {
+  try { debugManager.killAll(); } catch {}
+  try { cancelBuild(); } catch {}
+  try { serial.shutdown(); } catch {}
+});
+
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
@@ -295,6 +349,14 @@ ipcMain.on('window:maximize', () => {
   else mainWindow?.maximize();
 });
 ipcMain.on('window:close', () => mainWindow?.close());
+// Renderer answer to app:close-requested: true = close now, false = stay open
+ipcMain.on('app:close-response', (_e, ok) => {
+  if (closeRequestTimer) { clearTimeout(closeRequestTimer); closeRequestTimer = null; }
+  if (ok === true && mainWindow) {
+    allowWindowClose = true;
+    mainWindow.close();
+  }
+});
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 
 // Toolchain detection + installer
@@ -326,15 +388,26 @@ ipcMain.handle('toolchain:install', async (_e, opts = {}) => {
 });
 
 // Project management
+function defaultProjectsDir() {
+  return path.join(app.getPath('documents'), 'EmbedIDE-Projects');
+}
+
 ipcMain.handle('project:create', (_e, rootDir, name, type, boardId) => {
-  return createProject(rootDir, name, type, boardId || DEFAULT_BOARD_ID);
+  // New projects go to the standard projects folder only
+  if (typeof rootDir !== 'string' || path.resolve(rootDir) !== path.resolve(defaultProjectsDir())) {
+    throw new Error('Projects are created in the EmbedIDE projects folder');
+  }
+  fs.mkdirSync(defaultProjectsDir(), { recursive: true });
+  const dir = createProject(rootDir, name, type, boardId || DEFAULT_BOARD_ID);
+  trustProjectRoot(dir);
+  return dir;
 });
 
 ipcMain.handle('boards:list', () => listBoards());
 ipcMain.handle('boards:get', (_e, boardId) => getBoard(boardId));
 
 ipcMain.handle('project:list-files', (_e, projectDir) => {
-  return listProjectFiles(projectDir);
+  return listProjectFiles(requireProjectRoot(projectDir));
 });
 
 ipcMain.handle('project:read-file', (_e, projectDir, filePath) => {
@@ -377,7 +450,7 @@ ipcMain.handle('project:open', async () => {
   });
   if (result.canceled || !result.filePaths[0]) return null;
 
-  const dir = result.filePaths[0];
+  const dir = trustProjectRoot(result.filePaths[0]);
   const meta = readProjectMeta(dir);
   const name = meta?.name || path.basename(dir);
   let type = meta?.type || 'c';
@@ -407,7 +480,7 @@ ipcMain.handle('project:open', async () => {
 ipcMain.handle('project:get-templates', () => getTemplateList());
 
 ipcMain.handle('project:get-meta', (_e, dir) => {
-  const meta = readProjectMeta(dir);
+  const meta = readProjectMeta(requireProjectRoot(dir));
   if (!meta) return null;
   const board = getBoardOrDefault(meta.boardId);
   return {
@@ -430,7 +503,7 @@ ipcMain.handle('project:build', async (_e, projectDir, projectType) => {
   };
 
   try {
-    const result = await buildProject(projectDir, projectType, onOutput);
+    const result = await buildProject(requireProjectRoot(projectDir), projectType, onOutput);
     if (result.cancelled) {
       mainWindow?.webContents.send('build:complete', { code: null, cancelled: true });
       return { success: false, cancelled: true, output };
@@ -459,7 +532,7 @@ ipcMain.handle('project:flash', async (_e, projectDir, projectType, config) => {
   };
 
   try {
-    const result = await flashBoard(projectDir, projectType, config, onOutput);
+    const result = await flashBoard(requireProjectRoot(projectDir), projectType, { boardId: config?.boardId }, onOutput);
     mainWindow?.webContents.send('flash:complete', { code: result.code });
     return { success: true, output };
   } catch (err) {
@@ -477,7 +550,9 @@ ipcMain.handle('project:run-script', async (_e, projectDir, projectType, filePat
     mainWindow?.webContents.send('run:output', data);
   };
   try {
-    const result = await runScript(projectDir, projectType, filePath || null, onOutput);
+    const root = requireProjectRoot(projectDir);
+    const entry = filePath ? assertInsideProject(root, filePath) : null;
+    const result = await runScript(root, projectType, entry, onOutput);
     mainWindow?.webContents.send('run:complete', { code: result.code });
     return { success: true, output };
   } catch (err) {
@@ -495,7 +570,9 @@ ipcMain.handle('project:debug', async (_e, projectDir, projectType, config) => {
     mainWindow?.webContents.send('run:output', data);
   };
   try {
-    const result = await startDebugSession(projectDir, projectType, config || {}, onOutput);
+    const root = requireProjectRoot(projectDir);
+    const entry = config?.filePath ? assertInsideProject(root, config.filePath) : null;
+    const result = await startDebugSession(root, projectType, { filePath: entry }, onOutput);
     mainWindow?.webContents.send('run:complete', { code: result.code ?? 0 });
     return { success: true, output };
   } catch (err) {
@@ -511,44 +588,108 @@ ipcMain.handle('project:cancel-debug', () => {
   return true;
 });
 
-// Serial
-ipcMain.handle('serial:list-ports', async () => {
-  const ports = await listSerialPorts();
-  return ports;
+// Interactive firmware debugging (OpenOCD / GDB server + GDB/MI)
+const debugManager = new DebugManager({
+  resolveTool,
+  toolEnv: () => getToolchainEnv(),
+  openocdScripts: () => findOpenocdScripts(getBundledRoot()),
+});
+debugManager.on('event', (evt) => {
+  try { mainWindow?.webContents.send('debug:event', evt) } catch {}
 });
 
-ipcMain.handle('serial:connect', async (_e, port, baud) => {
-  disconnectSerial();
+/** IPC results carry structured errors; thrown errors would lose `code`. */
+async function debugCall(fn) {
   try {
-    serialConnection = await connectSerial(
-      port,
-      baud,
-      (data) => mainWindow?.webContents.send('serial:data', data),
-      (err) => mainWindow?.webContents.send('serial:error', err),
-    );
-    return { connected: true };
+    return { ok: true, result: await fn() };
   } catch (err) {
-    serialConnection = null;
+    return { ok: false, error: toError(err) };
+  }
+}
+
+ipcMain.handle('debug:status', () => debugManager.status());
+
+ipcMain.handle('debug:start', (_e, projectDir, projectType, opts = {}) => debugCall(async () => {
+  const root = requireProjectRoot(projectDir);
+  if (isScriptProject(String(projectType || ''))) {
+    throw Object.assign(new Error('Host scripts run with Build/Run; the firmware debugger needs a firmware project.'), { code: 'unsupported' });
+  }
+  const board = resolveBoard(root, { boardId: typeof opts.boardId === 'string' ? opts.boardId : undefined });
+  const elf = detectElf(root, String(projectType || ''));
+  prependBundledToolchainToPath();
+  // Only these fields reach the debug manager; tool paths are never taken from the renderer
+  return debugManager.start({
+    projectDir: root,
+    elf,
+    mode: opts.mode === 'remote' ? 'remote' : 'openocd',
+    adapter: typeof opts.adapter === 'string' && opts.adapter ? opts.adapter : board.defaultAdapter,
+    target: typeof opts.target === 'string' && opts.target ? opts.target : board.openocdTarget,
+    gdbPort: opts.gdbPort,
+    remote: typeof opts.remote === 'string' ? opts.remote : undefined,
+    loadFirmware: opts.loadFirmware === true,
+  });
+}));
+
+ipcMain.handle('debug:op', (_e, name, args) => debugCall(() =>
+  debugManager.op(String(name || ''), args && typeof args === 'object' ? args : {})));
+
+ipcMain.handle('debug:toggle-breakpoint', (_e, projectDir, file, line) => debugCall(() =>
+  debugManager.toggleBreakpoint(requireProjectRoot(projectDir), file, line)));
+
+ipcMain.handle('debug:clear-breakpoints', () => debugCall(() => debugManager.clearBreakpoints()));
+
+ipcMain.handle('debug:stop', () => debugCall(() => debugManager.stop()));
+
+// Serial (Rust serial-bridge: binary-safe, no Python)
+const serial = new SerialService();
+serial.on('data', (buf) => {
+  try { mainWindow?.webContents.send('serial:data', new Uint8Array(buf)) } catch {}
+});
+serial.on('status', (st) => {
+  try { mainWindow?.webContents.send('serial:status', st) } catch {}
+});
+serial.on('error-message', (msg) => {
+  try { mainWindow?.webContents.send('serial:error', msg) } catch {}
+});
+
+ipcMain.handle('serial:list-ports', async () => {
+  try {
+    return { ok: true, ports: await serial.list() };
+  } catch (err) {
+    return { ok: false, ports: [], error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('serial:connect', async (_e, config) => {
+  try {
+    if (config && typeof config === 'object' && typeof config.autoReconnect === 'boolean') {
+      serial.autoReconnect = config.autoReconnect;
+    }
+    const r = await serial.open(config);
+    return { connected: true, ...r };
+  } catch (err) {
     return { connected: false, error: err.message || String(err) };
   }
 });
 
 ipcMain.handle('serial:send', (_e, data) => {
-  if (serialConnection) serialConnection.send(data);
-  return true;
+  try {
+    // Renderer sends bytes (Uint8Array) — text encoding/line endings are its choice
+    const bytes = data instanceof Uint8Array ? Buffer.from(data) : Buffer.from(String(data ?? ''), 'utf8');
+    serial.write(bytes);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
 });
 
-ipcMain.handle('serial:disconnect', () => {
-  disconnectSerial();
-  serialConnection = null;
+ipcMain.handle('serial:disconnect', async () => {
+  await serial.close();
   return true;
 });
 
 // App info
-ipcMain.handle('app:get-default-projects-dir', () => {
-  const docs = app.getPath('documents');
-  return path.join(docs, 'EmbedIDE-Projects');
-});
+ipcMain.handle('app:get-default-projects-dir', () => defaultProjectsDir());
 
 // Settings persistence
 ipcMain.handle('shell:open-external', async (_e, url) => {
@@ -559,32 +700,53 @@ ipcMain.handle('shell:open-external', async (_e, url) => {
   return true
 })
 
+function secretCodec() {
+  let available = false;
+  let backend = null;
+  try { available = safeStorage.isEncryptionAvailable(); } catch {}
+  try { backend = safeStorage.getSelectedStorageBackend?.() || null; } catch {}
+  return {
+    available,
+    backend,
+    encrypt: (s) => safeStorage.encryptString(s).toString('base64'),
+    decrypt: (b64) => safeStorage.decryptString(Buffer.from(b64, 'base64')),
+  };
+}
+
 ipcMain.handle('settings:load', () => {
   try {
+    let raw = null;
     if (fs.existsSync(SETTINGS_PATH)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+      raw = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    } else {
+      // Migrate settings if an older build used Electron's default EmbedIDE userData dir
+      const legacy = path.join(app.getPath('appData'), 'EmbedIDE', 'settings.json');
+      if (fs.existsSync(legacy)) raw = JSON.parse(fs.readFileSync(legacy, 'utf8'));
     }
-    // Migrate settings if an older build used Electron's default EmbedIDE userData dir
-    const legacy = path.join(app.getPath('appData'), 'EmbedIDE', 'settings.json');
-    if (fs.existsSync(legacy)) {
-      const data = JSON.parse(fs.readFileSync(legacy, 'utf8'));
-      try {
-        fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(data), 'utf8');
-      } catch {}
-      return data;
+    if (!raw) return {};
+    const { settings, needsRewrite } = decodeSettingsFromDisk(raw, secretCodec());
+    // Older builds stored the API key in plain text: re-save it protected
+    if (needsRewrite) {
+      try { writeFileAtomic(SETTINGS_PATH, JSON.stringify(encodeSettingsForDisk(settings, secretCodec()))); } catch {}
     }
+    return settings;
   } catch {}
   return {};
 });
 
 ipcMain.handle('settings:save', async (_e, settings) => {
   try {
-    await fs.promises.mkdir(path.dirname(SETTINGS_PATH), { recursive: true });
-    // Compact JSON — fewer bytes, faster writes on every settings change
-    await fs.promises.writeFile(SETTINGS_PATH, JSON.stringify(settings), 'utf8');
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    writeFileAtomic(SETTINGS_PATH, JSON.stringify(encodeSettingsForDisk(settings, secretCodec())));
     return true;
   } catch { return false; }
+});
+
+ipcMain.handle('settings:secret-storage', () => {
+  const c = secretCodec();
+  // basic_text means Chromium's fixed-key obfuscation (no keyring on Linux)
+  return { encrypted: c.available && c.backend !== 'basic_text', backend: c.backend };
 });
 
 ipcMain.handle('ai:cli-status', (_e, providerId) => {
@@ -593,8 +755,12 @@ ipcMain.handle('ai:cli-status', (_e, providerId) => {
 
 ipcMain.handle('ai:cli-chat', async (_e, providerId, payload) => {
   const messages = Array.isArray(payload?.messages) ? payload.messages : []
-  const model = typeof payload?.model === 'string' ? payload.model : undefined
-  const cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined
+  // A model id that starts with "-" would be parsed by the CLI as a flag
+  const model = typeof payload?.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(payload.model)
+    ? payload.model : undefined
+  // Run the CLI only inside an open project (or the temp dir)
+  const cwd = typeof payload?.cwd === 'string' && openProjectRoots.has(path.resolve(payload.cwd))
+    ? path.resolve(payload.cwd) : undefined
   try {
     const text = await chatViaCli(String(providerId || ''), { messages, model, cwd })
     return { ok: true, text }

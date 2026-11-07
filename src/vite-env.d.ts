@@ -31,6 +31,69 @@ interface ToolchainInfo {
 interface SerialPort {
   device: string
   description: string
+  kind?: string
+  vid?: number | null
+  pid?: number | null
+  serialNumber?: string | null
+}
+
+interface SerialConnectConfig {
+  port: string
+  baud: number
+  dataBits?: 5 | 6 | 7 | 8
+  parity?: 'none' | 'odd' | 'even'
+  stopBits?: 1 | 2
+  flowControl?: 'none' | 'software' | 'hardware'
+  autoReconnect?: boolean
+}
+
+interface SerialStatus {
+  state: 'open' | 'closed' | 'lost' | 'reconnecting'
+  port?: string
+  baud?: number
+  message?: string
+  reconnected?: boolean
+}
+
+interface DebugErrorInfo { code: string; message: string; detail?: string }
+type DebugResult<T> = { ok: true; result: T } | { ok: false; error: DebugErrorInfo }
+
+interface DebugFrame {
+  level: number
+  addr: string | null
+  func: string | null
+  file: string | null
+  fullname: string | null
+  line: number | null
+}
+
+interface DebugBreakpoint { file: string; line: number; number: number | null; verified: boolean }
+
+interface DebugStatusInfo {
+  active: boolean
+  starting: boolean
+  state: 'idle' | 'starting' | 'running' | 'stopped'
+  mode: 'openocd' | 'remote' | null
+  elf: string | null
+  frame: DebugFrame | null
+  breakpoints: DebugBreakpoint[]
+}
+
+type DebugEvent =
+  | { type: 'state'; state: 'idle' | 'running' | 'stopped' }
+  | { type: 'stopped'; reason: string; signal?: string | null; bkptno?: number | null; frame: DebugFrame | null }
+  | { type: 'output'; stream: string; text: string }
+  | { type: 'breakpoints'; breakpoints: DebugBreakpoint[] }
+  | { type: 'ended'; reason: string }
+
+interface DebugStartOptions {
+  boardId?: string
+  mode?: 'openocd' | 'remote'
+  adapter?: string
+  target?: string
+  gdbPort?: number
+  remote?: string
+  loadFirmware?: boolean
 }
 
 interface ProjectTemplate {
@@ -169,16 +232,29 @@ interface ElectronAPI {
   onRunOutput: (cb: (data: BuildOutput) => void) => () => void
   onRunComplete: (cb: (data: {code: number | null, error?: string}) => void) => () => void
 
-  listSerialPorts: () => Promise<SerialPort[]>
-  connectSerial: (port: string, baud: number) => Promise<{connected: boolean, error?: string}>
-  sendSerial: (data: string) => Promise<boolean>
+  listSerialPorts: () => Promise<{ ok: boolean; ports: SerialPort[]; error?: string }>
+  connectSerial: (config: SerialConnectConfig) => Promise<{connected: boolean, port?: string, baud?: number, error?: string}>
+  sendSerial: (data: Uint8Array) => Promise<{ ok: boolean; error?: string }>
   disconnectSerial: () => Promise<boolean>
-  onSerialData: (cb: (data: string) => void) => () => void
+  onSerialData: (cb: (data: Uint8Array) => void) => () => void
   onSerialError: (cb: (data: string) => void) => () => void
+  onSerialStatus: (cb: (status: SerialStatus) => void) => () => void
+
+  debugStatus: () => Promise<DebugStatusInfo>
+  debugStart: (dir: string, type: string, opts: DebugStartOptions) => Promise<DebugResult<DebugStatusInfo>>
+  debugOp: (name: 'continue' | 'pause' | 'stepOver' | 'stepInto' | 'stepOut' | 'stepInstruction' | 'reset' | 'stack' | 'locals' | 'registers' | 'memory' | 'evaluate', args?: Record<string, unknown>) => Promise<DebugResult<any>>
+  debugToggleBreakpoint: (dir: string, file: string, line: number) => Promise<DebugResult<DebugBreakpoint[]>>
+  debugClearBreakpoints: () => Promise<DebugResult<DebugBreakpoint[]>>
+  debugStop: () => Promise<DebugResult<{ ok: true }>>
+  onDebugEvent: (cb: (evt: DebugEvent) => void) => () => void
+
+  onCloseRequested: (cb: () => void) => () => void
+  respondClose: (ok: boolean) => void
 
   getDefaultProjectsDir: () => Promise<string>
   loadSettings: () => Promise<Record<string, unknown>>
   saveSettings: (settings: Record<string, unknown>) => Promise<boolean>
+  secretStorageStatus: () => Promise<{ encrypted: boolean; backend: string | null }>
   openExternal: (url: string) => Promise<boolean>
 
   aiCliStatus: (providerId: string) => Promise<{

@@ -111,6 +111,10 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
   const [ollamaInfo, setOllamaInfo] = useState('')
   const [cliStatus, setCliStatus] = useState<CliStatus | null>(null)
   const [cliChecking, setCliChecking] = useState(false)
+  const [keyStorage, setKeyStorage] = useState<{ encrypted: boolean } | null>(null)
+  useEffect(() => {
+    window.electronAPI?.secretStorageStatus?.().then(setKeyStorage).catch(() => {})
+  }, [])
 
   const providerId = migrateAiProvider(editorSettings)
   const provider = getAiProvider(providerId)
@@ -733,6 +737,11 @@ export function Settings({ editorSettings, onEditorSettingsChange, onClose }: Se
                 )}
                 {!keyIssue && (
                   <span className="settings-hint">{t('settings.aiKeyHint')}</span>
+                )}
+                {keyStorage && editorSettings.aiKey && (
+                  <span className={`settings-hint ${keyStorage.encrypted ? '' : 'settings-hint-warn'}`}>
+                    {keyStorage.encrypted ? t('settings.aiKeyStoredEncrypted') : t('settings.aiKeyStoredPlain')}
+                  </span>
                 )}
               </div>
             </div>

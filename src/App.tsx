@@ -6,6 +6,7 @@ import { Editor } from './ui/Editor'
 import { AIAgents } from './ui/AIAgents'
 import { OutputPanel } from './ui/OutputPanel'
 import { SerialMonitor } from './ui/SerialMonitor'
+import { DebugPanel, type DebugConfig } from './ui/DebugPanel'
 import { Settings } from './ui/Settings'
 import { ProjectDialog } from './ui/ProjectDialog'
 import { SlidePanel } from './ui/SlidePanel'
@@ -54,7 +55,17 @@ function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [toolchainSetupOpen, setToolchainSetupOpen] = useState(false)
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
-  const [bottomTab, setBottomTab] = useState<'output' | 'serial' | 'memory' | 'peripheral' | null>(null)
+  const [bottomTab, setBottomTab] = useState<'output' | 'serial' | 'memory' | 'peripheral' | 'debug' | null>(null)
+  // Interactive debugger state (owned by the main process, mirrored here)
+  const [debugState, setDebugState] = useState<'idle' | 'starting' | 'running' | 'stopped'>('idle')
+  const [debugFrame, setDebugFrame] = useState<DebugFrame | null>(null)
+  const [debugStopSeq, setDebugStopSeq] = useState(0)
+  const [breakpoints, setBreakpoints] = useState<DebugBreakpoint[]>([])
+  const [debugError, setDebugError] = useState<DebugErrorInfo | null>(null)
+  const [debugConfig, setDebugConfig] = useState<DebugConfig>({ mode: 'openocd', adapter: '', target: '', gdbPort: 3333, remote: '127.0.0.1:3333', loadFirmware: false })
+  const [boardDefaults, setBoardDefaults] = useState({ adapter: 'stlink', target: '' })
+  const [flashConfirm, setFlashConfirm] = useState<null | { kind: 'flash' | 'debug' }>(null)
+  const [closePrompt, setClosePrompt] = useState(false)
   const [toolchains, setToolchains] = useState<ToolchainInfo | null>(null)
   const [memoryUsage, setMemoryUsage] = useState<MemoryUsage>({ flashUsed: 0, flashTotal: 1048576, ramUsed: 0, ramTotal: 131072 })
   const [showLeftPanel, setShowLeftPanel] = useState(true)
@@ -125,6 +136,11 @@ function AppContent() {
   const editorSettingsRef = useRef(editorSettings)
   const buildCancelRef = useRef(false)
   const debugBusyRef = useRef(false)
+  const debugStateRef = useRef(debugState)
+  debugStateRef.current = debugState
+  const debugConfigRef = useRef(debugConfig)
+  debugConfigRef.current = debugConfig
+  const revealFrameRef = useRef<(f: DebugFrame | null) => void>(() => {})
   openTabsRef.current = openTabs
   activeTabIdRef.current = activeTabId
   projectRef.current = project
@@ -260,7 +276,9 @@ function AppContent() {
       if (data.code === 0) {
         setOutputMessages(prev => [...prev, { type: 'success', text: tRef.current('build.success'), timestamp: Date.now(), source: 'build' }])
         const typ = projectRef.current?.type || ''
-        if (!/^script-|^python$|^shell$/.test(typ)) {
+        if (debugBusyRef.current) {
+          // debug start continues after the build; keep the debug tab
+        } else if (!/^script-|^python$|^shell$/.test(typ)) {
           setBottomTab('memory')
         } else {
           setBottomTab('output')
@@ -313,7 +331,7 @@ function AppContent() {
   // Menu events — use refs so handlers stay fresh without resubscribing
   const handleOpenProjectRef = useRef<() => void>(() => {})
   const handleSaveRef = useRef<() => void>(() => {})
-  const saveAllDirtyRef = useRef<() => void>(() => {})
+  const saveAllDirtyRef = useRef<() => Promise<boolean> | void>(() => {})
   const handleBuildRef = useRef<() => void>(() => {})
   const handleFlashRef = useRef<() => void>(() => {})
   const handleDebugRef = useRef<() => void>(() => {})
@@ -368,9 +386,11 @@ function AppContent() {
     const tabs = openTabsRef.current
     const proj = projectRef.current
     const dirty = tabs.filter(t => t.dirty && proj)
+    let ok = true
     for (const tab of dirty) {
-      await saveTab(tab.id)
+      if (!(await saveTab(tab.id))) ok = false
     }
+    return ok
   }, [saveTab])
 
   const loadProject = useCallback(async (
@@ -655,13 +675,26 @@ function AppContent() {
     addOutput({ type: 'warn', text: tRef.current('build.cancelled'), timestamp: Date.now(), source: 'build' })
   }, [addOutput])
 
+  const isFirmwareType = (type?: string) => !!type && !/^script-|^python$|^shell$/.test(type)
+
+  // Flashing writes to the connected MCU: always confirm first
   const handleFlash = useCallback(async () => {
     const proj = projectRef.current
     if (!proj) { addOutput({ type: 'warn', text: tRef.current('flash.noProject'), timestamp: Date.now(), source: 'flash' }); return }
-    if (/^script-|^python$|^shell$/.test(proj.type)) {
+    if (!isFirmwareType(proj.type)) {
       addOutput({ type: 'warn', text: tRef.current('flash.scriptsUnsupported'), timestamp: Date.now(), source: 'flash' })
       return
     }
+    if (debugStateRef.current !== 'idle') {
+      addOutput({ type: 'warn', text: tRef.current('flash.debugActive'), timestamp: Date.now(), source: 'flash' })
+      return
+    }
+    setFlashConfirm({ kind: 'flash' })
+  }, [addOutput])
+
+  const performFlash = useCallback(async () => {
+    const proj = projectRef.current
+    if (!proj) return
     await saveAllDirty()
     setBottomTab('output')
     addOutput({ type: 'info', text: tRef.current('flash.starting'), timestamp: Date.now(), source: 'flash' })
@@ -683,9 +716,149 @@ function AppContent() {
     }
   }, [addOutput, saveAllDirty])
 
+  const pathKey = useCallback((p: string) => {
+    const n = p.replace(/\\/g, '/')
+    return /Windows/i.test(navigator.userAgent) ? n.toLowerCase() : n
+  }, [])
+
+  // Open the source of a stopped frame when it belongs to the project
+  const revealFrame = useCallback(async (frame: DebugFrame | null) => {
+    const proj = projectRef.current
+    const file = frame?.fullname
+    if (!proj || !file) return
+    const root = pathKey(proj.dir)
+    const full = pathKey(file)
+    if (!full.startsWith(root + '/')) return
+    const rel = file.replace(/\\/g, '/').slice(proj.dir.replace(/\\/g, '/').length + 1)
+    const id = `${proj.dir}/${rel}`
+    const existing = openTabsRef.current.find(t => pathKey(t.id) === pathKey(id))
+    if (existing) { setActiveTabId(existing.id); return }
+    const name = rel.split('/').pop() || rel
+    const ext = name.includes('.') ? name.split('.').pop()! : ''
+    const lang = ({ c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp', rs: 'rust', zig: 'zig', S: 'asm', s: 'asm' } as Record<string, string>)[ext] || ext
+    try {
+      const content = await window.electronAPI!.readProjectFile(proj.dir, id)
+      openFileTab({ id, name, language: lang }, content)
+    } catch { /* source outside the project or unreadable */ }
+  }, [openFileTab, pathKey])
+  revealFrameRef.current = (f) => { void revealFrame(f) }
+
+  // Debugger events from the main process
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onDebugEvent) return
+    api.debugStatus?.().then(st => {
+      if (!st) return
+      setBreakpoints(st.breakpoints || [])
+      if (st.active) setDebugState(st.state)
+    }).catch(() => {})
+    return api.onDebugEvent((evt) => {
+      if (evt.type === 'state') {
+        setDebugState(evt.state)
+      } else if (evt.type === 'stopped') {
+        setDebugFrame(evt.frame)
+        setDebugStopSeq(n => n + 1)
+        revealFrameRef.current(evt.frame)
+      } else if (evt.type === 'breakpoints') {
+        setBreakpoints(evt.breakpoints)
+      } else if (evt.type === 'ended') {
+        setDebugFrame(null)
+        setDebugState('idle')
+        const key = evt.reason === 'user' ? 'debug.endedUser' : evt.reason === 'openocd-exited' ? 'debug.endedProbe' : evt.reason === 'gdb-exited' ? 'debug.endedGdb' : 'debug.endedTarget'
+        const msg: BuildMessage = { type: evt.reason === 'user' ? 'info' : 'error', text: tRef.current(key), timestamp: Date.now(), source: 'build' }
+        setOutputMessages(prev => [...prev, msg])
+      } else if (evt.type === 'output') {
+        const isErr = /error|stderr/.test(evt.stream)
+        const msg: BuildMessage = { type: isErr ? 'warn' : 'info', text: evt.text, timestamp: Date.now(), source: 'build' }
+        setOutputMessages(prev => [...prev, msg].slice(-5000))
+      }
+    })
+  }, [])
+
+  // Board defaults for the OpenOCD configuration
+  useEffect(() => {
+    const id = project?.boardId
+    if (!id) return
+    window.electronAPI?.getBoard(id).then(b => {
+      if (b) setBoardDefaults({ adapter: b.defaultAdapter || 'stlink', target: b.openocdTarget || '' })
+    }).catch(() => {})
+  }, [project?.boardId])
+
+  const startFirmwareDebug = useCallback(async (flashConfirmed: boolean) => {
+    const proj = projectRef.current
+    if (!proj || debugStateRef.current !== 'idle') return
+    const cfg = debugConfigRef.current
+    if (cfg.loadFirmware && !flashConfirmed) { setFlashConfirm({ kind: 'debug' }); return }
+    setDebugError(null)
+    setBottomTab('debug')
+    setDebugState('starting')
+    debugBusyRef.current = true
+    try {
+      await saveAllDirty()
+      setOutputMessages(prev => [...prev, { type: 'info', text: tRef.current('debug.buildingFirst'), timestamp: Date.now(), source: 'build' }])
+      const built = await window.electronAPI!.buildProject(proj.dir, proj.type)
+      if (built && built.success === false) {
+        setDebugState('idle')
+        setDebugError({ code: 'build_failed', message: tRef.current('debug.buildFailed') })
+        return
+      }
+      const r = await window.electronAPI!.debugStart(proj.dir, proj.type, {
+        boardId: proj.boardId,
+        mode: cfg.mode,
+        adapter: cfg.adapter || undefined,
+        target: cfg.target || undefined,
+        gdbPort: cfg.gdbPort,
+        remote: cfg.remote,
+        loadFirmware: cfg.loadFirmware,
+      })
+      if (!r.ok) {
+        setDebugState('idle')
+        setDebugError(r.error)
+        return
+      }
+      setDebugState(r.result.state === 'running' ? 'running' : 'stopped')
+      setDebugFrame(r.result.frame)
+      setBreakpoints(r.result.breakpoints)
+      setDebugStopSeq(n => n + 1)
+      revealFrameRef.current(r.result.frame)
+    } catch (err) {
+      setDebugState('idle')
+      setDebugError({ code: 'debug_error', message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      debugBusyRef.current = false
+      setIsBuilding(false)
+    }
+  }, [saveAllDirty])
+
+  const debugOp = useCallback(async (name: 'continue' | 'pause' | 'stepOver' | 'stepInto' | 'stepOut' | 'stepInstruction' | 'reset') => {
+    const r = await window.electronAPI?.debugOp(name)
+    if (r && !r.ok) setDebugError(r.error)
+    else setDebugError(null)
+  }, [])
+
+  const stopDebug = useCallback(async () => {
+    await window.electronAPI?.debugStop()
+  }, [])
+
+  const toggleBreakpoint = useCallback(async (tabId: string, line: number) => {
+    const proj = projectRef.current
+    if (!proj || !tabId) return
+    const r = await window.electronAPI?.debugToggleBreakpoint(proj.dir, tabId, line)
+    if (!r) return
+    if (r.ok) setBreakpoints(r.result)
+    else addOutput({ type: 'error', text: r.error.message, timestamp: Date.now(), source: 'build' })
+  }, [addOutput])
+
   const handleDebug = useCallback(async () => {
     const proj = projectRef.current
     if (!proj) { addOutput({ type: 'warn', text: tRef.current('build.noProject'), timestamp: Date.now(), source: 'build' }); return }
+    if (isFirmwareType(proj.type)) {
+      // F5: continue when halted, otherwise start a session
+      if (debugStateRef.current === 'stopped') { await debugOp('continue'); return }
+      if (debugStateRef.current === 'idle') await startFirmwareDebug(false)
+      return
+    }
+    // Host scripts: Debug runs the script with the host compiler
     await saveAllDirty()
     setBottomTab('output')
     setOutputMessages([{
@@ -699,26 +872,12 @@ function AppContent() {
     try {
       const active = activeTabIdRef.current
       const filePath = active && active.startsWith(proj.dir) ? active : undefined
-      // Firmware: compile first so Debug always has a fresh ELF when possible
-      if (!/^script-|^python$|^shell$/.test(proj.type)) {
-        addOutput({ type: 'info', text: tRef.current('debug.buildingFirst'), timestamp: Date.now(), source: 'build' })
-        const built = await window.electronAPI!.buildProject(proj.dir, proj.type)
-        setBottomTab('output')
-        if (built && built.success === false) {
-          const err = (built as { error?: string }).error || tRef.current('build.failed', { code: -1 })
-          addOutput({ type: 'error', text: err, timestamp: Date.now(), source: 'build' })
-          return
-        }
-      }
-      setBottomTab('output')
       const result = await window.electronAPI!.startDebug(proj.dir, proj.type, {
         boardId: proj.boardId,
         filePath,
       })
       if (!result?.success && result?.error) {
         addOutput({ type: 'error', text: result.error, timestamp: Date.now(), source: 'build' })
-      } else if (result?.success) {
-        addOutput({ type: 'success', text: tRef.current('debug.done'), timestamp: Date.now(), source: 'build' })
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -727,7 +886,43 @@ function AppContent() {
       debugBusyRef.current = false
       setIsBuilding(false)
     }
-  }, [addOutput, saveAllDirty])
+  }, [addOutput, saveAllDirty, debugOp, startFirmwareDebug])
+
+  const debugOpRef = useRef(debugOp)
+  debugOpRef.current = debugOp
+  const stopDebugRef = useRef(stopDebug)
+  stopDebugRef.current = stopDebug
+
+  // Window close: ask about unsaved editor changes first
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onCloseRequested) return
+    return api.onCloseRequested(() => {
+      if (!openTabsRef.current.some(t => t.dirty)) { api.respondClose(true); return }
+      setClosePrompt(true)
+    })
+  }, [])
+
+  const closeSaveAndQuit = useCallback(async () => {
+    const ok = await saveAllDirty()
+    if (!ok) {
+      // a save failed: stay open so nothing is lost
+      setClosePrompt(false)
+      window.electronAPI?.respondClose(false)
+      return
+    }
+    setClosePrompt(false)
+    window.electronAPI?.respondClose(true)
+  }, [saveAllDirty])
+
+  const debugMarks = useMemo(() => {
+    if (!activeTabId) return { breakpoints: [], executionLine: null }
+    const key = pathKey(activeTabId)
+    return {
+      breakpoints: breakpoints.filter(b => pathKey(b.file) === key).map(b => ({ line: b.line, verified: b.verified })),
+      executionLine: debugFrame?.fullname && pathKey(debugFrame.fullname) === key ? debugFrame.line : null,
+    }
+  }, [activeTabId, breakpoints, debugFrame, pathKey])
 
   const handleSave = useCallback(async (tabId?: string) => {
     const id = tabId || activeTabIdRef.current
@@ -797,7 +992,13 @@ function AppContent() {
       if (c && e.key === 's') { e.preventDefault(); handleSaveRef.current() }
       if (c && e.key === 'b' && !e.shiftKey) { e.preventDefault(); handleBuildRef.current() }
       if (c && e.shiftKey && e.key === 'B') { e.preventDefault(); handleFlashRef.current() }
-      if (e.key === 'F5') { e.preventDefault(); handleDebugRef.current() }
+      const dbg = debugStateRef.current
+      if (e.key === 'F5' && e.shiftKey) { if (dbg !== 'idle') { e.preventDefault(); void stopDebugRef.current() } }
+      else if (e.key === 'F5') { e.preventDefault(); handleDebugRef.current() }
+      if (dbg === 'stopped' && e.key === 'F10') { e.preventDefault(); void debugOpRef.current('stepOver') }
+      if (dbg === 'stopped' && e.key === 'F11' && !e.shiftKey) { e.preventDefault(); void debugOpRef.current('stepInto') }
+      if (dbg === 'stopped' && e.key === 'F11' && e.shiftKey) { e.preventDefault(); void debugOpRef.current('stepOut') }
+      if (dbg === 'running' && e.key === 'F6') { e.preventDefault(); void debugOpRef.current('pause') }
       if (e.key === 'F7') { e.preventDefault(); handleBuildRef.current() }
       if (c && e.key === 'w' && activeTabIdRef.current) {
         e.preventDefault()
@@ -892,11 +1093,14 @@ function AppContent() {
                 onSave={handleSave}
                 editorSettings={editorSettings}
                 fileDiagnostics={activeFileDiagnostics}
+                debugMarks={debugMarks}
+                onToggleBreakpoint={toggleBreakpoint}
               />
-              <SlidePanel visible={bottomTab != null} side="bottom" height={240}>
+              <SlidePanel visible={bottomTab != null} side="bottom" height={bottomTab === 'debug' ? 320 : 240}>
                 <div className="app-bottom-panels">
                   <div className="app-bottom-tabs">
                     <button className={`app-bottom-tab ${bottomTab === 'output' ? 'active' : ''}`} onClick={() => setBottomTab('output')}>{t('output.title')}</button>
+                    <button className={`app-bottom-tab ${bottomTab === 'debug' ? 'active' : ''}`} onClick={() => setBottomTab('debug')}>{t('debug.title')}{debugState !== 'idle' ? ' ●' : ''}</button>
                     <button className={`app-bottom-tab ${bottomTab === 'serial' ? 'active' : ''}`} onClick={() => setBottomTab('serial')}>{t('serial.title')}</button>
                     <button className={`app-bottom-tab ${bottomTab === 'memory' ? 'active' : ''}`} onClick={() => setBottomTab('memory')}>{t('memory.title')}</button>
                     <button className={`app-bottom-tab ${bottomTab === 'peripheral' ? 'active' : ''}`} onClick={() => setBottomTab('peripheral')}>{t('peripheral.title')}</button>
@@ -921,6 +1125,26 @@ function AppContent() {
                     </div>
                     {bottomTab === 'output' && (
                       <OutputPanel messages={outputMessages} onClose={() => setBottomTab(null)} />
+                    )}
+                    {bottomTab === 'debug' && (
+                      <DebugPanel
+                        hasProject={!!project}
+                        isFirmware={isFirmwareType(project?.type)}
+                        state={debugState}
+                        frame={debugFrame}
+                        stopSeq={debugStopSeq}
+                        breakpoints={breakpoints}
+                        config={debugConfig}
+                        onConfigChange={setDebugConfig}
+                        boardDefaults={boardDefaults}
+                        error={debugError}
+                        onStart={() => void startFirmwareDebug(false)}
+                        onStop={() => void stopDebug()}
+                        onOp={(name) => void debugOp(name)}
+                        onRemoveBreakpoint={(bp) => void toggleBreakpoint(bp.file, bp.line)}
+                        onClearBreakpoints={() => { void window.electronAPI?.debugClearBreakpoints().then(r => { if (r?.ok) setBreakpoints(r.result) }) }}
+                        onJumpToFrame={(f) => revealFrameRef.current(f)}
+                      />
                     )}
                   </div>
                 </div>
@@ -989,6 +1213,44 @@ function AppContent() {
               onConfirm={handleDeleteConfirm}
               onCancel={() => setConfirmDelete(null)}
             />
+          )}
+
+          {flashConfirm && (
+            <ConfirmDialog
+              title={t('flash.confirmTitle')}
+              message={t('flash.confirmMsg', {
+                board: project?.boardName || project?.boardId || '?',
+                adapter: (flashConfirm.kind === 'debug' && debugConfig.mode === 'remote') ? debugConfig.remote : (debugConfig.adapter || boardDefaults.adapter),
+                target: debugConfig.target || boardDefaults.target || '?',
+              })}
+              confirmLabel={t('flash.confirmButton')}
+              danger={false}
+              onConfirm={() => {
+                const kind = flashConfirm.kind
+                setFlashConfirm(null)
+                if (kind === 'flash') void performFlash()
+                else void startFirmwareDebug(true)
+              }}
+              onCancel={() => setFlashConfirm(null)}
+            />
+          )}
+
+          {closePrompt && (
+            <div className="settings-overlay">
+              <div className="dirty-dialog" role="dialog" aria-modal="true">
+                <div className="settings-header">
+                  <span className="settings-title">{t('confirmDialog.closeTitle')}</span>
+                </div>
+                <div className="dirty-body">
+                  <p>{t('confirmDialog.closeMsg', { n: openTabs.filter(x => x.dirty).length })}</p>
+                </div>
+                <div className="dirty-footer">
+                  <button className="project-btn project-btn-cancel" onClick={() => { setClosePrompt(false); window.electronAPI?.respondClose(false) }}>{t('common.cancel')}</button>
+                  <button className="project-btn" onClick={() => { setClosePrompt(false); window.electronAPI?.respondClose(true) }} style={{ border: '1px solid var(--border)', color: 'var(--text)' }}>{t('common.dontSave')}</button>
+                  <button className="project-btn project-btn-create" onClick={() => void closeSaveAndQuit()}>{t('confirmDialog.saveAndClose')}</button>
+                </div>
+              </div>
+            </div>
           )}
 
           {dirtyConfirm && (

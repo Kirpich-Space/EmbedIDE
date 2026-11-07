@@ -438,7 +438,6 @@ function runProcess(cmd, args, cwd, onOutput, { host = false } = {}) {
 }
 
 let currentRunProc = null;
-let currentOpenocdProc = null;
 
 /**
  * A path can be handed to Make as a variable only if the recipe shell will
@@ -707,146 +706,23 @@ function cancelRun() {
   return false;
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
+/**
+ * "Debug" for host script projects runs the script. Firmware is debugged
+ * interactively by DebugManager (electron/debugSession.js).
+ */
 async function startDebugSession(projectDir, projectType, config = {}, onOutput) {
   if (isScriptProject(projectType)) {
     return runScript(projectDir, projectType, config.filePath || null, onOutput);
   }
-
-  prependBundledToolchainToPath();
-  const tc = await detectToolchains({ force: true });
-  if (!tc.openocd) {
-    throw new Error(missingBundledHint('OpenOCD'));
-  }
-  if (!tc.armGdb && !tc.armGcc) {
-    throw new Error(missingBundledHint('arm-none-eabi-gdb'));
-  }
-
-  const board = resolveBoard(projectDir, config);
-  const adapter = config.adapter || board.defaultAdapter || 'stlink';
-  const target = config.target || board.openocdTarget;
-  if (!/^[a-zA-Z0-9._-]+$/.test(adapter) || !/^[a-zA-Z0-9._-]+$/.test(target)) {
-    throw new Error('Invalid OpenOCD adapter or target name');
-  }
-
-  let elf = detectElf(projectDir, projectType, config.elfPath);
-  if (!elf) {
-    onOutput?.({ type: 'stdout', text: 'No ELF found — compiling before debug...\n' });
-    await buildProject(projectDir, projectType, onOutput);
-    elf = detectElf(projectDir, projectType, config.elfPath);
-  }
-  if (!elf) {
-    throw new Error('No ELF file found after build. Check compile errors above.');
-  }
-
-  cancelDebugSession();
-
-  onOutput?.({ type: 'stdout', text: `Starting OpenOCD (${adapter} → ${target})...\n` });
-
-  const ocdArgs = [];
-  const scripts = findOpenocdScripts(getBundledRoot());
-  if (scripts) ocdArgs.push('-s', scripts);
-  ocdArgs.push(
-    '-f', `interface/${adapter}.cfg`,
-    '-f', `target/${target}.cfg`,
-    '-c', 'gdb_port 3333',
-    '-c', 'tcl_port disabled',
-    '-c', 'telnet_port disabled',
-  );
-
-  const openocd = spawnTool('openocd', ocdArgs, {
-    cwd: projectDir,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  currentOpenocdProc = openocd;
-
-  openocd.stdout.on('data', (d) => onOutput?.({ type: 'stdout', text: d.toString() }));
-  openocd.stderr.on('data', (d) => onOutput?.({ type: 'stderr', text: d.toString() }));
-
-  // Wait until OpenOCD listens or fails
-  let ready = false;
-  const onReadyChunk = (buf) => {
-    const s = buf.toString();
-    if (/Listening on port 3333|gdb.?port|started by/i.test(s)) ready = true;
-  };
-  openocd.stdout.on('data', onReadyChunk);
-  openocd.stderr.on('data', onReadyChunk);
-  for (let i = 0; i < 20 && openocd.exitCode == null && !ready; i++) {
-    await sleep(150);
-  }
-  openocd.stdout.off?.('data', onReadyChunk);
-  openocd.stderr.off?.('data', onReadyChunk);
-
-  if (openocd.exitCode != null) {
-    currentOpenocdProc = null;
-    throw new Error('OpenOCD exited before GDB could connect. Check probe/cable and board power.');
-  }
-
-  onOutput?.({ type: 'stdout', text: `Connecting GDB → ${elf}\n` });
-
-  return new Promise((resolve, reject) => {
-    const gdb = spawnTool('arm-none-eabi-gdb', [
-      '-q', elf,
-      '-batch',
-      '-ex', 'set pagination off',
-      '-ex', 'set confirm off',
-      '-ex', 'target extended-remote :3333',
-      '-ex', 'monitor reset halt',
-      '-ex', 'load',
-      '-ex', 'info registers',
-      '-ex', 'bt',
-      '-ex', 'detach',
-    ], {
-      cwd: projectDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    currentRunProc = gdb;
-
-    gdb.stdout.on('data', (d) => onOutput?.({ type: 'stdout', text: d.toString() }));
-    gdb.stderr.on('data', (d) => onOutput?.({ type: 'stderr', text: d.toString() }));
-
-    gdb.on('close', (code) => {
-      currentRunProc = null;
-      cancelDebugSession();
-      if (code === 0 || code === null) {
-        onOutput?.({
-          type: 'stdout',
-          text: 'Debug OK: firmware loaded, CPU halted, registers + backtrace dumped.\n',
-        });
-        resolve({ code: code ?? 0 });
-      } else {
-        reject(new Error(`GDB exited with code ${code}`));
-      }
-    });
-    gdb.on('error', (err) => {
-      currentRunProc = null;
-      cancelDebugSession();
-      reject(err);
-    });
-  });
+  throw new Error('Firmware projects use the interactive debugger (Run → Start Debugging).');
 }
 
 function cancelDebugSession() {
-  cancelRun();
-  if (currentOpenocdProc) {
-    try {
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(currentOpenocdProc.pid), '/f', '/t']);
-      } else {
-        currentOpenocdProc.kill('SIGTERM');
-      }
-    } catch {}
-    currentOpenocdProc = null;
-    return true;
-  }
-  return false;
+  return cancelRun();
 }
 
 function cancelBuild() {
-  cancelDebugSession();
+  cancelRun();
   if (currentBuildProc) {
     buildWasCancelled = true;
     try {

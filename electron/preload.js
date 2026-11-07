@@ -9,6 +9,7 @@ const listeners = {
   'run:complete': new Set(),
   'serial:data': new Set(),
   'serial:error': new Set(),
+  'serial:status': new Set(),
   'window:maximized-change': new Set(),
   'menu:new-project': new Set(),
   'menu:open-project': new Set(),
@@ -23,6 +24,8 @@ const listeners = {
   'menu:debug': new Set(),
   'toolchain:install-progress': new Set(),
   'toolchain:install-complete': new Set(),
+  'debug:event': new Set(),
+  'app:close-requested': new Set(),
 }
 
 function on(channel, cb) {
@@ -83,18 +86,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRunOutput: (cb) => on('run:output', cb),
   onRunComplete: (cb) => on('run:complete', cb),
 
+  // Interactive debugger (results: { ok, result } | { ok: false, error: { code, message, detail? } })
+  debugStatus: () => ipcRenderer.invoke('debug:status'),
+  debugStart: (dir, type, opts) => ipcRenderer.invoke('debug:start', dir, type, opts || {}),
+  debugOp: (name, args) => ipcRenderer.invoke('debug:op', name, args || {}),
+  debugToggleBreakpoint: (dir, file, line) => ipcRenderer.invoke('debug:toggle-breakpoint', dir, file, line),
+  debugClearBreakpoints: () => ipcRenderer.invoke('debug:clear-breakpoints'),
+  debugStop: () => ipcRenderer.invoke('debug:stop'),
+  onDebugEvent: (cb) => on('debug:event', cb),
+
+  // Close handshake: main asks, renderer answers after handling unsaved changes
+  onCloseRequested: (cb) => on('app:close-requested', cb),
+  respondClose: (ok) => ipcRenderer.send('app:close-response', ok === true),
+
   // Serial
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
-  connectSerial: (port, baud) => ipcRenderer.invoke('serial:connect', port, baud),
+  // config: { port, baud, dataBits?, parity?, stopBits?, flowControl?, autoReconnect? }
+  connectSerial: (config) => ipcRenderer.invoke('serial:connect', config),
   sendSerial: (data) => ipcRenderer.invoke('serial:send', data),
   disconnectSerial: () => ipcRenderer.invoke('serial:disconnect'),
   onSerialData: (cb) => on('serial:data', cb),
   onSerialError: (cb) => on('serial:error', cb),
+  onSerialStatus: (cb) => on('serial:status', cb),
 
   // App info & settings
   getDefaultProjectsDir: () => ipcRenderer.invoke('app:get-default-projects-dir'),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
+  secretStorageStatus: () => ipcRenderer.invoke('settings:secret-storage'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // AI subscription CLIs (Codex / Claude Code / Grok Build)
