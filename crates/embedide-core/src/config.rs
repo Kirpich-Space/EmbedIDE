@@ -142,7 +142,7 @@ pub struct NativeConfig {
     pub debug: DebugConfig,
     /// Explicitly invoked tasks.
     pub tasks: BTreeMap<String, TaskConfig>,
-    /// Global command bindings; documented command IDs mapped to F1..F12 or ctrl+letter.
+    /// Global command bindings; documented command IDs mapped to F1..F12, ctrl+letter or alt+digit.
     pub keys: BTreeMap<String, String>,
 }
 impl Default for NativeConfig {
@@ -227,10 +227,14 @@ impl NativeConfig {
                 .is_some_and(|n| (1..=12).contains(&n))
                 || binding.strip_prefix("ctrl+").is_some_and(|letter| {
                     letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase()
-                });
+                })
+                || binding
+                    .strip_prefix("alt+")
+                    .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit());
             if !valid || !bindings.insert(binding) {
                 return Err(Error(
-                    "Key bindings must be unique F1..F12 or ctrl+a..ctrl+z chords".into(),
+                    "Key bindings must be unique F1..F12, ctrl+a..ctrl+z or alt+0..alt+9 chords"
+                        .into(),
                 ));
             }
         }

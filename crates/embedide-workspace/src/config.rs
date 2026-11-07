@@ -71,6 +71,9 @@ pub struct AiConfig {
     pub max_context_bytes: usize,
     /// Minimum delay between completion requests (debounce), milliseconds.
     pub completion_debounce_ms: u64,
+    /// Suggest completions automatically while typing in the editor. Off by
+    /// default: every suggestion is a provider request.
+    pub inline: bool,
 }
 
 impl Default for AiConfig {
@@ -82,6 +85,7 @@ impl Default for AiConfig {
             max_tokens: 1024,
             max_context_bytes: 32 * 1024,
             completion_debounce_ms: 250,
+            inline: false,
         }
     }
 }
@@ -197,7 +201,7 @@ impl ConfigFile {
         let parts = Self::split(key)?;
         if parts.iter().any(|p| crate::looks_secret(p)) {
             return Err(Error(format!(
-                "'{key}' looks like a credential. Secrets are never written to configuration files; use `embedide ai login` or an environment variable"
+                "'{key}' looks like a credential. Secrets are never written to configuration files; use `embed ai login` or an environment variable"
             )));
         }
         let parsed = format!("v = {value}")

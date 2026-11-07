@@ -1,7 +1,9 @@
 //! Full-screen terminal adapter. All modal interpretation and file I/O stay in Editor.
+pub mod assistant;
 mod guard;
 pub mod layout;
 pub mod screen;
+pub mod term;
 pub mod workspace;
 
 use crate::{FrontendError, LineEditor, SessionReport};
@@ -25,6 +27,7 @@ pub struct TuiEditor {
     viewport: Viewport,
     size: (u16, u16),
     ide_action: Option<IdeAction>,
+    host_command: Option<String>,
 }
 impl TuiEditor {
     /// Start a presentation session without entering raw mode (also testable headlessly).
@@ -34,6 +37,7 @@ impl TuiEditor {
             viewport: Viewport::default(),
             size: (width, height),
             ide_action: None,
+            host_command: None,
         }
     }
     /// Shared document and parser state; no terminal coordinates enter this API.
@@ -57,10 +61,15 @@ impl TuiEditor {
     pub fn take_ide_action(&mut self) -> Option<IdeAction> {
         self.ide_action.take()
     }
+    /// Consume a `:` command addressed to the host IDE (with host commands enabled).
+    pub fn take_host_command(&mut self) -> Option<String> {
+        self.host_command.take()
+    }
     fn feed_key(&mut self, key: Key) {
         self.session.message.clear();
         match self.session.editor.feed(key) {
             Ok(Effect::Ide(action)) => self.ide_action = Some(action),
+            Ok(Effect::Command(command)) => self.host_command = Some(command),
             Ok(Effect::Saved(report)) => {
                 self.session.message =
                     format!("Saved; directory_synced={}", report.directory_synced)

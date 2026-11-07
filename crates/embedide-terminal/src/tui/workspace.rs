@@ -1,8 +1,10 @@
 //! Project workspace adapter. Services and document mutations remain outside widgets.
 use super::{
+    assistant::{Assistant, EditorContext},
     guard,
     layout::{self, Frame, Row},
     screen::{Screen, Theme},
+    term::{self, TerminalPane},
     TuiEditor,
 };
 use crate::FrontendError;
@@ -20,9 +22,13 @@ use embedide_core::{
     process::{ProcessEvent, ProcessTask},
     BuildPlan, BuildSystem, ProcessSpec,
 };
-use embedide_editor::{vim::IdeAction, Editor};
+use embedide_editor::{
+    vim::{IdeAction, Keymap, Mode, SelectionKind},
+    Editor,
+};
+use embedide_workspace::{Manifest, UserConfig};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs,
     io::{self, IsTerminal},
     path::{Path, PathBuf},
@@ -34,6 +40,16 @@ use unicode_width::UnicodeWidthStr;
 
 const OUTPUT_LINES: usize = 2000;
 const COMMANDS: &[(&str, &str)] = &[
+    ("focus_explorer", "Explorer Panel (Alt+1)"),
+    ("focus_assistant", "AI Assistant Panel (Alt+2)"),
+    ("focus_terminal", "Terminal Panel (Alt+3)"),
+    ("assistant", "Show / Hide AI Panel"),
+    ("terminal_restart", "Restart Terminal Shell"),
+    (
+        "complete",
+        "AI: Suggest Completion at Cursor (Tab accepts, Esc rejects)",
+    ),
+    ("explain", "AI: Explain Current File or Selection"),
     ("build", "Build Project"),
     ("check", "Check Project (Cargo)"),
     ("clean", "Clean Project"),
@@ -76,6 +92,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("backtrace", "Debug Backtrace"),
     ("registers", "Debug Registers"),
     ("settings", "Show Settings"),
+    ("compilers", "Show Compilers Selected for This Project"),
+    ("edit_project_config", "Edit Project Config (embedide.toml)"),
+    ("edit_user_config", "Edit User Config (config.toml)"),
     ("reload", "Reload Settings"),
     ("theme", "Cycle Theme"),
     ("help", "Keyboard Help"),
@@ -91,6 +110,10 @@ pub enum Focus {
     Explorer,
     /// Output/problem navigation.
     Panel,
+    /// AI assistant input line.
+    Assistant,
+    /// Interactive shell; every key except the panel keys goes to it.
+    Terminal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Panel {
@@ -102,6 +125,7 @@ enum Panel {
     Tools,
     Settings,
     Help,
+    Terminal,
 }
 impl Panel {
     fn name(self) -> &'static str {
@@ -114,6 +138,7 @@ impl Panel {
             Self::Tools => "TOOLS",
             Self::Settings => "SETTINGS",
             Self::Help => "HELP",
+            Self::Terminal => "TERMINAL",
         }
     }
     fn next(self) -> Self {
@@ -125,7 +150,7 @@ impl Panel {
             Self::Debug => Self::Tools,
             Self::Tools => Self::Settings,
             Self::Settings => Self::Help,
-            Self::Help => Self::Problems,
+            Self::Help | Self::Terminal => Self::Problems,
         }
     }
 }
@@ -264,6 +289,15 @@ pub struct Workspace {
     debug_breakpoints: String,
     debug_stack: String,
     debug_registers: String,
+    assistant: Assistant,
+    assistant_visible: bool,
+    terminal: Option<TerminalPane>,
+    user: UserConfig,
+    manifest: Option<Manifest>,
+    config_notes: Vec<String>,
+    compilers: Vec<embedide_build::Selection>,
+    prepared: Option<embedide_build::Prepared>,
+    edit_mark: (usize, u64, usize),
 }
 fn service_error(error: impl std::fmt::Display) -> FrontendError {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string()).into()
@@ -296,7 +330,19 @@ impl Workspace {
                 .clone()
         };
         let target = (!config.targets.is_empty()).then_some(0);
-        Ok(Self {
+        let (user, manifest, config_notes) = load_configs(&root);
+        let profile = match &manifest {
+            Some(m) if m.profiles.contains_key("debug") || m.profiles.is_empty() => "debug".into(),
+            Some(m) => m
+                .profiles
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "debug".into()),
+            None => profile,
+        };
+        let assistant = Assistant::new(user.ai.clone());
+        let mut workspace = Self {
             root,
             config,
             documents: vec![TuiEditor::new(Editor::new(String::new()), width, height)],
@@ -337,7 +383,202 @@ impl Workspace {
             debug_breakpoints: String::new(),
             debug_stack: String::new(),
             debug_registers: String::new(),
-        })
+            assistant,
+            assistant_visible: true,
+            terminal: None,
+            user,
+            manifest,
+            config_notes,
+            compilers: Vec::new(),
+            prepared: None,
+            edit_mark: (0, 0, 0),
+        };
+        workspace.documents[0] = workspace.new_document(Editor::new(String::new()));
+        workspace.select_compilers();
+        if let Some(note) = workspace.config_notes.first() {
+            workspace.notification = format!("Error: {note} (see :settings)");
+        }
+        Ok(workspace)
+    }
+    fn new_document(&self, mut editor: Editor) -> TuiEditor {
+        let mut keymap = Keymap::default();
+        keymap.set_host_commands(true);
+        editor.set_keymap(keymap);
+        let mut doc = TuiEditor::new(editor, self.size.0, self.size.1);
+        doc.viewport.set_tab_width(self.config.tab_width);
+        doc
+    }
+    /// Toolchains `embedide.toml` and the user configuration select for this
+    /// project (no version probes; nothing is installed).
+    fn select_compilers(&mut self) {
+        self.compilers.clear();
+        let Some(m) = &self.manifest else { return };
+        let tools = embedide_build::registry(&self.user, false);
+        let req = embedide_build::Request {
+            profile: self.profile.clone(),
+            ..Default::default()
+        };
+        match embedide_build::prepare(&self.root, Some(m), &self.user, &tools, &req) {
+            Ok(p) => self.compilers = p.toolchains,
+            Err(e) => self
+                .config_notes
+                .push(format!("Toolchain selection: {}", e.0)),
+        }
+    }
+    /// Compiler chosen for the active document's language, for the status bar.
+    fn compiler_label(&self, language: &str) -> String {
+        if self.manifest.is_none() {
+            return "no embedide.toml".into();
+        }
+        self.compilers
+            .iter()
+            .find(|s| s.language.id() == language)
+            .map(|s| s.id.clone())
+            .unwrap_or_else(|| "-".into())
+    }
+    fn editor_context(&self) -> EditorContext {
+        let state = self.editor().state();
+        let text = state.buffer().contents();
+        let offset = state.cursor();
+        let (line, column) = state
+            .position()
+            .map_or((1, 1), |p| (p.line + 1, p.scalar_column + 1));
+        let selection = state.selection().and_then(|sel| {
+            let (lo, hi) = (sel.anchor.min(sel.head), sel.anchor.max(sel.head));
+            let range = match sel.kind {
+                SelectionKind::Character => {
+                    lo..state
+                        .buffer()
+                        .next_grapheme(hi)
+                        .unwrap_or(hi)
+                        .min(text.len())
+                }
+                SelectionKind::Line => {
+                    let start = text[..lo].rfind('\n').map_or(0, |i| i + 1);
+                    let end = text[hi.min(text.len())..]
+                        .find('\n')
+                        .map_or(text.len(), |i| hi + i + 1);
+                    start..end
+                }
+            };
+            text.get(range).map(str::to_string)
+        });
+        EditorContext {
+            root: self.root.clone(),
+            path: state.path().map(Path::to_path_buf),
+            line,
+            column,
+            offset,
+            selection,
+            language: language_of(state.path()).to_string(),
+            exclude: self
+                .manifest
+                .as_ref()
+                .map(|m| m.ai.exclude.clone())
+                .unwrap_or_default(),
+            text,
+        }
+    }
+    /// Start the shell on first use (or after it exited).
+    fn ensure_terminal(&mut self) -> Result<(), FrontendError> {
+        if self.terminal.as_ref().is_some_and(|t| t.exited().is_none()) {
+            return Ok(());
+        }
+        let mut env: BTreeMap<String, String> = self.config.environment.clone();
+        if let Some(m) = &self.manifest {
+            env.extend(m.env.clone());
+        }
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for s in &self.compilers {
+            if let Some(d) = s.program.parent() {
+                if !d.as_os_str().is_empty() && !dirs.iter().any(|x| x == d) {
+                    dirs.push(d.to_path_buf());
+                }
+            }
+        }
+        let (cols, rows) = (self.size.0.saturating_sub(1).max(20), 10);
+        self.terminal = Some(TerminalPane::spawn(
+            &term::default_shell(),
+            &self.root,
+            &env,
+            &dirs,
+            rows,
+            cols,
+        )?);
+        Ok(())
+    }
+    fn toggle_focus(&mut self, id: &str) -> Result<(), FrontendError> {
+        match id {
+            "focus_explorer" => {
+                if self.focus == Focus::Explorer {
+                    self.focus = Focus::Editor;
+                } else {
+                    self.explorer_visible = true;
+                    self.focus = Focus::Explorer;
+                }
+            }
+            "focus_assistant" => {
+                if self.focus == Focus::Assistant {
+                    self.focus = Focus::Editor;
+                } else {
+                    self.assistant_visible = true;
+                    self.focus = Focus::Assistant;
+                }
+            }
+            _ => {
+                if self.focus == Focus::Terminal {
+                    self.focus = Focus::Editor;
+                } else {
+                    self.ensure_terminal()?;
+                    self.panel = Panel::Terminal;
+                    self.panel_visible = true;
+                    self.focus = Focus::Terminal;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn apply_proposal(&mut self) -> Result<(), FrontendError> {
+        let Some((path, proposal)) = self.assistant.take_proposal_if(true) else {
+            return Ok(());
+        };
+        let index = self
+            .documents
+            .iter()
+            .position(|d| d.editor().state().path() == Some(path.as_path()))
+            .ok_or_else(|| service_error("The proposed file is no longer open"))?;
+        let doc = &mut self.documents[index];
+        let len = doc.editor().state().buffer().byte_len();
+        if doc.editor().state().buffer().contents() != proposal.original {
+            self.assistant
+                .error("The buffer changed after the proposal; ask again with /edit");
+            return Ok(());
+        }
+        doc.session.editor.replace(0..len, &proposal.proposed)?;
+        self.active = index;
+        self.notification = "AI edit applied to the buffer; u undoes, :w saves".into();
+        Ok(())
+    }
+    /// Host side of `:` commands typed in the editor.
+    fn host_command(&mut self, line: &str) -> Result<(), FrontendError> {
+        let (name, arg) = line
+            .split_once(char::is_whitespace)
+            .map_or((line, ""), |(n, a)| (n, a.trim()));
+        match name {
+            "e" | "edit" | "open" if !arg.is_empty() => self.open_file(Path::new(arg)),
+            "e" | "edit" | "open" => self.command("open"),
+            "ai" if !arg.is_empty() => {
+                self.assistant_visible = true;
+                self.assistant.input = arg.to_string();
+                let ctx = self.editor_context();
+                self.assistant.submit(&ctx);
+                Ok(())
+            }
+            id if COMMANDS.iter().any(|(c, _)| *c == id) && arg.is_empty() => self.command(id),
+            _ => Err(service_error(format!(
+                "Unknown command :{line} (Ctrl+K lists commands; :help shows keys)"
+            ))),
+        }
     }
     /// Active engine, shared with all other frontends.
     pub fn editor(&self) -> &Editor {
@@ -377,8 +618,7 @@ impl Workspace {
         {
             self.active = index;
         } else {
-            let mut doc = TuiEditor::new(crate::open(&path)?, self.size.0, self.size.1);
-            doc.viewport.set_tab_width(self.config.tab_width);
+            let doc = self.new_document(crate::open(&path)?);
             if self.documents.len() == 1
                 && self.editor().state().path().is_none()
                 && !self.editor().state().is_modified()
@@ -458,12 +698,21 @@ impl Workspace {
         self.panel_scroll = 0;
     }
     fn start_plan(&mut self, plan: BuildPlan, kind: Operation) -> core::Result<()> {
+        let env = self.config.environment.clone();
+        self.start_plan_env(plan, kind, env)
+    }
+    fn start_plan_env(
+        &mut self,
+        plan: BuildPlan,
+        kind: Operation,
+        env: BTreeMap<String, String>,
+    ) -> core::Result<()> {
         if self.operation.is_some() {
             return Err(core::Error(
                 "Another task is running; cancel or wait first".into(),
             ));
         }
-        let task = ProcessTask::start(plan, self.config.environment.clone())?;
+        let task = ProcessTask::start(plan, env)?;
         self.operation = Some(Running {
             task,
             kind,
@@ -492,6 +741,57 @@ impl Workspace {
         }
         self.config
             .build_plan(&project, &self.profile, self.target, check)
+    }
+    /// Build an `embedide.toml` project with the compilers it selects.
+    fn build_manifest(&mut self, check: bool) -> Result<(), FrontendError> {
+        if check {
+            return Err(service_error(
+                "Check applies to legacy Cargo projects; F5 builds embedide.toml projects",
+            ));
+        }
+        if self.operation.is_some() {
+            return Err(service_error(
+                "Another task is running; cancel or wait first",
+            ));
+        }
+        let manifest = self.manifest.as_ref().expect("manifest");
+        let tools = embedide_build::registry(&self.user, true);
+        let req = embedide_build::Request {
+            profile: self.profile.clone(),
+            ..Default::default()
+        };
+        let prepared =
+            embedide_build::prepare(&self.root, Some(manifest), &self.user, &tools, &req)
+                .map_err(|e| service_error(e.0))?;
+        prepared.begin().map_err(|e| service_error(e.0))?;
+        self.problems.clear();
+        self.build_log.clear();
+        self.problem = 0;
+        for s in &prepared.toolchains {
+            self.build_log.push(&format!(
+                "[{}] {} → {} {}",
+                s.language.id(),
+                s.id,
+                s.program.display(),
+                s.version.as_deref().unwrap_or("")
+            ));
+        }
+        self.compilers = prepared.toolchains.clone();
+        if prepared.steps.is_empty() {
+            self.build_log.push("Up to date");
+            self.build_status = "Succeeded".into();
+            self.notification = "Build up to date".into();
+            let previous = self.focus;
+            self.show_panel(Panel::Build);
+            self.focus = previous;
+            return Ok(());
+        }
+        let mut env = self.config.environment.clone();
+        env.extend(prepared.env.clone());
+        self.start_plan_env(prepared.plan(), Operation::Build, env)
+            .map_err(service_error)?;
+        self.prepared = Some(prepared);
+        Ok(())
     }
     fn debug_command(&self, command: DebugCommand) -> core::Result<()> {
         self.debug
@@ -541,12 +841,42 @@ impl Workspace {
                         "Save modified documents before building; builds use files on disk",
                     ));
                 }
+                if self.manifest.is_some() {
+                    return self.build_manifest(id == "check");
+                }
                 let plan = self.plan(id == "check").map_err(service_error)?;
                 self.start_plan(plan, Operation::Build)
                     .map_err(service_error)?;
                 self.problems.clear();
                 self.build_log.clear();
                 self.problem = 0;
+            }
+            "clean" if self.manifest.is_some() => {
+                if self.operation.is_some() {
+                    return Err(service_error("Wait for the active task before cleaning"));
+                }
+                match embedide_build::plan_clean(&self.root, self.manifest.as_ref())
+                    .map_err(|e| service_error(e.0))?
+                {
+                    embedide_build::CleanAction::Remove(dir) => {
+                        fs::remove_dir_all(&dir)?;
+                        self.notification = format!("Removed {}", dir.display());
+                        self.refresh().map_err(service_error)?;
+                    }
+                    embedide_build::CleanAction::Run(spec) => self
+                        .start_plan(
+                            BuildPlan {
+                                directory: self.root.clone(),
+                                system: BuildSystem::Make,
+                                steps: vec![spec],
+                            },
+                            Operation::Task,
+                        )
+                        .map_err(service_error)?,
+                    embedide_build::CleanAction::Nothing(why) => {
+                        self.notification = format!("Nothing to clean: {why}")
+                    }
+                }
             }
             "clean" => {
                 let plan = self.plan(false).map_err(service_error)?;
@@ -579,6 +909,81 @@ impl Workspace {
                 if let Some(running) = &self.operation {
                     running.task.cancel();
                     self.notification = "Cancellation requested".into();
+                } else if self.assistant.busy() {
+                    self.assistant.cancel();
+                    self.notification = "AI request cancelled".into();
+                }
+            }
+            "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
+            "assistant" => {
+                self.assistant_visible = !self.assistant_visible;
+                if !self.assistant_visible && self.focus == Focus::Assistant {
+                    self.focus = Focus::Editor;
+                }
+            }
+            "terminal_restart" => {
+                self.terminal = None;
+                self.focus = Focus::Editor;
+                self.toggle_focus("focus_terminal")?;
+            }
+            "complete" => {
+                self.assistant_visible = true;
+                let ctx = self.editor_context();
+                self.assistant.start_completion(&ctx);
+            }
+            "explain" => {
+                self.assistant_visible = true;
+                self.assistant.input = "/explain".into();
+                let ctx = self.editor_context();
+                self.assistant.submit(&ctx);
+            }
+            "compilers" => {
+                self.tools_log.clear();
+                match &self.manifest {
+                    None => self.tools_log.push("No embedide.toml: builds use the legacy project adapters (Make/CMake/Cargo/Zig)."),
+                    Some(_) => {
+                        self.select_compilers();
+                        if self.compilers.is_empty() {
+                            self.tools_log.push("No toolchain selected; see the notes below and `embed toolchain list`.");
+                        }
+                        for s in &self.compilers {
+                            self.tools_log.push(&format!(
+                                "[{}] {} → {} ({})",
+                                s.language.id(),
+                                s.id,
+                                s.program.display(),
+                                s.reason
+                            ));
+                        }
+                    }
+                }
+                for note in &self.config_notes {
+                    self.tools_log.push(note);
+                }
+                self.tools_log.push("Choose compilers in embedide.toml [toolchain] / [profiles.<name>.toolchain] or user config.toml [toolchains.defaults]. Nothing is installed automatically.");
+                self.show_panel(Panel::Tools);
+            }
+            "edit_project_config" => {
+                let path = self.root.join("embedide.toml");
+                if path.exists() {
+                    self.open_file(&path)?;
+                } else {
+                    return Err(service_error(
+                        "This project has no embedide.toml; create one with `embed project init`",
+                    ));
+                }
+            }
+            "edit_user_config" => {
+                let path = UserConfig::path().map_err(|e| service_error(e.0))?;
+                if path.exists() {
+                    self.open_file(&path)?;
+                } else {
+                    // A new buffer bound to the path; nothing is written before :w.
+                    let doc = self.new_document(crate::open(&path)?);
+                    self.documents.push(doc);
+                    self.active = self.documents.len() - 1;
+                    self.focus = Focus::Editor;
+                    self.notification = format!("New file {} (written only on :w)", path.display());
                 }
             }
             "find" => {
@@ -857,6 +1262,12 @@ impl Workspace {
             "settings" => self.show_panel(Panel::Settings),
             "reload" => {
                 self.config = NativeConfig::load(&self.root).map_err(service_error)?;
+                let (user, manifest, notes) = load_configs(&self.root);
+                self.assistant = Assistant::new(user.ai.clone());
+                self.user = user;
+                self.manifest = manifest;
+                self.config_notes = notes;
+                self.select_compilers();
                 self.target = self.target.filter(|i| *i < self.config.targets.len());
                 if !self.config.profiles.contains_key(&self.profile) {
                     self.profile = self
@@ -926,10 +1337,17 @@ impl Workspace {
             }
             id if id.starts_with("profile:") => {
                 let name = &id[8..];
-                if !self.config.profiles.contains_key(name) {
+                let known = match &self.manifest {
+                    Some(m) => {
+                        m.profiles.contains_key(name) || (m.profiles.is_empty() && name == "debug")
+                    }
+                    None => self.config.profiles.contains_key(name),
+                };
+                if !known {
                     return Err(service_error("Unknown profile"));
                 }
                 self.profile = name.into();
+                self.select_compilers();
             }
             id if id.starts_with("task:") => {
                 let task = self
@@ -968,10 +1386,13 @@ impl Workspace {
                 ),
             )
         }));
+        let profiles: Vec<String> = match &self.manifest {
+            Some(m) => m.profiles.keys().cloned().collect(),
+            None => self.config.profiles.keys().cloned().collect(),
+        };
         choices.extend(
-            self.config
-                .profiles
-                .keys()
+            profiles
+                .iter()
                 .map(|name| (format!("profile:{name}"), format!("profile: {name}"))),
         );
         choices.extend(
@@ -1257,6 +1678,12 @@ impl Workspace {
             } else {
                 return None;
             }
+        } else if key.modifiers == KeyModifiers::ALT {
+            if let KeyCode::Char(ch) = key.code {
+                format!("alt+{}", ch.to_ascii_lowercase())
+            } else {
+                return None;
+            }
         } else if key.modifiers.is_empty() {
             if let KeyCode::F(number) = key.code {
                 format!("f{number}")
@@ -1275,6 +1702,9 @@ impl Workspace {
             return Some(id.clone());
         }
         let default = match binding.as_str() {
+            "alt+1" => "focus_explorer",
+            "alt+2" => "focus_assistant",
+            "alt+3" => "focus_terminal",
             "ctrl+p" => "find",
             "ctrl+k" => "palette",
             "ctrl+s" => "save",
@@ -1313,7 +1743,27 @@ impl Workspace {
                 if self.dialog.is_some() {
                     return self.handle_dialog(key);
                 }
-                if let Some(id) = self.shortcut(key) {
+                let shortcut = self.shortcut(key);
+                if self.focus == Focus::Terminal
+                    && !shortcut
+                        .as_deref()
+                        .is_some_and(|id| id.starts_with("focus_"))
+                {
+                    // The shell owns the keyboard: Ctrl+C, Ctrl+D, Tab, Esc, F-keys.
+                    match &mut self.terminal {
+                        Some(t) if t.exited().is_none() => t.key(key),
+                        _ => {
+                            if matches!(key.code, KeyCode::Enter) {
+                                self.terminal = None;
+                                self.ensure_terminal()?;
+                            } else if key.code == KeyCode::Esc {
+                                self.focus = Focus::Editor;
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                if let Some(id) = shortcut {
                     match id.as_str() {
                         "palette" => {
                             self.dialog = Some(Dialog::Palette {
@@ -1335,7 +1785,14 @@ impl Workspace {
                                     self.panel_visible = true;
                                     Focus::Panel
                                 }
-                                Focus::Panel => Focus::Editor,
+                                Focus::Panel | Focus::Terminal => {
+                                    if self.assistant_visible {
+                                        Focus::Assistant
+                                    } else {
+                                        Focus::Editor
+                                    }
+                                }
+                                Focus::Assistant => Focus::Editor,
                             }
                         }
                         "panel" => {
@@ -1353,17 +1810,78 @@ impl Workspace {
                     return Ok(());
                 }
                 match self.focus {
+                    Focus::Terminal => {}
+                    Focus::Assistant => match key.code {
+                        KeyCode::Esc => self.focus = Focus::Editor,
+                        KeyCode::Enter => match self.assistant.input.trim() {
+                            "/apply" => {
+                                self.assistant.input.clear();
+                                self.apply_proposal()?;
+                            }
+                            "/reject" => {
+                                self.assistant.input.clear();
+                                self.assistant.take_proposal_if(false);
+                            }
+                            _ => {
+                                let ctx = self.editor_context();
+                                self.assistant.submit(&ctx);
+                            }
+                        },
+                        KeyCode::Backspace => {
+                            self.assistant.input.pop();
+                        }
+                        KeyCode::Up => self.assistant.scroll(1),
+                        KeyCode::Down => self.assistant.scroll(-1),
+                        KeyCode::PageUp => self.assistant.scroll(10),
+                        KeyCode::PageDown => self.assistant.scroll(-10),
+                        KeyCode::Char(ch)
+                            if !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                && !ch.is_control()
+                                && self.assistant.input.len() < 16384 =>
+                        {
+                            self.assistant.input.push(ch)
+                        }
+                        _ => {}
+                    },
                     Focus::Editor => {
+                        let doc = &self.documents[self.active];
+                        let cursor = doc.editor().state().cursor();
+                        let path = doc.editor().state().path().map(Path::to_path_buf);
+                        let pending = self
+                            .assistant
+                            .suggestion
+                            .as_ref()
+                            .is_some_and(|s| s.offset == cursor && s.path == path);
+                        if pending && key.code == KeyCode::Tab && key.modifiers.is_empty() {
+                            let text = self.assistant.suggestion.take().expect("suggestion").text;
+                            let editor = &mut self.documents[self.active].session.editor;
+                            editor.replace(cursor..cursor, &text)?;
+                            editor.set_cursor(cursor + text.len())?;
+                            self.notification = "Suggestion inserted; u undoes".into();
+                            self.edit_mark = (
+                                self.active,
+                                self.editor().state().buffer().revision(),
+                                cursor + text.len(),
+                            );
+                            return Ok(());
+                        }
+                        if pending && key.code == KeyCode::Esc {
+                            self.assistant.dismiss();
+                            self.notification = "Suggestion rejected".into();
+                        }
                         self.documents[self.active].handle(Event::Key(key));
+                        if let Some(command) = self.documents[self.active].take_host_command() {
+                            self.host_command(&command)?;
+                        }
+                        self.after_editor_input();
                         if let Some(action) = self.documents[self.active].take_ide_action() {
                             self.command(match action {
                                 IdeAction::ProjectExplorer => "explorer",
                                 IdeAction::Build => "build",
                                 IdeAction::Debug => "debug",
-                                IdeAction::Terminal => {
-                                    self.show_panel(Panel::Tasks);
-                                    return Ok(());
-                                }
+                                IdeAction::Terminal => "focus_terminal",
                                 IdeAction::SerialMonitor => "serial",
                                 IdeAction::FindFile => "find",
                             })?;
@@ -1442,11 +1960,43 @@ impl Workspace {
                     }
                 } else if self.dialog.is_none() && self.focus == Focus::Editor {
                     self.documents[self.active].handle(Event::Paste(text));
+                    self.after_editor_input();
+                } else if self.dialog.is_none() && self.focus == Focus::Terminal {
+                    if let Some(t) = &mut self.terminal {
+                        t.paste(&text);
+                    }
+                } else if self.dialog.is_none() && self.focus == Focus::Assistant {
+                    let room = 16384usize.saturating_sub(self.assistant.input.len());
+                    self.assistant.input.extend(
+                        text.chars()
+                            .map(|c| if c == '\n' { ' ' } else { c })
+                            .filter(|c| !c.is_control())
+                            .take(room),
+                    );
                 }
             }
             _ => {}
         }
         Ok(())
+    }
+    /// Keep inline suggestions consistent with the cursor and request new ones
+    /// while typing (only with `ai.inline = true`).
+    fn after_editor_input(&mut self) {
+        let state = self.editor().state();
+        let mark = (self.active, state.buffer().revision(), state.cursor());
+        if mark == self.edit_mark {
+            return;
+        }
+        let edited = mark.0 == self.edit_mark.0 && mark.1 != self.edit_mark.1;
+        self.edit_mark = mark;
+        if self.assistant.suggestion.is_some() {
+            self.assistant.dismiss();
+        }
+        if edited && self.assistant.inline_enabled() && self.editor().input().mode() == Mode::Insert
+        {
+            let ctx = self.editor_context();
+            self.assistant.on_edit(&ctx);
+        }
     }
     fn consume_line(&mut self, line: &str, kind: Operation) {
         if kind == Operation::Search {
@@ -1494,7 +2044,10 @@ impl Workspace {
     /// Poll process/serial/debug queues without blocking the terminal input loop.
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.assistant.tick();
+        if let Some(t) = &mut self.terminal {
+            changed |= t.poll();
+        }
         if let Some(mut running) = self.operation.take() {
             let mut finished = false;
             for event in running.task.drain() {
@@ -1541,6 +2094,18 @@ impl Workspace {
                             "Finished: exit={code:?}, {:.2}s, omitted {omitted} bytes",
                             elapsed.as_secs_f64()
                         );
+                        if running.kind == Operation::Build {
+                            if let Some(prepared) = self.prepared.take() {
+                                if code == Some(0) {
+                                    prepared.commit();
+                                    if let Some(a) =
+                                        prepared.artifact.as_ref().filter(|a| a.exists())
+                                    {
+                                        self.build_log.push(&format!("Artifact: {}", a.display()));
+                                    }
+                                }
+                            }
+                        }
                         if matches!(running.kind, Operation::Build | Operation::Flash) {
                             self.build_log.push(&message);
                             self.build_status = if code == Some(0) {
@@ -1692,23 +2257,140 @@ impl Workspace {
     fn panel_lines(&self) -> Vec<String> {
         match self.panel {
             Panel::Problems => {
-                if self.problems.is_empty() { return vec!["No diagnostics / matches. Enter jumps to selected source location.".into()]; }
-                self.problems.iter().enumerate().map(|(i, d)| format!("{} {} {}:{}:{} {}", if i == self.problem { ">" } else { " " }, d.severity, d.file.as_ref().map_or(String::new(), |p| p.display().to_string()), d.line, d.column, d.message)).collect()
+                if self.problems.is_empty() {
+                    return vec![
+                        "No diagnostics / matches. Enter jumps to selected source location.".into(),
+                    ];
+                }
+                self.problems
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        format!(
+                            "{} {} {}:{}:{} {}",
+                            if i == self.problem { ">" } else { " " },
+                            d.severity,
+                            d.file
+                                .as_ref()
+                                .map_or(String::new(), |p| p.display().to_string()),
+                            d.line,
+                            d.column,
+                            d.message
+                        )
+                    })
+                    .collect()
             }
             Panel::Build => self.build_log.lines.iter().cloned().collect(),
             Panel::Tasks => self.task_log.lines.iter().cloned().collect(),
             Panel::Serial => {
-                let mut lines = vec![format!("{} {} baud={} {} dropped={} bytes", if self.serial.is_some() { "Connected" } else { "Disconnected" }, self.config.serial.port, self.config.serial.baud, if self.serial_paused { "[PAUSED: receive buffer continues, bounded]" } else { "" }, self.serial.as_ref().map_or(0, SerialMonitor::dropped_bytes))];
-                lines.extend(if self.serial_paused { self.serial_snapshot.clone() } else { self.serial_log.lines.iter().cloned().collect() }); lines
+                let mut lines = vec![format!(
+                    "{} {} baud={} {} dropped={} bytes",
+                    if self.serial.is_some() {
+                        "Connected"
+                    } else {
+                        "Disconnected"
+                    },
+                    self.config.serial.port,
+                    self.config.serial.baud,
+                    if self.serial_paused {
+                        "[PAUSED: receive buffer continues, bounded]"
+                    } else {
+                        ""
+                    },
+                    self.serial.as_ref().map_or(0, SerialMonitor::dropped_bytes)
+                )];
+                lines.extend(if self.serial_paused {
+                    self.serial_snapshot.clone()
+                } else {
+                    self.serial_log.lines.iter().cloned().collect()
+                });
+                lines
             }
             Panel::Debug => {
-                let mut lines = vec![format!("{} | location={:?}", self.debug_status, self.debug_location), format!("Breakpoint response: {}", self.debug_breakpoints), format!("Stack: {}", self.debug_stack), format!("Registers: {}", self.debug_registers)];
-                lines.extend(self.debug_log.lines.iter().cloned()); lines
+                let mut lines = vec![
+                    format!("{} | location={:?}", self.debug_status, self.debug_location),
+                    format!("Breakpoint response: {}", self.debug_breakpoints),
+                    format!("Stack: {}", self.debug_stack),
+                    format!("Registers: {}", self.debug_registers),
+                ];
+                lines.extend(self.debug_log.lines.iter().cloned());
+                lines
             }
             Panel::Tools => self.tools_log.lines.iter().cloned().collect(),
-            Panel::Settings => vec!["Files: embedide.json native object; embedide.local.json overrides (never automatically saved)".into(), format!("Theme: {} | tab width: {} | profile: {} | target: {:?}", self.config.theme, self.config.tab_width, self.profile, self.target), format!("Build directory: {} | generator: {:?} | toolchain: {:?}", self.config.build_directory, self.config.cmake_generator, self.config.cmake_toolchain), format!("Serial: {} @ {} | receive_only={}", self.config.serial.port, self.config.serial.baud, self.config.serial.receive_only), "Commands: Reload Settings, Cycle Theme, Select Target, Select Build Profile".into()],
-            Panel::Help => vec!["Ctrl+K: searchable commands | Ctrl+P: filter loaded explorer entries | Ctrl+S: save".into(), "F1: help | F2: explorer | F3: problems | F4: cycle panels | F6: cycle focus".into(), "F5: build | F7: cargo check | F8: cancel task | F9: targets | F10: next document".into(), "Ctrl+W: close document | Ctrl+Q: quit workspace (dirty changes require confirmation)".into(), "Explorer: arrows/j/k, Enter expand/open, Left collapse, n create, Delete confirm, r refresh".into(), "Panel: arrows/j/k, PgUp/PgDn scroll, End follow, / output filter, Enter diagnostic jump".into(), "Esc: close dialog or focus editor | Palette: arrows select, Enter execute, Esc cancel".into(), "Editor: existing Vim modes, / ? n N search, u Ctrl+R history, :w :q :q! :wq".into(), "Build tasks execute project code only on explicit invocation. Console is not an interactive PTY.".into()],
+            Panel::Settings => {
+                let user_path =
+                    UserConfig::path().map_or_else(|e| e.0, |p| p.display().to_string());
+                let project = self.root.join("embedide.toml");
+                let mut lines = vec![
+                    "Compilers are chosen in configuration files, never installed or downloaded automatically:".into(),
+                    format!("  project: {} {}", project.display(), if self.manifest.is_some() { "([toolchain], [profiles.<name>.toolchain])" } else { "(absent: legacy embedide.json adapters are used)" }),
+                    format!("  user:    {user_path} ([toolchains] search_dirs, custom, defaults; [ai])"),
+                    "  legacy:  embedide.json / embedide.local.json (theme, keys, targets, serial, debug)".into(),
+                    format!("Profile: {} | target: {:?} | theme: {} | tab width: {}", self.profile, self.target, self.config.theme, self.config.tab_width),
+                ];
+                for c in &self.compilers {
+                    lines.push(format!(
+                        "  [{}] {} → {}",
+                        c.language.id(),
+                        c.id,
+                        c.program.display()
+                    ));
+                }
+                lines.push(format!(
+                    "AI: {} | inline suggestions: {} (ai.inline)",
+                    self.assistant.status(),
+                    if self.assistant.inline_enabled() {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                ));
+                lines.push(format!(
+                    "Serial: {} @ {} | receive_only={}",
+                    self.config.serial.port,
+                    self.config.serial.baud,
+                    self.config.serial.receive_only
+                ));
+                lines.extend(self.config_notes.iter().map(|n| format!("! {n}")));
+                lines.push("Commands (Ctrl+K or :name): edit_project_config, edit_user_config, reload, compilers, profile, target, theme".into());
+                lines
+            }
+            Panel::Help => help_lines(&self.config.keys),
+            Panel::Terminal => self.terminal.as_ref().map_or_else(
+                || vec!["Alt+3 starts your shell here".into()],
+                |t| t.contents().lines().map(str::to_string).collect(),
+            ),
         }
+    }
+    fn draw_terminal(&mut self, width: usize, height: usize) -> (Vec<Row>, Option<(u16, u16)>) {
+        let focused = self.focus == Focus::Terminal;
+        let (title, mut body, cursor) = match &mut self.terminal {
+            Some(t) => {
+                let state = match t.exited() {
+                    Some(why) => format!("shell ended ({why}); Enter restarts"),
+                    None => t.shell().to_string(),
+                };
+                let (rows, cursor) = t.rows(width, height.saturating_sub(1));
+                (state, rows, cursor)
+            }
+            None => ("not started".into(), Vec::new(), None),
+        };
+        let mut rows = vec![layout::label(
+            &format!(
+                "{}TERMINAL | {title} | {}",
+                if focused { "> " } else { "" },
+                if focused {
+                    "keys go to the shell; Alt+3 back to editor"
+                } else {
+                    "Alt+3 focus"
+                }
+            ),
+            width,
+            true,
+        )];
+        rows.append(&mut body);
+        rows.resize_with(height, Row::default);
+        (rows, cursor.filter(|_| focused).map(|(x, y)| (x, y + 1)))
     }
     fn draw_panel(&self, width: usize, height: usize) -> Vec<Row> {
         if height == 0 {
@@ -1798,6 +2480,74 @@ impl Workspace {
         rows.resize_with(height, Row::default);
         rows
     }
+    /// Mode | file | language | compiler | position | focus | message.
+    fn status_line(&self) -> String {
+        let state = self.editor().state();
+        let mode = match self.editor().input().mode() {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
+            Mode::Command => "COMMAND",
+        };
+        let file = state.path().map_or_else(
+            || "[untitled]".to_string(),
+            |p| {
+                p.strip_prefix(&self.root)
+                    .unwrap_or(p)
+                    .display()
+                    .to_string()
+            },
+        );
+        let language = language_of(state.path());
+        let position = state.position().map_or(String::new(), |p| {
+            format!("Ln {}, Col {}", p.line + 1, p.scalar_column + 1)
+        });
+        let hint = if self.operation.is_some() {
+            "F8 cancels"
+        } else if self.assistant.suggestion.is_some() {
+            "Tab accepts, Esc rejects"
+        } else {
+            "Ctrl+K commands"
+        };
+        let place = match self.focus {
+            Focus::Editor => mode.to_string(),
+            other => format!("{} · {mode}", format!("{other:?}").to_uppercase()),
+        };
+        let info = format!(
+            "{file}{} | {language} | {} | {position}",
+            if state.is_modified() { " [+]" } else { "" },
+            self.compiler_label(language),
+        );
+        // Errors must stay readable on an 80-column terminal.
+        if self.notification.starts_with("Error") {
+            format!("{place} | {} | {info} | {hint}", self.notification)
+        } else {
+            format!("{place} | {info} | {hint} | {}", self.notification)
+        }
+    }
+    /// Show a pending AI completion at the cursor without touching the buffer.
+    fn ghost_text(&self, frame: &mut Frame, width: usize) {
+        let Some(s) = &self.assistant.suggestion else {
+            return;
+        };
+        let state = self.editor().state();
+        if s.offset != state.cursor() || s.path.as_deref() != state.path() {
+            return;
+        }
+        let Some((x, y)) = frame.cursor else { return };
+        let Some(row) = frame.rows.get_mut(usize::from(y)) else {
+            return;
+        };
+        let mut lines = s.text.lines();
+        let first = lines.next().unwrap_or("");
+        let more = lines.count();
+        let mut ghost = first.replace('\t', "    ");
+        if more > 0 {
+            ghost.push_str(&format!(" … (+{more} lines)"));
+        }
+        let text = sanitize(&ghost);
+        *row = insert_at(row, usize::from(x), &text, width);
+    }
     /// Compose an adaptive bounded frame, reusing the editor's cached grapheme layout.
     pub fn frame(&mut self) -> Result<Frame, FrontendError> {
         let width = usize::from(self.size.0.min(1024)).saturating_sub(1);
@@ -1864,79 +2614,101 @@ impl Workspace {
             .collect();
         rows.push(layout::label(&tabs, width, false));
         let area = height - 3;
-        let panel_height =
-            if self.panel_visible && self.focus == Focus::Panel && (height < 16 || width < 60) {
-                area
-            } else if self.panel_visible && height >= 16 {
-                (area / 3).clamp(4, 10)
+        let bottom_focus = matches!(self.focus, Focus::Panel | Focus::Terminal);
+        let panel_height = if self.panel_visible && bottom_focus && (height < 16 || width < 60) {
+            area
+        } else if self.panel_visible && height >= 16 {
+            if self.focus == Focus::Terminal {
+                (area / 2).clamp(6, 24)
             } else {
-                0
-            };
+                (area / 3).clamp(4, 10)
+            }
+        } else {
+            0
+        };
         let editor_height = area - panel_height;
         let side_width = if self.explorer_visible && width >= 80 {
             24.min(width / 3)
         } else {
             0
         };
+        let ai_width = if self.assistant_visible && width >= 100 {
+            (width / 3).clamp(30, 64)
+        } else {
+            0
+        };
         let overlay_tree =
             self.explorer_visible && self.focus == Focus::Explorer && side_width == 0;
+        let overlay_ai = self.focus == Focus::Assistant && ai_width == 0;
         let mut cursor = None;
         if editor_height > 0 {
             if overlay_tree {
                 rows.extend(self.draw_tree(width, editor_height));
+            } else if overlay_ai {
+                let (ai, ai_cursor) = self.assistant.rows(width, editor_height, true);
+                cursor = ai_cursor.map(|(x, y)| (x, y + 2));
+                rows.extend(ai);
             } else {
-                let editor_width =
-                    width.saturating_sub(if side_width > 0 { side_width + 1 } else { 0 });
+                let left = if side_width > 0 { side_width + 1 } else { 0 };
+                let right = if ai_width > 0 { ai_width + 1 } else { 0 };
+                let editor_width = width.saturating_sub(left + right);
                 self.documents[self.active].size =
                     ((editor_width + 1) as u16, editor_height as u16);
-                let frame = self.documents[self.active].frame()?;
+                let mut frame = self.documents[self.active].frame()?;
+                self.ghost_text(&mut frame, editor_width);
                 cursor = if self.focus == Focus::Editor {
-                    frame.cursor.map(|(x, y)| {
-                        (
-                            x + if side_width > 0 {
-                                side_width as u16 + 1
-                            } else {
-                                0
-                            },
-                            y + 2,
-                        )
-                    })
+                    frame.cursor.map(|(x, y)| (x + left as u16, y + 2))
                 } else {
                     None
                 };
-                if side_width > 0 {
-                    let tree = self.draw_tree(side_width, editor_height);
-                    for (mut left, right) in tree.into_iter().zip(frame.rows) {
-                        let occupied: usize = left
-                            .runs
-                            .iter()
-                            .map(|r| UnicodeWidthStr::width(r.text.as_str()))
-                            .sum();
-                        left.push(&" ".repeat(side_width.saturating_sub(occupied)), false);
-                        left.push("|", false);
-                        left.runs.extend(right.runs);
-                        rows.push(left);
-                    }
+                let tree = if side_width > 0 {
+                    self.draw_tree(side_width, editor_height)
                 } else {
-                    rows.extend(frame.rows);
+                    Vec::new()
+                };
+                let (ai, ai_cursor) = if ai_width > 0 {
+                    self.assistant
+                        .rows(ai_width, editor_height, self.focus == Focus::Assistant)
+                } else {
+                    (Vec::new(), None)
+                };
+                if let Some((x, y)) = ai_cursor {
+                    cursor = Some((x + (left + editor_width + 1) as u16, y + 2));
+                }
+                let mut tree = tree.into_iter();
+                let mut ai = ai.into_iter();
+                for editor_row in frame.rows.into_iter().take(editor_height) {
+                    let mut row = Row::default();
+                    if side_width > 0 {
+                        let mut t = tree.next().unwrap_or_default();
+                        pad(&mut t, side_width);
+                        row.runs.extend(t.runs);
+                        row.push("|", false);
+                    }
+                    let mut e = editor_row;
+                    if ai_width > 0 {
+                        pad(&mut e, editor_width);
+                    }
+                    row.runs.extend(e.runs);
+                    if ai_width > 0 {
+                        row.push("|", false);
+                        row.runs.extend(ai.next().unwrap_or_default().runs);
+                    }
+                    rows.push(row);
                 }
             }
         }
-        rows.extend(self.draw_panel(width, panel_height));
-        rows.push(layout::label(
-            &format!(
-                "{:?} | {} | {}",
-                self.focus,
-                self.notification,
-                if self.operation.is_some() {
-                    "F8 cancels"
-                } else {
-                    "Ctrl+K commands"
-                }
-            ),
-            width,
-            true,
-        ));
+        rows.resize_with(2 + editor_height, Row::default);
+        if panel_height > 0 && self.panel == Panel::Terminal {
+            let (term_rows, term_cursor) = self.draw_terminal(width, panel_height);
+            if let Some((x, y)) = term_cursor {
+                cursor = Some((x, y + (2 + editor_height) as u16));
+            }
+            rows.extend(term_rows);
+        } else {
+            rows.extend(self.draw_panel(width, panel_height));
+        }
+        rows.push(layout::label(&self.status_line(), width, true));
         if let Some(dialog) = &self.dialog {
             cursor = None;
             let mut overlay = Vec::new();
@@ -2044,6 +2816,8 @@ pub fn run(root: &Path) -> Result<(), FrontendError> {
             || app.debug.is_some()
             || app.serial.is_some()
             || app.inventory.is_some()
+            || app.assistant.busy()
+            || app.terminal.is_some()
         {
             20
         } else {
@@ -2059,5 +2833,235 @@ pub fn run(root: &Path) -> Result<(), FrontendError> {
     app.operation = None;
     app.serial = None;
     app.debug = None;
+    app.terminal = None;
+    app.assistant.cancel();
     Ok(())
+}
+
+/// User configuration, project manifest and any problems loading them.
+/// Errors never stop the IDE from opening; they appear in Settings.
+fn load_configs(root: &Path) -> (UserConfig, Option<Manifest>, Vec<String>) {
+    let mut notes = Vec::new();
+    let user = UserConfig::load().unwrap_or_else(|e| {
+        notes.push(format!("User config ignored: {}", e.0));
+        UserConfig::default()
+    });
+    let manifest = Manifest::load(root).unwrap_or_else(|e| {
+        notes.push(format!("embedide.toml ignored: {}", e.0));
+        None
+    });
+    (user, manifest, notes)
+}
+
+/// Language id from the file extension (for the status bar, AI and compiler lookup).
+fn language_of(path: Option<&Path>) -> &'static str {
+    let ext = path
+        .and_then(Path::extension)
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext {
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "ipp" => "cpp",
+        "rs" => "rust",
+        "zig" => "zig",
+        "s" | "S" | "sx" | "asm" | "nasm" | "inc" => "asm",
+        "f" | "F" | "f90" | "F90" | "f95" | "F95" | "f03" | "F03" | "f08" | "F08" | "for" => {
+            "fortran"
+        }
+        "toml" => "toml",
+        "json" => "json",
+        "md" => "markdown",
+        "py" => "python",
+        "ld" | "lds" => "linker-script",
+        "mk" => "make",
+        _ if path
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "Makefile" || n == "makefile") =>
+        {
+            "make"
+        }
+        _ if path
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "CMakeLists.txt") =>
+        {
+            "cmake"
+        }
+        _ => "text",
+    }
+}
+
+fn sanitize(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+fn pad(row: &mut Row, width: usize) {
+    let used: usize = row
+        .runs
+        .iter()
+        .map(|r| UnicodeWidthStr::width(r.text.as_str()))
+        .sum();
+    if used < width {
+        row.push(&" ".repeat(width - used), false);
+    } else if used > width {
+        *row = insert_at(row, width, "", width);
+    }
+}
+
+/// Insert `text` (shown in inverse video) at display column `col`, truncating at `width`.
+fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
+    use unicode_width::UnicodeWidthChar;
+    fn put(out: &mut Row, used: &mut usize, text: &str, selected: bool, width: usize) {
+        let mut piece = String::new();
+        for ch in text.chars() {
+            let w = ch.width().unwrap_or(0);
+            if *used + w > width {
+                break;
+            }
+            piece.push(ch);
+            *used += w;
+        }
+        if !piece.is_empty() {
+            out.push(&piece, selected);
+        }
+    }
+    let mut out = Row::default();
+    let mut used = 0;
+    let mut inserted = false;
+    'runs: for run in &row.runs {
+        let mut piece = String::new();
+        for ch in run.text.chars() {
+            if !inserted && used >= col {
+                if !piece.is_empty() {
+                    out.push(&std::mem::take(&mut piece), run.selected);
+                }
+                put(&mut out, &mut used, text, true, width);
+                inserted = true;
+            }
+            let w = ch.width().unwrap_or(0);
+            if used + w > width {
+                if !piece.is_empty() {
+                    out.push(&piece, run.selected);
+                }
+                break 'runs;
+            }
+            piece.push(ch);
+            used += w;
+        }
+        if !piece.is_empty() {
+            out.push(&piece, run.selected);
+        }
+    }
+    if !inserted && !text.is_empty() {
+        if used < col {
+            let gap = " ".repeat(col - used);
+            put(&mut out, &mut used, &gap, false, width);
+        }
+        put(&mut out, &mut used, text, true, width);
+    }
+    out
+}
+
+fn help_lines(keys: &BTreeMap<String, String>) -> Vec<String> {
+    let mut lines: Vec<String> = [
+        "PANELS  Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal (press again to return to the editor)",
+        "        F2 show/hide explorer | F4 cycle bottom panels | F6 cycle focus | Ctrl+K command palette",
+        "EDITOR  Vim modes: Normal (hjkl w b e 0 $ gg G x dd yy p u Ctrl+R / ? n N v V), Insert (i a o O, Esc),",
+        "        Command (:w :q :q! :wq, plus :build :clean :cancel :e <file> :help :settings :complete :ai <question>)",
+        "        Leader (Space): e explorer | b build | d debug | t terminal | s serial | f find file",
+        "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
+        "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
+        "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
+        "TERMINAL Alt+3: your shell in a real pseudo-terminal; all keys go to it except Alt+1/2/3",
+        "AI      Alt+2, type a message, Enter sends (only then). /file /sel /explain /edit <instr> /apply /reject",
+        "        /complete or :complete shows a suggestion at the cursor: Tab accepts, Esc rejects. /help in the panel",
+        "        AI is optional: without a provider the IDE works fully offline. EMBEDIDE_AI_OFFLINE=1 blocks requests",
+        "EXPLORER j/k move, Enter/Right open or expand, Left collapse, n new file, Delete delete, r refresh, Esc editor",
+        "PANEL   j/k scroll, PgUp/PgDn, End follow, / filter, Tab next panel, Esc editor",
+        "Debugging, flashing and serial run only from explicit commands (Ctrl+K: debug, flash, serial).",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if !keys.is_empty() {
+        lines.push("Custom bindings from embedide.json keys:".into());
+        lines.extend(keys.iter().map(|(id, chord)| format!("  {chord} → {id}")));
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(row: &Row) -> String {
+        row.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn ghost_text_is_inserted_at_the_cursor_column_and_clipped() {
+        let mut row = Row::default();
+        row.push("int ", false);
+        row.push("x;", true);
+        let out = insert_at(&row, 4, "y = ", 80);
+        assert_eq!(text(&out), "int y = x;");
+        // Adjacent inverse runs merge; the ghost text starts an inverse run.
+        assert!(out
+            .runs
+            .iter()
+            .any(|r| r.selected && r.text.starts_with("y = ")));
+        assert_eq!(text(&insert_at(&row, 10, "z", 80)), "int x;    z");
+        assert_eq!(text(&insert_at(&row, 2, "LONGTEXT", 6)), "inLONG");
+        let mut wide = Row::default();
+        wide.push("猫猫", false);
+        assert_eq!(text(&insert_at(&wide, 2, "!", 80)), "猫!猫");
+    }
+
+    #[test]
+    fn languages_follow_file_extensions() {
+        assert_eq!(language_of(Some(Path::new("a/main.c"))), "c");
+        assert_eq!(language_of(Some(Path::new("x.hpp"))), "cpp");
+        assert_eq!(language_of(Some(Path::new("start.S"))), "asm");
+        assert_eq!(language_of(Some(Path::new("m.f90"))), "fortran");
+        assert_eq!(language_of(Some(Path::new("Makefile"))), "make");
+        assert_eq!(language_of(None), "text");
+    }
+
+    #[test]
+    fn panel_keys_toggle_focus_and_ex_commands_reach_the_host() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-unit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.c"), "int a;\n").unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        let alt = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
+        ws.handle(alt('2'));
+        assert_eq!(ws.focus(), Focus::Assistant);
+        ws.handle(alt('2'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Explorer);
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        for ch in ":e a.c".chars() {
+            ws.handle(Event::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::NONE,
+            )));
+        }
+        ws.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(ws
+            .editor()
+            .state()
+            .path()
+            .is_some_and(|p| p.ends_with("a.c")));
+        assert!(
+            ws.status_line().starts_with("NORMAL | a.c | c |"),
+            "{}",
+            ws.status_line()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
