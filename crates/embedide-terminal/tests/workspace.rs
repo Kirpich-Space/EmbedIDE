@@ -8,10 +8,7 @@ use embedide_terminal::tui::{
     screen::{Screen, Theme},
     workspace::{Focus, Workspace},
 };
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 use unicode_width::UnicodeWidthStr;
 fn key(app: &mut Workspace, code: KeyCode) {
     app.handle(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
@@ -171,6 +168,10 @@ fn flash_confirmation_cancel_never_executes_the_configured_backend() {
 #[test]
 fn editing_remains_live_during_background_build_and_diagnostics_jump_to_source() {
     use std::os::unix::fs::PermissionsExt;
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
     let f = Fixture::new();
     let source = f.write("main.c", "one\ntwo\nthree");
     f.write("Makefile", "unused:");

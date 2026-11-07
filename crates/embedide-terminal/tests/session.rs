@@ -164,7 +164,10 @@ fn readonly_save_failure_keeps_editor_dirty_and_can_be_quit_explicitly() {
     session.submit("<Esc>:q!").unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), "original");
     // On Windows a read-only fixture cannot be removed by remove_dir_all.
+    // The lint guards against world-writable files on Unix; this block is
+    // Windows-only, where clearing the read-only attribute is the intent.
     #[cfg(windows)]
+    #[allow(clippy::permissions_set_readonly_false)]
     {
         let mut p = fs::metadata(&path).unwrap().permissions();
         p.set_readonly(false);
