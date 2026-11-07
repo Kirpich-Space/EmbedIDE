@@ -1,11 +1,17 @@
 [package]
 name = "embedide-ai"
+description = "EmbedIDE AI layer: provider-independent chat, completion and edit (Anthropic, OpenAI, Moonshot, xAI)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+embedide-workspace.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [lints]
 workspace = true

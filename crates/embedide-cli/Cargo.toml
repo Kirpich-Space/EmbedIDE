@@ -16,6 +16,7 @@ embedide-terminal.workspace = true
 embedide-toolchains.workspace = true
 embedide-workspace.workspace = true
 embedide-build.workspace = true
+embedide-ai.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
