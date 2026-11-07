@@ -17,10 +17,12 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    name = "embedide",
+    name = "embed",
     version,
     about = "EmbedIDE — engineering IDE for firmware, drivers, kernels and systems code",
-    long_about = "EmbedIDE command-line edition.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
+    long_about = "EmbedIDE terminal edition.\n\nRun `embed` (or `embed <directory>`) to open the full-screen, keyboard-driven IDE: \
+explorer (Alt+1), editor with Vim modes, AI assistant (Alt+2), interactive terminal (Alt+3), build output and diagnostics. \
+The subcommands below are for scripts and automation.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran, cross GCCs) and builds with exactly what you select. \
 It never installs toolchains, never flashes hardware and never starts a debugger on its own."
 )]
@@ -225,7 +227,7 @@ fn execute(command: Commands, interactive: bool, out: &Out) -> CliResult<Execute
                 out.line(&format!(
                     "  {lang:<8} {}",
                     if ids.is_empty() {
-                        "— none (see `embedide toolchain recommend`)".to_string()
+                        "— none (see `embed toolchain recommend`)".to_string()
                     } else {
                         ids.join(", ")
                     }
@@ -318,7 +320,10 @@ fn execute(command: Commands, interactive: bool, out: &Out) -> CliResult<Execute
                 (v, c, true)
             } else {
                 if profile.is_some() || !toolchain.is_empty() {
-                    return Err(fail(format!("--profile/--toolchain need an embedide.toml; run `embedide project init {}`", path.display())));
+                    return Err(fail(format!(
+                        "--profile/--toolchain need an embedide.toml; run `embed project init {}`",
+                        path.display()
+                    )));
                 }
                 let project = core::inspect(&root)?;
                 let plan = core::plan_build(
@@ -376,6 +381,14 @@ fn main() -> ExitCode {
         "serial-bridge",
         "help",
     ];
+    if args.len() == 1 {
+        // `embed` alone opens the IDE in the current directory.
+        if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+            eprintln!("embed: the IDE needs an interactive terminal; see `embed --help` for scriptable commands");
+            return ExitCode::from(2);
+        }
+        args.extend(["open".into(), ".".into()]);
+    }
     if args.len() == 2
         && !commands.iter().any(|name| args[1] == *name)
         && std::path::Path::new(&args[1]).is_dir()
@@ -413,7 +426,7 @@ fn main() -> ExitCode {
             Ok(code) => ExitCode::from(code),
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("embedide serial-bridge: {e}");
+                eprintln!("embed serial-bridge: {e}");
                 ExitCode::from(1)
             }
         };
@@ -425,7 +438,7 @@ fn main() -> ExitCode {
         Err(CliError { usage, message }) => {
             let kind = if usage { "usage" } else { "operation" };
             if !cli.json {
-                eprintln!("embedide: {message}");
+                eprintln!("embed: {message}");
                 return ExitCode::from(if usage { 2 } else { 1 });
             }
             (
@@ -442,7 +455,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::from(code),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("embedide: cannot write output: {e}");
+            eprintln!("embed: cannot write output: {e}");
             ExitCode::from(1)
         }
     }

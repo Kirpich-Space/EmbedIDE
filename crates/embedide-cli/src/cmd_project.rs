@@ -1,4 +1,4 @@
-//! `embedide project …`, `build`, `clean`, `terminal`, `config …`
+//! `embed project …`, `build`, `clean`, `terminal`, `config …`
 use crate::{cmd_toolchain::registry, fail, CliResult, Out};
 use clap::Subcommand;
 use embedide_build::{self as build, CleanAction, Event, Request};
@@ -24,13 +24,13 @@ pub enum ProjectCmd {
         /// Primary language: c, cpp, rust, zig, asm, fortran.
         #[arg(long)]
         language: Option<Language>,
-        /// Template (see `embedide project templates`).
+        /// Template (see `embed project templates`).
         #[arg(long)]
         template: Option<String>,
         /// Record a toolchain choice, e.g. --toolchain c=clang (repeatable).
         #[arg(long, value_parser = parse_choice)]
         toolchain: Vec<(String, String)>,
-        /// Board id for firmware templates (see `embedide targets`).
+        /// Board id for firmware templates (see `embed targets`).
         #[arg(long)]
         board: Option<String>,
     },
@@ -179,7 +179,7 @@ pub fn project(cmd: ProjectCmd, out: &Out) -> CliResult<Value> {
                 .map_err(|e| fail(format!("Cannot open {}: {e}", path.display())))?;
             let Some(m) = Manifest::load(&root).map_err(|e| fail(e.0))? else {
                 let legacy = embedide_core::inspect(&root).map_err(|e| fail(e.0))?;
-                out.line(&format!("{} has no {MANIFEST_FILE}; legacy project (build systems: {:?}). Run `embedide project init` to add one.", root.display(), legacy.detected_build_systems));
+                out.line(&format!("{} has no {MANIFEST_FILE}; legacy project (build systems: {:?}). Run `embed project init` to add one.", root.display(), legacy.detected_build_systems));
                 return Ok(json!({"root": root, "manifest": null, "legacy": legacy}));
             };
             let user = user()?;
@@ -229,7 +229,7 @@ pub fn project(cmd: ProjectCmd, out: &Out) -> CliResult<Value> {
     }
 }
 
-/// Options for `embedide build` on a manifest project.
+/// Options for `embed build` on a manifest project.
 pub struct BuildArgs {
     pub profile: String,
     pub toolchain: Vec<(String, String)>,
@@ -530,7 +530,7 @@ pub fn config(cmd: ConfigCmd, out: &Out) -> CliResult<Value> {
             let (mut f, is_project) = file(&project)?;
             if is_project && !f.path().exists() {
                 return Err(fail(format!(
-                    "{} does not exist; run `embedide project init` first",
+                    "{} does not exist; run `embed project init` first",
                     f.path().display()
                 )));
             }

@@ -73,7 +73,7 @@ pub fn resolve(
             .map(|t| t.id.as_str())
             .collect();
         return Err(Error(format!(
-            "Toolchain '{id}' is not installed or not configured. Available for {lang}: {}. See `embedide toolchain recommend {lang}`; EmbedIDE does not install compilers",
+            "Toolchain '{id}' is not installed or not configured. Available for {lang}: {}. See `embed toolchain recommend {lang}`; EmbedIDE does not install compilers",
             if options.is_empty() { "none".to_string() } else { options.join(", ") }
         )));
     };
@@ -170,7 +170,7 @@ pub fn choose(
     }
     if triple.is_some() || !m.target.flags.is_empty() {
         return Err(Error(format!(
-            "This project has a [target]; choose its {lang} toolchain explicitly (e.g. `embedide build --toolchain {lang}=<id>` or [toolchain] {lang} = \"…\"). Installed: {}",
+            "This project has a [target]; choose its {lang} toolchain explicitly (e.g. `embed build --toolchain {lang}=<id>` or [toolchain] {lang} = \"…\"). Installed: {}",
             toolchains.iter().filter(|t| t.supports(lang)).map(|t| t.id.as_str()).collect::<Vec<_>>().join(", ")
         )));
     }
@@ -190,6 +190,6 @@ pub fn choose(
         }
     }
     Err(Error(format!(
-        "No {lang} toolchain found. Install one (see `embedide toolchain recommend {lang}`) or add yours with `embedide toolchain add`"
+        "No {lang} toolchain found. Install one (see `embed toolchain recommend {lang}`) or add yours with `embed toolchain add`"
     )))
 }

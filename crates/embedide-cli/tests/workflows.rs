@@ -24,7 +24,7 @@ impl Env {
         Self { dir: base, cfg }
     }
     fn cli(&self, cwd: &Path, args: &[&str]) -> (Value, i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_embedide"))
+        let out = Command::new(env!("CARGO_BIN_EXE_embed"))
             .arg("--json")
             .args(args)
             .current_dir(cwd)
@@ -79,12 +79,20 @@ fn run_artifact(path: &str) -> String {
 #[test]
 fn help_version_and_doctor_work_without_a_project() {
     let e = Env::new("help");
-    let out = Command::new(env!("CARGO_BIN_EXE_embedide"))
+    let out = Command::new(env!("CARGO_BIN_EXE_embed"))
         .arg("--version")
         .output()
         .unwrap();
-    assert!(String::from_utf8_lossy(&out.stdout).starts_with("embedide "));
-    let out = Command::new(env!("CARGO_BIN_EXE_embedide"))
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("embed "));
+    // Without a terminal, plain `embed` explains instead of drawing a screen.
+    let out = Command::new(env!("CARGO_BIN_EXE_embed"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("needs an interactive terminal"));
+    assert!(out.stdout.is_empty());
+    let out = Command::new(env!("CARGO_BIN_EXE_embed"))
         .arg("--help")
         .output()
         .unwrap();

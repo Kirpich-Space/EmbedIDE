@@ -34,7 +34,7 @@ Match surrounding TypeScript/JavaScript: two-space indentation, `PascalCase` com
 
 Use Rust `#[test]` with descriptive `snake_case` behavior names. Add regression tests for corrected defects, especially Unicode boundaries, undo/redo, file integrity, and frontend key sequences. Use disposable fixtures rather than real projects or hardware.
 
-Run Unix terminal checks with `python3 scripts/check-terminal-pty.py --binary PATH`. Run project workspace PTY checks with `python3 scripts/check-workspace-pty.py --binary target/debug/embedide`. No coverage percentage or npm test script is configured. Report blocked checks explicitly; existing binaries do not validate changed sources.
+Run Unix terminal checks with `python3 scripts/check-terminal-pty.py --binary PATH`. Run project workspace PTY checks with `python3 scripts/check-workspace-pty.py --binary target/debug/embed`. No coverage percentage or npm test script is configured. Report blocked checks explicitly; existing binaries do not validate changed sources.
 
 ## Commit & Pull Request Guidelines
 

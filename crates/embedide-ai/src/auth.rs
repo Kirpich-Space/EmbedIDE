@@ -2,7 +2,7 @@
 //!
 //! API keys come from the provider's environment variable, or from
 //! `<config dir>/credentials.toml` (written with 0600 permissions by
-//! `embedide ai login`). They are never read from or written to project
+//! `embed ai login`). They are never read from or written to project
 //! files. Subscription mode uses only the provider's official CLI and its own
 //! login; EmbedIDE never touches browser cookies or session tokens.
 use crate::{Error, ProviderId, Result};

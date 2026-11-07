@@ -279,12 +279,12 @@ pub fn create(root: &Path, name: &str, opts: &CreateOptions) -> Result<Created> 
         }
         "c-cortex-m" => {
             let id = opts.board.clone().ok_or_else(|| {
-                Error("c-cortex-m needs --board <id> (see `embedide targets`)".into())
+                Error("c-cortex-m needs --board <id> (see `embed targets`)".into())
             })?;
             let b = boards()
                 .into_iter()
                 .find(|b| b.id == id)
-                .ok_or_else(|| Error(format!("Unknown board '{id}'; see `embedide targets`")))?;
+                .ok_or_else(|| Error(format!("Unknown board '{id}'; see `embed targets`")))?;
             write_new(root, "src/main.c", &format!("#include <stdint.h>\n\n/* Target: {} ({}) */\n\nint main(void) {{\n    while (1) {{\n        /* Application loop */\n    }}\n}}\n\nvoid SystemInit(void) {{}}\n", b.name, b.family), &mut files)?;
             write_new(root, "src/startup.S", &startup(&b), &mut files)?;
             write_new(root, "linker.ld", &linker_script(&b), &mut files)?;

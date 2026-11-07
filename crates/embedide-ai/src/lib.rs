@@ -204,7 +204,7 @@ pub fn backend(
         AuthMode::ApiKey => {
             let key = auth::api_key(provider)?.ok_or_else(|| {
                 Error::Config(format!(
-                    "No API key for {}. Set {} or run `embedide ai login {}` (the key is stored outside your projects)",
+                    "No API key for {}. Set {} or run `embed ai login {}` (the key is stored outside your projects)",
                     provider.info().name,
                     provider.info().key_env,
                     provider.id()

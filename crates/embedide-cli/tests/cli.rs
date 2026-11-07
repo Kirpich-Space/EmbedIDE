@@ -30,14 +30,14 @@ impl Fixture {
         fs::write(self.0.join(name), contents).unwrap();
     }
     fn cli(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_embedide"))
+        Command::new(env!("CARGO_BIN_EXE_embed"))
             .args(args)
             .current_dir(&self.0)
             .output()
             .unwrap()
     }
     fn edit(&self, name: &str, keys: &str) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_embedide"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_embed"))
             .args(["--json", "edit", "--batch", "--", name])
             .current_dir(&self.0)
             .stdin(Stdio::piped())
@@ -223,7 +223,7 @@ fn missing_projects_and_bad_cli_arguments_have_distinct_exit_codes() {
 fn inventories_work_without_project_or_display() {
     let f = Fixture::new();
     for command in ["doctor", "toolchains", "targets"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_embedide"))
+        let out = Command::new(env!("CARGO_BIN_EXE_embed"))
             .args([command, "--json"])
             .current_dir(&f.0)
             .env_remove("DISPLAY")
@@ -243,11 +243,11 @@ fn runner_propagates_exit_code_and_stops_after_failure() {
         system: BuildSystem::Make,
         steps: vec![
             core::ProcessSpec {
-                program: env!("CARGO_BIN_EXE_embedide").into(),
+                program: env!("CARGO_BIN_EXE_embed").into(),
                 args: vec!["unknown-command".into()],
             },
             core::ProcessSpec {
-                program: env!("CARGO_BIN_EXE_embedide").into(),
+                program: env!("CARGO_BIN_EXE_embed").into(),
                 args: vec!["init".into()],
             },
         ],

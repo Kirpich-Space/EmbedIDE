@@ -1,7 +1,7 @@
 /**
  * Serial monitor service.
  *
- * Talks to `embedide serial-bridge` (crates/embedide-cli), which uses the
+ * Talks to `embed serial-bridge` (crates/embedide-cli), which uses the
  * Rust serialport crate: no Python or pyserial is needed, and data is
  * binary-safe (hex on the wire, bytes to the renderer). One long-lived bridge
  * process serves enumeration and the open port; it is restarted if it dies
@@ -12,7 +12,8 @@ const { EventEmitter } = require('events')
 const fs = require('fs')
 const path = require('path')
 
-const EXE = process.platform === 'win32' ? 'embedide.exe' : 'embedide'
+// The Rust CLI binary is `embed` (the name `embedide` is reserved for the Qt GUI).
+const EXE = process.platform === 'win32' ? 'embed.exe' : 'embed'
 
 /** Locate the bridge binary: env override, packaged resources, dev builds. */
 function bridgeCandidates() {

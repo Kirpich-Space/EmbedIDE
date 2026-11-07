@@ -1,4 +1,4 @@
-//! `embedide ai …` end to end, against a local mock HTTP server and a fake
+//! `embed ai …` end to end, against a local mock HTTP server and a fake
 //! subscription CLI. No real provider is contacted; nothing can be billed.
 use serde_json::{json, Value};
 use std::{
@@ -71,7 +71,7 @@ impl T {
         Self { dir }
     }
     fn cmd(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_embedide"));
+        let mut c = Command::new(env!("CARGO_BIN_EXE_embed"));
         c.args(args)
             .current_dir(&self.dir)
             .env("EMBEDIDE_CONFIG_DIR", self.dir.join("cfg"));

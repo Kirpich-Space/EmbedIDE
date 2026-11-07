@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual full-screen PTY workflows, without Enter for editing keys.
 
-Use --cli to exercise `embedide edit` instead of the standalone frontend.
+Use --cli to exercise `embed edit` instead of the standalone frontend.
 The fixture terminal checks exact termios restoration and cleanup sequences.
 """
 import argparse

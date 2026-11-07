@@ -1,4 +1,4 @@
-//! `embedide ai …` — network access happens only in models/chat/complete/edit,
+//! `embed ai …` — network access happens only in models/chat/complete/edit,
 //! and only after printing what will be sent. --dry-run never connects.
 use crate::{fail, CliResult, Out};
 use clap::{Args, Subcommand};
@@ -21,7 +21,7 @@ pub struct Pick {
     /// anthropic, openai, moonshot or xai (default: ai.provider or the task's model setting).
     #[arg(long)]
     provider: Option<ProviderId>,
-    /// Model id exactly as the provider names it (see `embedide ai models`).
+    /// Model id exactly as the provider names it (see `embed ai models`).
     #[arg(long)]
     model: Option<String>,
     /// api-key (default) or subscription (official Claude Code / Codex CLI).
@@ -121,7 +121,7 @@ fn choose(cfg: &UserConfig, task: &str, pick: &Pick) -> CliResult<Chosen> {
         .provider
         .or(spec_provider)
         .or(cfg.ai.provider.as_deref().map(str::parse).transpose().map_err(fail)?)
-        .ok_or_else(|| fail("Choose a provider with --provider, or `embedide config set ai.provider anthropic|openai|moonshot|xai`".into()))?;
+        .ok_or_else(|| fail("Choose a provider with --provider, or `embed config set ai.provider anthropic|openai|moonshot|xai`".into()))?;
     let pc = cfg
         .ai
         .providers
@@ -144,7 +144,7 @@ fn choose(cfg: &UserConfig, task: &str, pick: &Pick) -> CliResult<Chosen> {
         (None, AuthMode::Subscription) => "default".into(),
         (None, AuthMode::ApiKey) => {
             return Err(fail(format!(
-                "No model selected for {task} with {p}. EmbedIDE does not guess model names: run `embedide ai models --provider {p}`, then pass --model or `embedide config set ai.providers.{p}.model <id>`",
+                "No model selected for {task} with {p}. EmbedIDE does not guess model names: run `embed ai models --provider {p}`, then pass --model or `embed config set ai.providers.{p}.model <id>`",
                 p = provider.id()
             )))
         }

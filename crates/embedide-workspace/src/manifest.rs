@@ -162,7 +162,7 @@ pub struct Manifest {
     /// `[profiles.<name>]`
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
-    /// Environment for builds and `embedide terminal`.
+    /// Environment for builds and `embed terminal`.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// `[ai]`

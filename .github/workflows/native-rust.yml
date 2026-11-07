@@ -58,13 +58,13 @@ jobs:
       - if: runner.os != 'Windows'
         run: python scripts/check-tui-pty.py --binary target/debug/embedide-terminal
       - if: runner.os != 'Windows'
-        run: python scripts/check-tui-pty.py --binary target/debug/embedide --cli
+        run: python scripts/check-tui-pty.py --binary target/debug/embed --cli
       - if: runner.os != 'Windows'
-        run: python scripts/check-workspace-pty.py --binary target/debug/embedide
+        run: python scripts/check-workspace-pty.py --binary target/debug/embed
       - if: runner.os != 'Windows'
-        run: python scripts/check-native-cli.py --binary target/debug/embedide
+        run: python scripts/check-native-cli.py --binary target/debug/embed
       - if: runner.os == 'Windows'
-        run: python scripts/check-native-cli.py --binary target/debug/embedide.exe
+        run: python scripts/check-native-cli.py --binary target/debug/embed.exe
 
   musl:
     runs-on: ubuntu-latest
