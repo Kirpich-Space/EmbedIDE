@@ -1,0 +1,17 @@
+[package]
+name = "embedide-build"
+description = "EmbedIDE build engine: native compiles with user-selected toolchains, or existing Make/CMake/Cargo/Zig"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+embedide-core.workspace = true
+embedide-toolchains.workspace = true
+embedide-workspace.workspace = true
+
+[lints]
+workspace = true

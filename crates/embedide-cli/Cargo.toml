@@ -1,5 +1,6 @@
 [package]
 name = "embedide-cli"
+description = "EmbedIDE command-line IDE: projects, user-selected toolchains, builds, AI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,8 +13,13 @@ path = "src/main.rs"
 [dependencies]
 embedide-core.workspace = true
 embedide-terminal.workspace = true
+embedide-toolchains.workspace = true
+embedide-workspace.workspace = true
+embedide-build.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
+ctrlc = "3.4"
 
 [lints]
 workspace = true

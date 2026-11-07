@@ -1,8 +1,13 @@
-//! Standalone terminal frontend; no GUI or Node.js runtime is required.
+//! EmbedIDE command-line IDE. No GUI, Electron or Node.js runtime is required.
+mod cmd_ai;
+mod cmd_project;
+mod cmd_toolchain;
 mod serial_bridge;
 
 use clap::{Parser, Subcommand};
-use embedide_core::{self as core, BuildOptions, BuildSystem, Error, Result};
+use cmd_project::{BuildArgs, ConfigCmd, ProjectCmd};
+use cmd_toolchain::ToolchainCmd;
+use embedide_core::{self as core, BuildOptions, BuildSystem, Error};
 use serde_json::{json, Value};
 use std::{
     io::{self, IsTerminal, Write},
@@ -14,10 +19,13 @@ use std::{
 #[command(
     name = "embedide",
     version,
-    about = "Offline-first embedded project tools (Rust migration foundation)"
+    about = "EmbedIDE — engineering IDE for firmware, drivers, kernels and systems code",
+    long_about = "EmbedIDE command-line edition.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
+rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran, cross GCCs) and builds with exactly what you select. \
+It never installs toolchains, never flashes hardware and never starts a debugger on its own."
 )]
 struct Cli {
-    /// Emit a single JSON result on stdout; build output goes to stderr.
+    /// Emit a single JSON result on stdout; tool output goes to stderr.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -26,7 +34,60 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Register a directory; never overwrite existing project metadata or files.
+    /// Check the environment: OS, configuration, toolchains per language.
+    Doctor,
+    /// Discover, inspect and configure compilers (you choose; nothing is installed).
+    #[command(subcommand)]
+    Toolchain(ToolchainCmd),
+    /// Create, adopt and inspect projects (embedide.toml).
+    #[command(subcommand)]
+    Project(ProjectCmd),
+    /// Build a project with its selected toolchains or its own build system.
+    Build {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Build profile from embedide.toml (debug, release, …).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Override a toolchain for this build, e.g. --toolchain c=zig-cc (repeatable).
+        #[arg(long, value_parser = cmd_project::parse_choice)]
+        toolchain: Vec<(String, String)>,
+        /// Projects without embedide.toml: choose among several manifests.
+        #[arg(long)]
+        build_system: Option<BuildSystem>,
+        /// Same as --profile release.
+        #[arg(long)]
+        release: bool,
+        #[arg(long, default_value = "2", value_parser = clap::value_parser!(u16).range(1..))]
+        jobs: u16,
+        /// Allow Cargo network access (other build systems use project policies).
+        #[arg(long)]
+        online: bool,
+        /// Show the plan without executing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove EmbedIDE build output (only directories EmbedIDE created) or run the build system's clean.
+    Clean {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Open your shell in the project with its environment and toolchain directories on PATH.
+    Terminal {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value = "debug")]
+        profile: String,
+    },
+    /// Read and change user or project configuration.
+    #[command(subcommand)]
+    Config(ConfigCmd),
+    /// AI providers, chat and code completion (network only on explicit commands).
+    #[command(subcommand)]
+    Ai(cmd_ai::AiCmd),
+    /// Register a directory with embedide.json (legacy; prefer `project init`).
     Init {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -48,99 +109,241 @@ enum Commands {
         #[arg(long, conflicts_with = "batch")]
         line: bool,
     },
-    /// Build a trusted project through its native build system.
-    Build {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        #[arg(long)]
-        build_system: Option<BuildSystem>,
-        #[arg(long)]
-        release: bool,
-        #[arg(long, default_value = "2", value_parser = clap::value_parser!(u16).range(1..))]
-        jobs: u16,
-        /// Allow Cargo network access (other build systems use project policies).
-        #[arg(long)]
-        online: bool,
-        /// Show the plan without executing it.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Inventory executable paths; does not execute tools or probe hardware.
-    Doctor,
-    /// List executable paths for compilers, build tools and language servers.
+    /// PATH inventory of known tools (does not execute them).
     Toolchains,
-    /// List preserved MCU catalog metadata (hardware unverified).
+    /// List the MCU catalog (metadata only; hardware unverified).
     Targets,
-    /// Read project configuration without changing it.
-    Config {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    /// JSON-lines serial service on stdin/stdout (used by the desktop app).
+    /// JSON-lines serial service on stdin/stdout (used by front ends).
     SerialBridge,
 }
 
-fn execute(command: Commands, interactive: bool) -> Result<(Value, u8)> {
-    let value = match command {
-        Commands::Init { path, build_system } => {
-            serde_json::to_value(core::init(&path, build_system)?)?
+/// CLI error: usage (exit 2) or operation (exit 1).
+pub struct CliError {
+    usage: bool,
+    message: String,
+}
+/// Result of a command.
+pub type CliResult<T> = std::result::Result<T, CliError>;
+/// Operation error.
+pub fn fail(message: String) -> CliError {
+    CliError {
+        usage: false,
+        message,
+    }
+}
+/// Usage error.
+pub fn usage(message: String) -> CliError {
+    CliError {
+        usage: true,
+        message,
+    }
+}
+impl From<Error> for CliError {
+    fn from(e: Error) -> Self {
+        fail(e.0)
+    }
+}
+
+/// Human output goes to stdout only in text mode; JSON mode prints one envelope.
+pub struct Out {
+    /// JSON output mode.
+    pub json: bool,
+}
+impl Out {
+    /// A line of human output.
+    pub fn line(&self, s: &str) {
+        if !self.json {
+            let _ = writeln!(io::stdout(), "{s}");
         }
+    }
+    /// A progress/diagnostic line (always stderr).
+    pub fn err(&self, s: &str) {
+        let _ = writeln!(io::stderr(), "{s}");
+    }
+}
+
+/// (data, exit code, already printed for humans)
+type Executed = (Value, u8, bool);
+
+fn execute(command: Commands, interactive: bool, out: &Out) -> CliResult<Executed> {
+    Ok(match command {
+        Commands::Toolchain(c) => (cmd_toolchain::run(c, out)?, 0, true),
+        Commands::Project(c) => (cmd_project::project(c, out)?, 0, true),
+        Commands::Config(c) => {
+            let shows = matches!(c, ConfigCmd::Show { .. });
+            (cmd_project::config(c, out)?, 0, !shows)
+        }
+        Commands::Clean { path, dry_run } => (cmd_project::clean(&path, dry_run, out)?, 0, true),
+        Commands::Terminal { path, profile } => {
+            let (v, c) = cmd_project::terminal(&path, &profile, out)?;
+            (v, c, true)
+        }
+        Commands::Ai(c) => {
+            let (v, c) = cmd_ai::run(c, out)?;
+            (v, c, true)
+        }
+        Commands::Doctor => {
+            let user = embedide_workspace::UserConfig::load();
+            let tools = cmd_toolchain::registry(user.as_ref().unwrap_or(&Default::default()), true);
+            let per_lang: serde_json::Map<String, Value> = embedide_toolchains::Language::ALL
+                .iter()
+                .map(|l| {
+                    (
+                        l.id().to_string(),
+                        json!(tools
+                            .iter()
+                            .filter(|t| t.supports(*l) && t.problem.is_none())
+                            .map(|t| t.id.clone())
+                            .collect::<Vec<_>>()),
+                    )
+                })
+                .collect();
+            out.line(&format!(
+                "EmbedIDE {} on {}/{}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ));
+            match embedide_workspace::UserConfig::path() {
+                Ok(p) => out.line(&format!(
+                    "config: {}{}",
+                    p.display(),
+                    if p.exists() { "" } else { " (not created yet)" }
+                )),
+                Err(e) => out.line(&format!("config: {}", e.0)),
+            }
+            if let Err(e) = &user {
+                out.line(&format!("config error: {}", e.0));
+            }
+            for (lang, ids) in &per_lang {
+                let ids: Vec<_> = ids
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str())
+                    .collect();
+                out.line(&format!(
+                    "  {lang:<8} {}",
+                    if ids.is_empty() {
+                        "— none (see `embedide toolchain recommend`)".to_string()
+                    } else {
+                        ids.join(", ")
+                    }
+                ));
+            }
+            out.line("Hardware is never probed by doctor.");
+            (
+                json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "version": env!("CARGO_PKG_VERSION"),
+                    "inventory_only": true, "hardware_probed": false, "tools": core::toolchains(),
+                    "languages": per_lang, "config_error": user.err().map(|e| e.0)}),
+                0,
+                true,
+            )
+        }
+        Commands::Init { path, build_system } => (
+            serde_json::to_value(core::init(&path, build_system)?).unwrap_or_default(),
+            0,
+            false,
+        ),
         Commands::Open { path } => {
             if interactive {
-                embedide_terminal::tui::workspace::run(&path).map_err(|e| Error(e.to_string()))?;
-                json!({"workspace": path, "closed": true})
+                embedide_terminal::tui::workspace::run(&path).map_err(|e| fail(e.to_string()))?;
+                (json!({"workspace": path, "closed": true}), 0, false)
             } else {
-                serde_json::to_value(core::inspect(&path)?)?
+                (
+                    serde_json::to_value(core::inspect(&path)?).unwrap_or_default(),
+                    0,
+                    false,
+                )
             }
         }
         Commands::Edit { path, batch, line } => {
             let editor: core::Editor =
-                embedide_terminal::open(&path).map_err(|error| Error(error.to_string()))?;
+                embedide_terminal::open(&path).map_err(|error| fail(error.to_string()))?;
             let report = (if line {
                 embedide_terminal::run_line_stdio(editor, false)
             } else {
                 embedide_terminal::run_stdio(editor, batch)
             })
-            .map_err(|error| Error(error.to_string()))?;
-            json!({"path": path.to_string_lossy(), "closed": report.closed, "modified": report.modified,
-                "bytes": report.bytes, "line": report.position.line, "scalar_column": report.position.scalar_column})
+            .map_err(|error| fail(error.to_string()))?;
+            (
+                json!({"path": path.to_string_lossy(), "closed": report.closed, "modified": report.modified,
+                "bytes": report.bytes, "line": report.position.line, "scalar_column": report.position.scalar_column}),
+                0,
+                false,
+            )
         }
-        Commands::Config { path } => json!({"project": core::inspect(&path)?.metadata}),
-        Commands::SerialBridge => unreachable!("handled before execute"),
-        Commands::Targets => json!({"hardware_verified": false, "targets": core::targets()?}),
-        Commands::Toolchains => json!({"tools": core::toolchains()}),
-        Commands::Doctor => json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-            "inventory_only": true, "hardware_probed": false, "tools": core::toolchains()}),
+        Commands::Targets => (
+            json!({"hardware_verified": false, "targets": core::targets()?}),
+            0,
+            false,
+        ),
+        Commands::Toolchains => (json!({"tools": core::toolchains()}), 0, false),
         Commands::Build {
             path,
+            profile,
+            toolchain,
             build_system,
             release,
             jobs,
             online,
             dry_run,
         } => {
-            let project = core::inspect(&path)?;
-            let plan = core::plan_build(
-                &project,
-                &BuildOptions {
-                    system: build_system,
-                    release,
-                    jobs: jobs.into(),
-                    online,
-                },
-            )?;
-            if dry_run {
-                json!({"plan": plan, "executed": false})
+            let root = path
+                .canonicalize()
+                .map_err(|e| fail(format!("Cannot open {}: {e}", path.display())))?;
+            if let Some(m) = embedide_workspace::Manifest::load(&root).map_err(|e| fail(e.0))? {
+                if build_system.is_some() {
+                    return Err(usage("--build-system applies to projects without embedide.toml; set build.system instead".into()));
+                }
+                let profile = profile.unwrap_or_else(|| {
+                    if release {
+                        "release".into()
+                    } else {
+                        "debug".into()
+                    }
+                });
+                let (v, c) = cmd_project::build_manifest(
+                    &root,
+                    &m,
+                    BuildArgs {
+                        profile,
+                        toolchain,
+                        jobs,
+                        online,
+                        dry_run,
+                    },
+                    out,
+                )?;
+                (v, c, true)
             } else {
-                let code = core::run_build(&plan)? as u8;
-                return Ok((
-                    json!({"plan": plan, "executed": true, "exit_code": code}),
-                    code,
-                ));
+                if profile.is_some() || !toolchain.is_empty() {
+                    return Err(fail(format!("--profile/--toolchain need an embedide.toml; run `embedide project init {}`", path.display())));
+                }
+                let project = core::inspect(&root)?;
+                let plan = core::plan_build(
+                    &project,
+                    &BuildOptions {
+                        system: build_system,
+                        release,
+                        jobs: jobs.into(),
+                        online,
+                    },
+                )?;
+                if dry_run {
+                    (json!({"plan": plan, "executed": false}), 0, false)
+                } else {
+                    let code = core::run_build(&plan)? as u8;
+                    (
+                        json!({"plan": plan, "executed": true, "exit_code": code}),
+                        code,
+                        false,
+                    )
+                }
             }
         }
-    };
-    Ok((value, 0))
+        Commands::SerialBridge => unreachable!("handled before execute"),
+    })
 }
 
 fn output(value: &Value, json_output: bool) -> io::Result<()> {
@@ -163,8 +366,13 @@ fn main() -> ExitCode {
         "config",
         "targets",
         "toolchains",
+        "toolchain",
         "doctor",
         "build",
+        "clean",
+        "terminal",
+        "project",
+        "ai",
         "serial-bridge",
         "help",
     ];
@@ -195,8 +403,7 @@ fn main() -> ExitCode {
     };
     if cli.json && matches!(&cli.command, Commands::Edit { batch: false, .. }) {
         let _ = output(
-            &json!({"ok": false, "error": {"kind": "usage",
-            "message": "edit --json requires --batch to keep stdout structured"}}),
+            &json!({"ok": false, "error": {"kind": "usage", "message": "edit --json requires --batch to keep stdout structured"}}),
             true,
         );
         return ExitCode::from(2);
@@ -211,22 +418,26 @@ fn main() -> ExitCode {
             }
         };
     }
-    let (value, code) = match execute(
-        cli.command,
-        !cli.json && io::stdin().is_terminal() && io::stdout().is_terminal(),
-    ) {
-        Ok((value, code)) => (json!({"ok": code == 0, "data": value}), code),
-        Err(Error(message)) => {
+    let out = Out { json: cli.json };
+    let interactive = !cli.json && io::stdin().is_terminal() && io::stdout().is_terminal();
+    let (value, code, printed) = match execute(cli.command, interactive, &out) {
+        Ok((value, code, printed)) => (json!({"ok": code == 0, "data": value}), code, printed),
+        Err(CliError { usage, message }) => {
+            let kind = if usage { "usage" } else { "operation" };
             if !cli.json {
                 eprintln!("embedide: {message}");
-                return ExitCode::from(1);
+                return ExitCode::from(if usage { 2 } else { 1 });
             }
             (
-                json!({"ok": false, "error": {"kind": "operation", "message": message}}),
-                1,
+                json!({"ok": false, "error": {"kind": kind, "message": message}}),
+                if usage { 2 } else { 1 },
+                false,
             )
         }
     };
+    if printed && !cli.json {
+        return ExitCode::from(code);
+    }
     match output(&value, cli.json) {
         Ok(()) => ExitCode::from(code),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,

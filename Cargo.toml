@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/embedide-project", "crates/embedide-core", "crates/embedide-cli", "crates/embedide-editor", "crates/embedide-terminal"]
+members = ["crates/embedide-project", "crates/embedide-core", "crates/embedide-cli", "crates/embedide-editor", "crates/embedide-terminal", "crates/embedide-toolchains", "crates/embedide-workspace", "crates/embedide-build", "crates/embedide-ai"]
 resolver = "2"
 
 [workspace.package]
@@ -16,6 +16,12 @@ embedide-project = { path = "crates/embedide-project" }
 embedide-core = { path = "crates/embedide-core" }
 embedide-editor = { path = "crates/embedide-editor" }
 embedide-terminal = { path = "crates/embedide-terminal" }
+embedide-toolchains = { path = "crates/embedide-toolchains" }
+embedide-workspace = { path = "crates/embedide-workspace" }
+embedide-build = { path = "crates/embedide-build" }
+embedide-ai = { path = "crates/embedide-ai" }
+toml = "0.8"
+toml_edit = "0.22"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
