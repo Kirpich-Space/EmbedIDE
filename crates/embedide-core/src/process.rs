@@ -32,7 +32,20 @@ impl OwnedChild {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        command.spawn().map(|child| Self(child, false))
+        // ETXTBSY: an executable that was just written can still be open for
+        // writing in a child forked concurrently by another thread (build
+        // scripts and tests generate tools and run them at once). It clears as
+        // soon as that child execs, so retry briefly instead of failing.
+        let mut attempt = 0;
+        loop {
+            match command.spawn() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 => {
+                    attempt += 1;
+                    thread::sleep(Duration::from_millis(10 * attempt));
+                }
+                other => return other.map(|child| Self(child, false)),
+            }
+        }
     }
     pub fn terminate(&mut self) {
         if self.1 {
