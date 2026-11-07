@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { getBoardOrDefault, DEFAULT_BOARD_ID } = require('./boards');
 const { readProjectMeta } = require('./project');
-const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot, getBundledBinDirs, invalidateCache } = require('./bundledToolchain');
+const { resolveTool, getToolchainEnv, isBundled, getBundledStatus, prependBundledToolchainToPath, findOpenocdScripts, getBundledRoot, getBundledBinDirs, invalidateCache, envPathKey, withEnvPath } = require('./bundledToolchain');
 const execFileAsync = promisify(execFile);
 
 let currentBuildProc = null;
@@ -28,14 +28,14 @@ function spawnTool(cmd, args, options = {}) {
 /** Env without bundled ARM toolchain — for host C/C++/ASM/Rust scripts. */
 function hostToolEnv(extra = {}) {
   const bins = new Set(getBundledBinDirs().map(d => path.resolve(d)));
-  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
   const sep = process.platform === 'win32' ? ';' : ':';
-  const raw = process.env[pathKey] || process.env.PATH || '';
-  const filtered = raw
+  const env = { ...process.env, ...extra };
+  const pathKey = envPathKey(env);
+  const filtered = String(env[pathKey] || '')
     .split(sep)
     .filter(p => p && !bins.has(path.resolve(p)))
     .join(sep);
-  return { ...process.env, ...extra, [pathKey]: filtered };
+  return withEnvPath(env, filtered);
 }
 
 function spawnHost(cmd, args, options = {}) {
@@ -440,30 +440,44 @@ function runProcess(cmd, args, cwd, onOutput, { host = false } = {}) {
 let currentRunProc = null;
 let currentOpenocdProc = null;
 
-function makeToolchainOverrides() {
-  const overrides = [];
-  const gcc = resolveTool('arm-none-eabi-gcc');
-  const gxx = resolveTool('arm-none-eabi-g++');
-  const objcopy = resolveTool('arm-none-eabi-objcopy');
-  const size = resolveTool('arm-none-eabi-size');
-  const zig = resolveTool('zig');
-  const openocd = resolveTool('openocd');
+/**
+ * A path can be handed to Make as a variable only if the recipe shell will
+ * not split or reinterpret it: templates expand $(CC) / $(PREFIX)gcc
+ * unquoted. Spaces are common (C:\Program Files, user names, "My Projects").
+ */
+function isMakeSafePath(p) {
+  return typeof p === 'string' && p.length > 0 && !/[\s"'`$#%;&|<>()*?\\[\]{}!]/.test(p.replace(/\\/g, '/'));
+}
 
-  // PREFIX=…/arm-none-eabi- → $(PREFIX)gcc resolves to absolute gcc even inside Make recipes
+/**
+ * Make variable overrides that pin the bundled tools by absolute path.
+ * Unsafe paths are omitted: the tools are still found, because the build
+ * runs with the bundled bin directory first on PATH (getToolchainEnv).
+ * Returns { overrides, skipped } so the caller can explain the fallback.
+ */
+function makeToolchainOverrides(resolve = resolveTool) {
+  const overrides = [];
+  const skipped = [];
+  const add = (name, value) => {
+    if (!value || !(path.isAbsolute(value) || path.win32.isAbsolute(value))) return;
+    // A recipe shell (sh.exe under Windows make) treats "\" as an escape;
+    // forward slashes work for make, sh and CreateProcess alike.
+    const v = /^[a-zA-Z]:\\/.test(value) ? value.replace(/\\/g, '/') : value;
+    if (isMakeSafePath(v)) overrides.push(`${name}=${v}`);
+    else skipped.push(name);
+  };
+  const gcc = resolve('arm-none-eabi-gcc');
+  // PREFIX=…/arm-none-eabi- → $(PREFIX)gcc resolves to the absolute gcc inside recipes
   if (gcc && path.isAbsolute(gcc) && /arm-none-eabi-gcc(\.exe)?$/i.test(gcc)) {
-    const prefix = gcc.replace(/gcc(\.exe)?$/i, '');
-    overrides.push(`PREFIX=${prefix}`);
+    add('PREFIX', gcc.replace(/gcc(\.exe)?$/i, ''));
   }
-  if (gcc && path.isAbsolute(gcc)) overrides.push(`CC=${gcc}`);
-  if (gxx && path.isAbsolute(gxx)) overrides.push(`CXX=${gxx}`);
-  if (objcopy && path.isAbsolute(objcopy)) overrides.push(`OBJCOPY=${objcopy}`);
-  if (size && path.isAbsolute(size)) overrides.push(`SIZE=${size}`);
-  if (zig && path.isAbsolute(zig)) overrides.push(`ZIG=${zig}`);
-  if (openocd && path.isAbsolute(openocd)) {
-    overrides.push(`OPENOCD=${openocd}`);
-    // Many Makefiles hardcode `openocd` — also put a Make variable some templates use
-  }
-  return overrides;
+  add('CC', gcc);
+  add('CXX', resolve('arm-none-eabi-g++'));
+  add('OBJCOPY', resolve('arm-none-eabi-objcopy'));
+  add('SIZE', resolve('arm-none-eabi-size'));
+  add('ZIG', resolve('zig'));
+  add('OPENOCD', resolve('openocd'));
+  return { overrides, skipped };
 }
 
 function missingBundledHint(tool) {
@@ -541,11 +555,18 @@ function buildProject(projectDir, projectType, onOutput) {
         return;
       }
       cmd = 'make';
-      args = ['-j4', ...makeToolchainOverrides()];
+      const { overrides, skipped } = makeToolchainOverrides();
+      args = ['-j4', ...overrides];
       onOutput?.({
         type: 'stdout',
         text: `Using bundled toolchain${tc.bundled?.root ? `: ${tc.bundled.root}` : ''}\n`,
       });
+      if (skipped.length) {
+        onOutput?.({
+          type: 'stdout',
+          text: `Toolchain path contains spaces or shell characters; ${skipped.join(', ')} resolved through PATH instead.\n`,
+        });
+      }
     } else {
       reject(new Error(`Unknown project type: ${projectType}`));
       return;
@@ -953,4 +974,6 @@ module.exports = {
   cancelRun,
   isScriptProject,
   getBundledStatus,
+  makeToolchainOverrides,
+  isMakeSafePath,
 };

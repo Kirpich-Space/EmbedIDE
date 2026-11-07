@@ -53,9 +53,20 @@ function rustMemory(board) {
 `
 }
 
+/**
+ * `.cpu` directive for hand-written assembly. binutils 2.43 (xPack GCC 14.2)
+ * rejects `.cpu cortex-m85` although gcc accepts -mcpu=cortex-m85, so for
+ * such cores rely on the -mcpu flag the Makefile passes to the gcc driver.
+ */
+const ASM_CPU_UNSUPPORTED = new Set(['cortex-m85'])
+function asmCpuLine(board) {
+  if (ASM_CPU_UNSUPPORTED.has(board.cpu)) return `@ CPU selected by -mcpu=${board.cpu} on the command line`
+  return `.cpu ${board.cpu}`
+}
+
 function startupAsm(board) {
   return `.syntax unified
-.cpu ${board.cpu}
+${asmCpuLine(board)}
 .thumb
 
 .global g_pfnVectors
@@ -363,7 +374,7 @@ flash: $(BUILD_DIR)/$(TARGET).elf
 .PHONY: all clean flash
 `,
         'src/main.S': () => `.syntax unified
-.cpu ${board.cpu}
+${asmCpuLine(board)}
 .fpu softvfp
 .thumb
 
@@ -645,33 +656,42 @@ flash: $(BUILD_DIR)/$(TARGET).elf
 
 /** Wrap Zig application body with Cortex-M vector table at FLASH origin. */
 function zigMainSource(_board, body) {
-  return `//! Cortex-M vector table must sit at FLASH origin (linker .isr_vector).
+  // Zig accepts `//!` container doc comments only at the top of a file; the
+  // template bodies start with them, so hoist them above the vector table.
+  const lines = body.trim().split('\n')
+  const docs = []
+  while (lines.length && lines[0].startsWith('//!')) docs.push(lines.shift())
+  const rest = lines.join('\n').trim()
+  return `${docs.length ? docs.join('\n') + '\n' : ''}//! Cortex-M vector table must sit at FLASH origin (linker .isr_vector).
 extern const _estack: anyopaque;
 
-export const vector_table: [16]usize align(4) linksection(".isr_vector") = .{
-    @intFromPtr(&_estack),
-    @intFromPtr(&_start),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
-    @intFromPtr(&Default_Handler),
+// Pointers, not @intFromPtr: symbol addresses are resolved by the linker,
+// so they cannot be converted to integers at comptime. The linker sets the
+// Thumb bit on function entries.
+export const vector_table: [16]?*const anyopaque align(4) linksection(".isr_vector") = .{
+    &_estack,
+    @ptrCast(&_start),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
+    @ptrCast(&Default_Handler),
 };
 
 export fn Default_Handler() callconv(.C) noreturn {
     while (true) {}
 }
 
-${body.trim()}
+${rest}
 `
 }
 
@@ -735,10 +755,15 @@ driver_status_t driver_init(const driver_config_t *cfg) {
     return DRIVER_OK;
 }
 driver_status_t driver_write(const uint8_t *data, uint16_t len) {
-    if (!g_ready || !data) return DRIVER_ERR_PARAM; (void)len; return DRIVER_OK;
+    if (!g_ready || !data) return DRIVER_ERR_PARAM;
+    (void)len;
+    return DRIVER_OK;
 }
 driver_status_t driver_read(uint8_t *data, uint16_t len, uint32_t timeout_ms) {
-    if (!g_ready || !data) return DRIVER_ERR_PARAM; (void)len; (void)timeout_ms; return DRIVER_OK;
+    if (!g_ready || !data) return DRIVER_ERR_PARAM;
+    (void)len;
+    (void)timeout_ms;
+    return DRIVER_OK;
 }
 void driver_irq_handler(void) {}
 `,
@@ -782,10 +807,15 @@ DriverStatus Driver::init(const DriverConfig &cfg) {
     cfg_ = cfg; ready_ = true; return DriverStatus::Ok;
 }
 DriverStatus Driver::write(const std::uint8_t *data, std::uint16_t len) {
-    if (!ready_ || !data) return DriverStatus::Param; (void)len; return DriverStatus::Ok;
+    if (!ready_ || !data) return DriverStatus::Param;
+    (void)len;
+    return DriverStatus::Ok;
 }
 DriverStatus Driver::read(std::uint8_t *data, std::uint16_t len, std::uint32_t timeout_ms) {
-    if (!ready_ || !data) return DriverStatus::Param; (void)len; (void)timeout_ms; return DriverStatus::Ok;
+    if (!ready_ || !data) return DriverStatus::Param;
+    (void)len;
+    (void)timeout_ms;
+    return DriverStatus::Ok;
 }
 void Driver::onIrq() {}
 `,
@@ -893,7 +923,7 @@ flash: $(BUILD_DIR)/$(TARGET).elf
 .PHONY: all clean flash
 `,
         'src/main.S': () => `.syntax unified
-.cpu ${board.cpu}
+${asmCpuLine(board)}
 .thumb
 /* Bare-metal driver stub for ${board.mcu} */
 .equ PERIPH_BASE, 0x40011000
@@ -949,7 +979,19 @@ export fn _start() callconv(.C) noreturn {
   }
 }
 
+/**
+ * Static task table size for the C kernel template. 8 tasks × 1 KiB stacks
+ * fill all RAM of 8–16 KiB parts (STM32F030/F070 overflowed at link time),
+ * so small parts get 4 tasks × 512 B and leave room for .data/.bss.
+ */
+function kernelTaskLayout(board) {
+  const ramKb = Number(board.ramKb) || 0
+  if (ramKb <= 16) return { maxTasks: 4, stackWords: 128 }
+  return { maxTasks: 8, stackWords: 256 }
+}
+
 function buildOsTemplates(board, cpu, flashCfg) {
+  const kernelLayout = kernelTaskLayout(board)
   const rustOsMain = `#![no_std]
 #![no_main]
 
@@ -1013,8 +1055,8 @@ fn main() -> ! {
 #define KERNEL_H
 #include <stdint.h>
 #include <stddef.h>
-#define KERNEL_MAX_TASKS 8
-#define KERNEL_STACK_WORDS 256
+#define KERNEL_MAX_TASKS ${kernelLayout.maxTasks}
+#define KERNEL_STACK_WORDS ${kernelLayout.stackWords}
 typedef void (*task_fn_t)(void *);
 typedef enum { TASK_UNUSED = 0, TASK_READY, TASK_RUNNING, TASK_BLOCKED } task_state_t;
 typedef struct {
@@ -1190,7 +1232,7 @@ flash: $(BUILD_DIR)/$(TARGET).elf
 .PHONY: all clean flash
 `,
         'src/main.S': () => `.syntax unified
-.cpu ${board.cpu}
+${asmCpuLine(board)}
 .thumb
 /* Tiny cooperative scheduler stub for ${board.mcu} */
 .global _start

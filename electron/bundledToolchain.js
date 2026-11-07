@@ -206,19 +206,48 @@ function findOpenocdScripts(root) {
   return null
 }
 
+/**
+ * Name of the PATH variable in an env object. Windows env names are
+ * case-insensitive but a plain object copy is not: writing "Path" next to an
+ * existing "PATH" leaves two entries and the child sees either one.
+ */
+function envPathKey(env, platform = process.platform) {
+  if (platform !== 'win32') return 'PATH'
+  return Object.keys(env).find(k => k.toUpperCase() === 'PATH') || 'Path'
+}
+
+/** Copy of env with exactly one PATH entry set to value. */
+function withEnvPath(env, value, platform = process.platform) {
+  const out = { ...env }
+  const key = envPathKey(out, platform)
+  if (platform === 'win32') {
+    for (const k of Object.keys(out)) {
+      if (k.toUpperCase() === 'PATH' && k !== key) delete out[k]
+    }
+  }
+  out[key] = value
+  return out
+}
+
 function getToolchainEnv(extra = {}) {
   const bins = getBundledBinDirs()
   const sep = process.platform === 'win32' ? ';' : ':'
-  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
-  const current = process.env[pathKey] || process.env.PATH || ''
-  const prepend = bins.length ? bins.join(sep) + sep : ''
-  const root = getBundledRoot()
-  const env = {
-    ...process.env,
-    ...extra,
-    [pathKey]: prepend + current,
-    EMBEDIDE_TOOLCHAIN: root || '',
+  const base = { ...process.env, ...extra }
+  // Drop bundled dirs already present so repeated calls never grow PATH
+  const norm = (p) => {
+    const r = path.resolve(p)
+    return process.platform === 'win32' ? r.toLowerCase() : r
   }
+  const binSet = new Set(bins.map(norm))
+  const current = String(base[envPathKey(base)] || '')
+    .split(sep)
+    .filter(p => p && !binSet.has(norm(p)))
+    .join(sep)
+  const prepend = bins.length ? bins.join(sep) + (current ? sep : '') : ''
+  const root = getBundledRoot()
+  const env = withEnvPath(base, prepend + current)
+  const pathKey = envPathKey(env)
+  env.EMBEDIDE_TOOLCHAIN = root || ''
   const scripts = findOpenocdScripts(root)
   if (scripts) {
     env.OPENOCD_SCRIPTS = scripts
@@ -241,8 +270,8 @@ function getToolchainEnv(extra = {}) {
 
 function prependBundledToolchainToPath() {
   const env = getToolchainEnv()
-  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
-  process.env[pathKey] = env[pathKey]
+  // process.env itself is case-insensitive on Windows; the copy is not
+  process.env[process.platform === 'win32' ? 'Path' : 'PATH'] = env[envPathKey(env)]
   if (env.RUSTUP_HOME) process.env.RUSTUP_HOME = env.RUSTUP_HOME
   if (env.CARGO_HOME) process.env.CARGO_HOME = env.CARGO_HOME
   if (env.EMBEDIDE_TOOLCHAIN) process.env.EMBEDIDE_TOOLCHAIN = env.EMBEDIDE_TOOLCHAIN
@@ -293,5 +322,7 @@ module.exports = {
   getBundledStatus,
   invalidateCache,
   findOpenocdScripts,
+  envPathKey,
+  withEnvPath,
   TOOL_NAMES,
 }
