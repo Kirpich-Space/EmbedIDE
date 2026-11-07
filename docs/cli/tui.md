@@ -1,0 +1,167 @@
+# `embed` — the terminal IDE
+
+`embed` (no arguments) opens the IDE on the current directory; `embed <directory>` opens another
+project. It needs an interactive terminal (`TERM` other than `dumb`); no GUI, Electron or Node.js.
+
+```
+EmbedIDE 2.0 | Ready | project | target | profile              ← build status, project, target, profile
+>main.c  uart.c*                                                ← open documents (* = unsaved)
+EXPLORER │ editor (Vim modes)                    │ AI · provider/model · state
+> src    │  1 int main(void) {                   │ you: …
+  build  │  2     return 0;                      │ ai: …
+         │                                        │ > input line
+TERMINAL | /bin/zsh | …        (or BUILD OUTPUT / PROBLEMS / TASKS / SERIAL / DEBUG / TOOLS / SETTINGS / HELP)
+$ make flash-dry-run
+NORMAL | src/main.c | c | arm-none-eabi-gcc | Ln 2, Col 5 | hint | message
+```
+
+The status bar shows the editor mode (or the focused panel), file, language, the compiler selected
+for that language by the project configuration, and the cursor position. Errors are shown first.
+
+## Layout adapts to the terminal
+
+| Width / height | Behaviour |
+|---|---|
+| ≥ 100 columns | explorer, editor and AI panel side by side |
+| 80–99 columns | AI panel opens over the editor while focused |
+| < 80 columns | explorer opens over the editor while focused |
+| < 16 rows or < 60 columns | the focused bottom panel takes the whole work area |
+| < 6 rows or < 12 columns | editor only |
+
+Hide or show panels: F2 (explorer), `:assistant` (AI), `:toggle_panel` (bottom panel).
+
+## Keys
+
+Global (work in every panel except where noted):
+
+| Key | Action |
+|---|---|
+| **Alt+1** | Explorer — press again to return to the editor |
+| **Alt+2** | AI assistant — press again to return to the editor |
+| **Alt+3** | Terminal — press again to return to the editor |
+| Ctrl+K | Command palette (every command below, plus targets, profiles, tasks and files) |
+| Ctrl+P | Find a file among loaded explorer entries |
+| Ctrl+S | Save the active document |
+| Ctrl+W / Ctrl+Q | Close document / quit (unsaved changes ask for confirmation) |
+| F1 | Help panel |
+| F2 | Show / hide explorer |
+| F3 | Problems (compiler diagnostics and search results) |
+| F4 | Cycle bottom panels |
+| F5 / F7 / F8 | Build / `cargo check` (legacy Cargo projects) / cancel the running task or AI request |
+| F6 | Cycle focus: editor → explorer → bottom panel → AI → editor |
+| F9 / F10 | Select target / next document |
+
+In the **terminal** every key — Ctrl+C, Ctrl+D, Ctrl+K, Tab, Esc, F-keys, arrows — goes to your
+shell; only Alt+1/2/3 are taken by the IDE. Paste is forwarded as bracketed paste when the program
+asks for it. When the shell exits, Enter starts a new one; `:terminal_restart` restarts it.
+
+**Editor** (Vim/Kenit modal editing, shared engine `embedide-editor`):
+
+| Mode | Keys |
+|---|---|
+| Normal | `h j k l`, `w b e`, `0 $`, `gg G`, counts, `x`, `dd`, `yy`, `p`, `u`, Ctrl+R, `/ ? n N`, `v` / `V` |
+| Insert | `i a o O` enter, Esc leaves |
+| Command | `:w`, `:q`, `:q!`, `:wq`, and IDE commands (below) |
+| Leader (Space) | `e` explorer · `b` build · `d` debug · `t` terminal · `s` serial · `f` find file |
+
+IDE commands in Command mode: `:build`, `:clean`, `:cancel`, `:e <file>` (also `:edit`, `:open`),
+`:help`, `:settings`, `:compilers`, `:complete`, `:explain`, `:ai <question>`, `:assistant`,
+`:edit_project_config`, `:edit_user_config`, `:reload`, `:profile`, `:target`, `:theme`, and every
+other palette command id. Unknown commands report an error and change nothing.
+
+**Explorer:** `j`/`k` or arrows, Enter/Right open or expand, Left collapse, `n` new file, Delete
+delete (empty directories only, confirmed), `r` refresh, `/` find, Esc editor.
+
+**Bottom panels:** `j`/`k`, PgUp/PgDn, End follows output, `/` filters, Tab next panel, Enter in
+Problems jumps to the file, line and column, Esc editor.
+
+Global bindings can be changed per project in `embedide.json` → `native.keys`
+(`{"build": "f12", "focus_terminal": "alt+9"}`; F1–F12, `ctrl+a`–`ctrl+z`, `alt+0`–`alt+9`). The table
+lives in one place (`Workspace::shortcut`); Vim keys stay in the editor's `Keymap`.
+
+## Build and diagnostics
+
+F5 builds the project with the same engine as `embed build`:
+
+- with `embedide.toml`: the compilers selected in `[toolchain]` / `[profiles.<name>.toolchain]`
+  (or your user defaults), incremental native builds, or the project's own Make/CMake/Cargo/Zig;
+- without it: the legacy adapters (Make, CMake, Cargo, Zig detected from the project files,
+  `embedide.json` profiles and tools).
+
+Output streams into BUILD OUTPUT while you keep editing (builds use files on disk, so modified
+buffers must be saved first). Diagnostics appear in PROBLEMS; Enter opens the file at the
+reported line and column. F8 cancels the whole process group. Debugging, flashing and the serial
+monitor run only from explicit commands (`debug`, `flash` with confirmation, `serial`).
+
+## Choosing compilers
+
+There is no settings screen in the terminal edition; compilers are configured in files, and the
+future Qt application will edit the same files through the same Rust services.
+
+```toml
+# <project>/embedide.toml — per project and per profile
+[toolchain]
+c = "arm-none-eabi-gcc"
+asm = "arm-none-eabi-gcc"
+
+[profiles.debug]
+flags = ["-O0", "-g"]
+
+[profiles.host-test]
+flags = ["-O1", "-g", "-fsanitize=address"]
+toolchain = { c = "clang" }
+```
+
+```toml
+# ~/.config/embedide/config.toml (EMBEDIDE_CONFIG_DIR overrides) — per user
+[toolchains]
+search_dirs = ["/opt/xpack-arm-none-eabi-gcc/bin"]   # searched after PATH
+defaults = { c = "clang", cpp = "clang++" }           # for projects that do not choose
+
+[[toolchains.custom]]
+id = "my-gcc"
+kind = "gcc"
+path = "/opt/vendor sdk/bin/gcc"
+```
+
+`:edit_project_config` and `:edit_user_config` open these files in the editor; `:reload` applies
+them; `:compilers` (and the Settings panel) shows which compiler each language uses and why.
+EmbedIDE detects and reuses installed toolchains; it never installs or downloads one.
+
+## AI assistant (Alt+2)
+
+Optional. Without a provider, or with `EMBEDIDE_AI_OFFLINE=1`, the IDE works fully offline and the
+panel only explains what is missing. Providers, models and keys are configured exactly as for
+`embed ai` ([AI subsystem](ai.md)); four providers: Anthropic (Claude), OpenAI (GPT/Codex),
+Moonshot (Kimi), xAI (Grok), via API key or, for Anthropic/OpenAI, the official subscription CLI.
+
+Nothing is sent until you press Enter. Before every request the panel shows how many bytes go to
+which provider and which files are attached.
+
+| Input | Action |
+|---|---|
+| text + Enter | Chat (history kept until `/clear`), streamed |
+| `/file` | Attach the current buffer (project `[ai] exclude` and secret patterns apply) |
+| `/sel` | Attach the Visual selection |
+| `/explain [question]` | Explain the selection or the current file |
+| `/edit <instruction>` | Propose a new version of the current file; the unified diff is shown |
+| `/apply` / `/reject` | Put the proposal into the editor buffer (undo with `u`, save with `:w`) / discard it |
+| `/complete` | Completion at the editor cursor |
+| `/provider <id>`, `/model <id>`, `/auth api-key\|subscription` | Switch for this session |
+| `/cancel`, `/clear`, `/status`, `/help` | |
+| Up/Down, PgUp/PgDn | Scroll the transcript |
+| Esc | Back to the editor |
+
+**Inline completion:** `:complete` (or `/complete`) requests one suggestion at the cursor. It is
+shown in inverse video in the editor without changing the buffer: **Tab** inserts it, **Esc**
+rejects it, moving the cursor or editing discards it. Automatic suggestions while typing are off;
+`ai.inline = true` in `config.toml` enables them (debounced by `ai.completion_debounce_ms`; each
+suggestion is a provider request).
+
+## For the Qt frontend
+
+The terminal IDE is a thin adapter. Editing (`embedide-editor`), builds (`embedide-build`:
+`prepare` → `Prepared::begin` / steps / `commit`), toolchains (`embedide-toolchains`,
+`embedide_build::registry`), configuration (`embedide-workspace`), AI (`embedide-ai`: backends,
+`complete::Engine`, `edit::propose`) and processes, serial and GDB/MI (`embedide-core`) are
+frontend-independent crates.

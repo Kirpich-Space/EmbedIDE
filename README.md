@@ -5,36 +5,59 @@
 Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, Rust, Zig, Assembly, Fortran.
 
 > **Direction (2026-11):** EmbedIDE is now **Rust-first**. The core, build engine, toolchain
-> management and AI layer are Rust crates, used today by the `embedide` command-line IDE and
-> later by a native **Qt 6** interface. The Electron desktop app described further below is
-> **deprecated**: it is kept for reference and is no longer extended.
+> management and AI layer are Rust crates, used today by the **`embed`** terminal IDE and later by a
+> native **Qt 6** application (the name `embedide` is reserved for it). The Electron desktop app
+> described further below is **deprecated**: it is kept for reference and is no longer extended.
 
-## Command-line edition (Rust)
+## `embed` — the terminal IDE (Rust)
+
+`embed` opens a full-screen, keyboard-driven IDE in your terminal:
+
+```
+┌ EmbedIDE 2.0 | build status | project | target | profile ────────────────────────────────┐
+│ EXPLORER (Alt+1) │ editor tabs, Vim modes (Normal/Insert/Visual/Command) │ AI (Alt+2)    │
+│                  │                                                        │ chat, context │
+│                  │                                                        │ edits, review │
+├ TERMINAL (Alt+3) — your shell in a real PTY │ BUILD OUTPUT │ PROBLEMS │ … (F4) ──────────┤
+└ NORMAL | src/main.c | c | gcc | Ln 12, Col 5 | message ─────────────────────────────────┘
+```
+
+```sh
+cargo build --release --locked -p embedide-cli      # → target/release/embed
+install -m 755 target/release/embed ~/.local/bin/   # or: cargo install --path crates/embedide-cli
+cd my-project && embed                              # or: embed path/to/project
+```
+
+Panels: **Alt+1** explorer, **Alt+2** AI assistant, **Alt+3** terminal (press again to return to the
+editor). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
+command palette, `:help` lists every key. See [the TUI guide](docs/cli/tui.md).
 
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds
-with exactly what you select, per project, per profile or per command. It never installs toolchains,
-never flashes hardware and never starts a debugger by itself.
+with exactly what you select in `embedide.toml` (per project and profile) or in your user
+`config.toml`. It never installs or downloads toolchains, never flashes hardware and never starts a
+debugger by itself. AI is optional: without a provider the IDE works fully offline.
+
+The same services are scriptable through subcommands:
 
 ```sh
-cargo build --release --locked -p embedide-cli      # → target/release/embedide
+embed doctor                                     # OS, config, toolchains per language
+embed toolchain list                             # versions, paths, host/cross
+embed project init hello --language c --toolchain c=clang
+embed build hello                                # native build with clang
+embed build hello --toolchain c=zig-cc           # same project, zig cc
+embed build hello --profile release
+embed clean hello
+embed terminal hello                             # your shell, project env + toolchain dirs on PATH
 
-embedide doctor                                     # OS, config, toolchains per language
-embedide toolchain list                             # versions, paths, host/cross
-embedide project init hello --language c --toolchain c=clang
-embedide build hello                                # native build with clang
-embedide build hello --toolchain c=zig-cc           # same project, zig cc
-embedide build hello --profile release
-embedide clean hello
-embedide terminal hello                             # your shell, project env + toolchain dirs on PATH
+embed project init fw --template c-cortex-m --board stm32f407vg
+embed build fw                                   # arm-none-eabi-gcc → fw/build/debug/fw.elf
 
-embedide project init fw --template c-cortex-m --board stm32f407vg
-embedide build fw                                   # arm-none-eabi-gcc → fw/build/debug/fw.elf
-
-embedide ai providers                               # Anthropic, OpenAI, Moonshot (Kimi), xAI (Grok)
-embedide ai chat "Why does this hard-fault?" --file src/main.c --provider anthropic --model <id> --dry-run
+embed ai providers                               # Anthropic, OpenAI, Moonshot (Kimi), xAI (Grok)
+embed ai chat "Why does this hard-fault?" --file src/main.c --provider anthropic --model <id> --dry-run
 ```
 
+- [TUI guide: panels, keys, configuration](docs/cli/tui.md)
 - [Command reference](docs/cli/commands.md)
 - [`embedide.toml` reference](docs/cli/embedide-toml.md)
 - [AI subsystem](docs/cli/ai.md)

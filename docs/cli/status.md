@@ -2,7 +2,8 @@
 
 Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test --workspace`,
 `crates/embedide-cli/tests/workflows.rs` (real compilers), `crates/embedide-cli/tests/ai.rs` and
-`crates/embedide-ai/tests/mock_providers.rs` (mock servers), `scripts/check-*.py` (PTY/serial).
+`crates/embedide-ai/tests/mock_providers.rs` (mock servers), `scripts/check-*.py` (PTY/serial),
+`scripts/check-embed-pty.py` (the `embed` IDE driven through a real pseudo-terminal).
 
 ## Verified with real tools
 
@@ -18,6 +19,9 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | `clean` deletes only marked output; refuses unmarked directories | — |
 | Runs without Electron, Node.js or a graphical session (`env -i`, no DISPLAY) | release binary, links only libc/libgcc_s |
 | Legacy commands and PTY suites (terminal editor, TUI, workspace, native CLI, serial bridge on a pseudo-terminal) | — |
+| `embed` IDE, keyboard only through a PTY: no-argument launch, Vim editing and `:w` of real files, `:e`, `:help`, unknown `:` commands, Alt+1/2/3 focus switching, explorer navigation, narrow (80×24) and wide (120×40) layouts, status bar (mode, file, language, compiler, position) | `/bin/sh` as the user shell, no `DISPLAY`/`WAYLAND_DISPLAY`, a trap `node` first on `PATH` (never executed) |
+| Integrated terminal: real interactive shell in a PTY, commands create files, Ctrl+C / Esc / Ctrl+D reach the program | `/bin/sh` (bash 5.3), `cat -v` |
+| F5 build of an `embedide.toml` project with the configured compiler, incremental "up to date", diagnostics in PROBLEMS, Enter jumps to the reported line/column, F8 cancels a running Make build | gcc 16.2.1, make |
 
 ## Verified only with mocks / fakes
 
@@ -27,6 +31,7 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | `ai chat`, `ai complete`, `ai edit` (diff, `--apply`), `ai login/logout`, offline guard, dry run | CLI against the mock server |
 | Subscription mode (Claude Code print mode) | fake `claude` script; Codex path not exercised |
 | Completion engine debounce/supersede/cancel | in-process fake backend |
+| AI panel in `embed`: provider/model from `config.toml`, nothing sent before Enter, `/file` attachment, streamed chat, `/edit` diff review and `/apply` into the buffer, `:complete` ghost text accepted with Tab and rejected with Esc, offline mode | local OpenAI-style mock HTTP server |
 
 ## Not verified
 
@@ -34,7 +39,11 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 - **Fortran builds**: no gfortran, flang or lfortran is installed on the verification machine.
 - **Windows and macOS runtime.** Windows: `cargo clippy -D warnings` passes for
   `x86_64-pc-windows-gnu` on every crate except those depending on `ureq` (its `ring` dependency needs a
-  MinGW C compiler that is not installed); nothing was executed on Windows. macOS: not built.
+  MinGW C compiler that is not installed) — this now includes `embedide-terminal`/`embed`, so the
+  Windows build of the TUI (ConPTY terminal via `portable-pty`) is unverified; nothing was executed on
+  Windows. macOS: not built.
+- Automatic inline suggestions while typing (`ai.inline = true`) in the TUI; only the explicit
+  `:complete` path was exercised end to end.
 - **Hardware**: no flashing, debugging or physical serial device. The GDB/MI, probe-rs and serial
   services in `embedide-core` are unchanged and not exposed as automatic CLI actions.
 - LFortran and Flang command lines (implemented from their documented flags, not run).
@@ -46,4 +55,9 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 - Fortran module dependencies are not scanned (compile order = directory order).
 - `ai login` reads the key with echo when typed interactively; piping is recommended.
 - Credentials are stored in a 0600 file, not in the OS keychain.
-- The Electron app (`electron/`, `src/`) is deprecated and was not changed by the CLI work.
+- The Electron app (`electron/`, `src/`) is deprecated. The only change: its serial service now looks for
+  the `embed` binary (the CLI was renamed from `embedide`).
+- Terminal panel: text only (colours and attributes of the shell are not rendered), no scrollback
+  navigation, one shell session; no mouse support anywhere in the TUI.
+- Ghost text shows the first line of a multi-line suggestion plus a line count; Tab inserts all of it.
+- Builds use files on disk: modified buffers must be saved before F5.

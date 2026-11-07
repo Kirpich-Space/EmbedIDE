@@ -24,7 +24,7 @@ link_flags = []
 libs = ["m"]                  # → -lm
 linker_script = "linker.ld"   # → -T linker.ld
 
-[toolchain]                   # language → toolchain id (see `embedide toolchain list`)
+[toolchain]                   # language → toolchain id (see `embed toolchain list`)
 c = "arm-none-eabi-gcc"
 asm = "arm-none-eabi-gcc"     # .S/.s go through a C driver or GNU as; .asm uses NASM
 
@@ -46,7 +46,7 @@ cargo_profile = "release"
 flags = ["-O1", "-g", "-fsanitize=address"]
 toolchain = { c = "clang" }
 
-[env]                         # for builds and `embedide terminal`
+[env]                         # for builds and `embed terminal`
 SDK_ROOT = "/opt/vendor sdk"
 
 [ai]

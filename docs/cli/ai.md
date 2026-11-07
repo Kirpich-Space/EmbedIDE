@@ -24,19 +24,19 @@ prompt on stdin, so they cannot read your project by themselves. They do not rep
 EmbedIDE does not invent model names. Pick one per provider or per task:
 
 ```sh
-embedide ai models --provider anthropic                     # one request with your key
-embedide config set ai.providers.anthropic.model <model-id>
-embedide config set ai.models.complete "openai:<model-id>"   # task-specific provider:model
-embedide config set ai.provider anthropic                    # default provider
+embed ai models --provider anthropic                     # one request with your key
+embed config set ai.providers.anthropic.model <model-id>
+embed config set ai.models.complete "openai:<model-id>"   # task-specific provider:model
+embed config set ai.provider anthropic                    # default provider
 ```
 
 ## Credentials
 
 Order: the provider's environment variable, then `credentials.toml` in the configuration directory
-(written by `embedide ai login <provider>` with mode 0600; refused if readable by others). Keys are
+(written by `embed ai login <provider>` with mode 0600; refused if readable by others). Keys are
 never stored in `config.toml` or `embedide.toml`, never printed, and removed from provider error
 messages. The key is read from stdin, which is visible when typed. To avoid that, pipe it:
-`printf %s "$KEY" | embedide ai login openai`.
+`printf %s "$KEY" | embed ai login openai`.
 
 ## Features
 
@@ -59,6 +59,13 @@ Common options: `--provider`, `--model`, `--auth api-key|subscription`, `--max-t
 - No automatic retries: a retry can be billed twice. HTTP 429 is reported with the provider's
   `Retry-After`.
 - Plain HTTP is accepted only for localhost (mock servers, local proxies).
+
+## In the `embed` IDE
+
+The AI panel (Alt+2) uses the same configuration, credentials and safeguards: chat with history,
+`/file` and `/sel` context, `/explain`, `/edit` with diff review and `/apply` into the editor buffer,
+and `:complete` inline suggestions (Tab accepts, Esc rejects). Automatic suggestions while typing
+require `ai.inline = true`. See the [TUI guide](tui.md#ai-assistant-alt2).
 
 ## For the Qt editor
 

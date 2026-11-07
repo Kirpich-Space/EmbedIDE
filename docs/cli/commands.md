@@ -1,4 +1,8 @@
-# `embedide` command reference
+# `embed` command reference
+
+`embed` with no arguments (or `embed <directory>`) opens the full-screen IDE — see the
+[TUI guide](tui.md). Without an interactive terminal it exits with status 2 instead. The subcommands
+below are for scripts and automation and use the same Rust services as the IDE.
 
 Global flag: `--json` — print one JSON envelope on stdout
 (`{"ok": true, "data": …}` or `{"ok": false, "error": {"kind": "usage"|"operation", "message": …}}`);
@@ -15,9 +19,9 @@ on macOS, `%APPDATA%\EmbedIDE` on Windows; `EMBEDIDE_CONFIG_DIR` overrides it). 
 
 | Command | What it does |
 |---|---|
-| `embedide doctor` | OS, configuration file, toolchains available per language. Never probes hardware. |
-| `embedide targets` | The 67-entry MCU catalog (metadata only, not hardware validation). |
-| `embedide toolchains` | Legacy PATH inventory (does not execute tools). |
+| `embed doctor` | OS, configuration file, toolchains available per language. Never probes hardware. |
+| `embed targets` | The 67-entry MCU catalog (metadata only, not hardware validation). |
+| `embed toolchains` | Legacy PATH inventory (does not execute tools). |
 
 ## Toolchains — you choose, nothing is installed
 
@@ -87,7 +91,7 @@ See [ai.md](ai.md). `ai providers` never uses the network; `ai models`, `ai chat
 
 ## Firmware, debugging, serial
 
-EmbedIDE does not flash or start debuggers on its own. Use your tools from `embedide terminal`
+EmbedIDE does not flash or start debuggers on its own. Use your tools from `embed terminal`
 (`openocd`, `gdb`, `probe-rs`, `qemu-system-*`). The Rust crates keep the GDB/MI service,
-probe-rs flash planning (explicit confirmation) and the serial monitor; `embedide serial-bridge`
+probe-rs flash planning (explicit confirmation) and the serial monitor; `embed serial-bridge`
 exposes the serial monitor to front ends as JSON lines on stdin/stdout.
