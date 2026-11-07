@@ -1,8 +1,50 @@
 # EmbedIDE
 
-**Offline-first engineering IDE for embedded flight computers**
+**Engineering IDE for embedded firmware, drivers, kernels, systems and scientific code**
 
-Built by [Kirpich Space](https://github.com/Kirpich-Space). Cross-platform desktop IDE (Electron + React + CodeMirror) for ARM Cortex-M firmware, drivers, and OS kernels — Rust, C, C++, Assembly, Zig. No Arduino, ESP32, AVR, or Pico targets.
+Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, Rust, Zig, Assembly, Fortran.
+
+> **Direction (2026-11):** EmbedIDE is now **Rust-first**. The core, build engine, toolchain
+> management and AI layer are Rust crates, used today by the `embedide` command-line IDE and
+> later by a native **Qt 6** interface. The Electron desktop app described further below is
+> **deprecated**: it is kept for reference and is no longer extended.
+
+## Command-line edition (Rust)
+
+You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
+rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds
+with exactly what you select, per project, per profile or per command. It never installs toolchains,
+never flashes hardware and never starts a debugger by itself.
+
+```sh
+cargo build --release --locked -p embedide-cli      # → target/release/embedide
+
+embedide doctor                                     # OS, config, toolchains per language
+embedide toolchain list                             # versions, paths, host/cross
+embedide project init hello --language c --toolchain c=clang
+embedide build hello                                # native build with clang
+embedide build hello --toolchain c=zig-cc           # same project, zig cc
+embedide build hello --profile release
+embedide clean hello
+embedide terminal hello                             # your shell, project env + toolchain dirs on PATH
+
+embedide project init fw --template c-cortex-m --board stm32f407vg
+embedide build fw                                   # arm-none-eabi-gcc → fw/build/debug/fw.elf
+
+embedide ai providers                               # Anthropic, OpenAI, Moonshot (Kimi), xAI (Grok)
+embedide ai chat "Why does this hard-fault?" --file src/main.c --provider anthropic --model <id> --dry-run
+```
+
+- [Command reference](docs/cli/commands.md)
+- [`embedide.toml` reference](docs/cli/embedide-toml.md)
+- [AI subsystem](docs/cli/ai.md)
+- [Verified and unverified functionality](docs/cli/status.md)
+
+No Electron, Node.js or graphical session is needed. The binary links only against the C runtime.
+
+## Deprecated: Electron desktop application
+
+The sections below describe the previous Electron + React app (`electron/`, `src/`).
 
 ## Features
 

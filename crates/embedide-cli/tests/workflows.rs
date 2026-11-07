@@ -517,3 +517,115 @@ fn config_never_stores_secrets_and_validates() {
         "file unchanged"
     );
 }
+
+/// ELF32 section by name → (addr, file offset, size).
+fn section(bytes: &[u8], name: &str) -> Option<(u32, usize, usize)> {
+    let u16_at = |o: usize| u16::from_le_bytes([bytes[o], bytes[o + 1]]) as usize;
+    let u32_at =
+        |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let (shoff, shentsize, shnum, shstrndx) =
+        (u32_at(32) as usize, u16_at(46), u16_at(48), u16_at(50));
+    let hdr = |i: usize| shoff + i * shentsize;
+    let strtab = u32_at(hdr(shstrndx) + 16) as usize;
+    (0..shnum).find_map(|i| {
+        let h = hdr(i);
+        let start = strtab + u32_at(h) as usize;
+        let end = start + bytes[start..].iter().position(|b| *b == 0)?;
+        (&bytes[start..end] == name.as_bytes()).then(|| {
+            (
+                u32_at(h + 12),
+                u32_at(h + 16) as usize,
+                u32_at(h + 20) as usize,
+            )
+        })
+    })
+}
+
+#[test]
+fn firmware_template_matrix_across_cortex_m_cores() {
+    let e = Env::new("fwmatrix");
+    let vendor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/toolchain/linux-x64/bin");
+    if !have("arm-none-eabi-gcc") {
+        match vendor.canonicalize() {
+            Ok(v) if v.join("arm-none-eabi-gcc").is_file() => {
+                e.ok(&e.dir, &["toolchain", "search-dir", v.to_str().unwrap()]);
+            }
+            _ => return skip("arm-none-eabi-gcc not found: firmware matrix not verified"),
+        }
+    }
+    let catalog: Value = e.ok(&e.dir, &["targets"])["data"]["targets"].clone();
+    let boards = [
+        "stm32f030r8",
+        "stm32g071rb",
+        "stm32f103c8",
+        "stm32f407vg",
+        "stm32h743zi",
+        "stm32l552ze",
+        "stm32u575zi",
+        "lpc55s69",
+        "mimxrt1062",
+        "nrf52840",
+        "ra8d1",
+        "same70q21",
+    ];
+    for id in boards {
+        let b = catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["id"] == id)
+            .unwrap();
+        let hex = |k: &str| {
+            u32::from_str_radix(b[k].as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
+        };
+        let (flash, ram) = (hex("flashOrigin"), hex("ramOrigin"));
+        let (flash_end, ram_end) = (
+            flash + b["flashKb"].as_u64().unwrap() as u32 * 1024,
+            ram + b["ramKb"].as_u64().unwrap() as u32 * 1024,
+        );
+        let p = e.dir.join(format!("fw {id}"));
+        e.ok(
+            &e.dir,
+            &[
+                "project",
+                "init",
+                p.to_str().unwrap(),
+                "--template",
+                "c-cortex-m",
+                "--board",
+                id,
+                "--name",
+                id,
+            ],
+        );
+        let v = e.ok(&p, &["build", "--profile", "release"]);
+        let bytes = std::fs::read(v["data"]["outcome"]["artifact"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            u16::from_le_bytes([bytes[18], bytes[19]]),
+            40,
+            "{id}: ARM ELF"
+        );
+        let (addr, off, size) =
+            section(&bytes, ".isr_vector").unwrap_or_else(|| panic!("{id}: no .isr_vector"));
+        assert!(
+            size >= 8 && (flash..flash_end).contains(&addr),
+            "{id}: vectors in flash"
+        );
+        let sp = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+        let reset = u32::from_le_bytes(bytes[off + 4..off + 8].try_into().unwrap());
+        assert!(sp > ram && sp <= ram_end, "{id}: SP {sp:#x} in RAM");
+        assert_eq!(reset & 1, 1, "{id}: Thumb reset vector");
+        assert!(
+            (flash..flash_end).contains(&(reset & !1)),
+            "{id}: reset in flash"
+        );
+        assert_eq!(
+            v["data"]["outcome"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0,
+            "{id}: no warnings"
+        );
+    }
+}
