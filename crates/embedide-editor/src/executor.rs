@@ -430,6 +430,7 @@ pub(crate) fn execute(
             )?;
         }
         Action::Ex(ExCommand::Write) => return Ok(Effect::Saved(state.save()?)),
+        Action::Ex(ExCommand::Host(command)) => return Ok(Effect::Command(command)),
         Action::Ex(command) => {
             if command == ExCommand::WriteQuit {
                 state.save()?;

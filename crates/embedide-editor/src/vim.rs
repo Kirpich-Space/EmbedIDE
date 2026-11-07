@@ -142,7 +142,7 @@ pub enum IdeAction {
 }
 
 /// Supported Ex commands; arguments and shell escapes are deliberately rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExCommand {
     /// Persist the active document.
     Write,
@@ -152,6 +152,9 @@ pub enum ExCommand {
     ForceQuit,
     /// Persist successfully, then close.
     WriteQuit,
+    /// Any other command line, forwarded to the host IDE when the keymap
+    /// allows host commands (e.g. `:build`, `:e src/main.c`).
+    Host(String),
 }
 
 /// Typed operation to be applied by a document or IDE session.
@@ -285,6 +288,7 @@ pub struct Keymap {
     leader: char,
     leader_bindings: BTreeMap<char, IdeAction>,
     aliases: BTreeMap<char, char>,
+    host_commands: bool,
 }
 
 impl Default for Keymap {
@@ -302,11 +306,18 @@ impl Default for Keymap {
             .into_iter()
             .collect(),
             aliases: BTreeMap::new(),
+            host_commands: false,
         }
     }
 }
 
 impl Keymap {
+    /// Forward unknown `:` commands to the host instead of rejecting them.
+    /// A standalone editor keeps this off; an IDE workspace turns it on.
+    pub fn set_host_commands(&mut self, enabled: bool) {
+        self.host_commands = enabled;
+    }
+
     /// Set the Normal-only leader character.
     pub fn set_leader(&mut self, leader: char) {
         self.leader = leader;
@@ -722,6 +733,9 @@ impl VimInput {
                     "q" => ExCommand::Quit,
                     "q!" => ExCommand::ForceQuit,
                     "wq" => ExCommand::WriteQuit,
+                    other if self.keymap.host_commands && !other.is_empty() => {
+                        ExCommand::Host(other.to_string())
+                    }
                     _ => return Err(InputError::UnknownCommand(text)),
                 };
                 Self::emit(Action::Ex(command))

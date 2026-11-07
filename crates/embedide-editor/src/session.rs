@@ -8,7 +8,7 @@ use crate::{
 use std::{ops::Range, path::Path};
 
 /// Observable session result; IDE requests are handled by the owning frontend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// Input was consumed and/or document state changed.
     Applied,
@@ -20,6 +20,8 @@ pub enum Effect {
     Closed,
     /// Focus/task request; the editor itself has not started a process.
     Ide(IdeAction),
+    /// A `:` command for the host (only with `Keymap::set_host_commands`).
+    Command(String),
 }
 
 /// One editable document and its modal input state. Mode is owned only by input.
