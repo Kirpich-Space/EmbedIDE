@@ -1,4 +1,6 @@
 //! Standalone terminal frontend; no GUI or Node.js runtime is required.
+mod serial_bridge;
+
 use clap::{Parser, Subcommand};
 use embedide_core::{self as core, BuildOptions, BuildSystem, Error, Result};
 use serde_json::{json, Value};
@@ -74,6 +76,8 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// JSON-lines serial service on stdin/stdout (used by the desktop app).
+    SerialBridge,
 }
 
 fn execute(command: Commands, interactive: bool) -> Result<(Value, u8)> {
@@ -102,6 +106,7 @@ fn execute(command: Commands, interactive: bool) -> Result<(Value, u8)> {
                 "bytes": report.bytes, "line": report.position.line, "scalar_column": report.position.scalar_column})
         }
         Commands::Config { path } => json!({"project": core::inspect(&path)?.metadata}),
+        Commands::SerialBridge => unreachable!("handled before execute"),
         Commands::Targets => json!({"hardware_verified": false, "targets": core::targets()?}),
         Commands::Toolchains => json!({"tools": core::toolchains()}),
         Commands::Doctor => json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH,
@@ -160,6 +165,7 @@ fn main() -> ExitCode {
         "toolchains",
         "doctor",
         "build",
+        "serial-bridge",
         "help",
     ];
     if args.len() == 2
@@ -194,6 +200,16 @@ fn main() -> ExitCode {
             true,
         );
         return ExitCode::from(2);
+    }
+    if matches!(cli.command, Commands::SerialBridge) {
+        return match serial_bridge::run() {
+            Ok(code) => ExitCode::from(code),
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("embedide serial-bridge: {e}");
+                ExitCode::from(1)
+            }
+        };
     }
     let (value, code) = match execute(
         cli.command,

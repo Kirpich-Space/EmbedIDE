@@ -97,6 +97,59 @@ pub fn serial_ports() -> Result<Vec<String>> {
         .map_err(|e| Error(format!("Serial enumeration: {e}")))
 }
 
+/// One enumerated serial device with the metadata the OS reports.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SerialPortEntry {
+    /// Device path or name (e.g. /dev/ttyACM0, COM3).
+    pub name: String,
+    /// usb, pci, bluetooth or unknown.
+    pub kind: &'static str,
+    /// USB vendor id, when known.
+    pub vid: Option<u16>,
+    /// USB product id, when known.
+    pub pid: Option<u16>,
+    /// USB serial number, when known.
+    pub serial_number: Option<String>,
+    /// USB manufacturer string, when known.
+    pub manufacturer: Option<String>,
+    /// USB product string, when known.
+    pub product: Option<String>,
+}
+
+/// Enumerate serial devices with structured metadata. An empty list stays empty.
+pub fn serial_port_entries() -> Result<Vec<SerialPortEntry>> {
+    let ports =
+        serialport::available_ports().map_err(|e| Error(format!("Serial enumeration: {e}")))?;
+    Ok(ports
+        .into_iter()
+        .map(|p| {
+            let mut entry = SerialPortEntry {
+                name: p.port_name,
+                kind: "unknown",
+                vid: None,
+                pid: None,
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+            };
+            match p.port_type {
+                serialport::SerialPortType::UsbPort(info) => {
+                    entry.kind = "usb";
+                    entry.vid = Some(info.vid);
+                    entry.pid = Some(info.pid);
+                    entry.serial_number = info.serial_number;
+                    entry.manufacturer = info.manufacturer;
+                    entry.product = info.product;
+                }
+                serialport::SerialPortType::PciPort => entry.kind = "pci",
+                serialport::SerialPortType::BluetoothPort => entry.kind = "bluetooth",
+                serialport::SerialPortType::Unknown => {}
+            }
+            entry
+        })
+        .collect())
+}
+
 impl SerialConfig {
     /// Reject unsupported framing before attempting any device access.
     pub fn validate(&self) -> Result<()> {
@@ -225,11 +278,6 @@ impl SerialMonitor {
     }
     /// Bounded transmission; receive-only is enforced in the service.
     pub fn send(&self, text: &str) -> Result<()> {
-        if self.config.receive_only {
-            return Err(Error(
-                "Serial receive_only=true; transmission disabled".into(),
-            ));
-        }
         if text.len() > 4096 {
             return Err(Error("Serial message exceeds 4 KiB".into()));
         }
@@ -239,8 +287,20 @@ impl SerialMonitor {
             "crlf" => bytes.extend(b"\r\n"),
             _ => {}
         }
+        self.send_bytes(&bytes)
+    }
+    /// Bounded transmission of raw bytes, exactly as given (binary-safe).
+    pub fn send_bytes(&self, bytes: &[u8]) -> Result<()> {
+        if self.config.receive_only {
+            return Err(Error(
+                "Serial receive_only=true; transmission disabled".into(),
+            ));
+        }
+        if bytes.len() > 4098 {
+            return Err(Error("Serial message exceeds 4 KiB".into()));
+        }
         self.outgoing
-            .try_send(bytes)
+            .try_send(bytes.to_vec())
             .map_err(|e| Error(format!("Serial transmission unavailable: {e}")))
     }
     /// Queue overflow is observable; pause in the frontend never stops receiving.
