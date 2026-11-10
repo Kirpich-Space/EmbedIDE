@@ -147,7 +147,9 @@ class FullscreenContracts(unittest.TestCase):
         terminal.until(b"Insert ")
         text = ":q!\n猫"
         terminal.send(b"\x1b[200~" + text.encode() + b"\x1b[201~")
-        terminal.until(b":q!")
+        # The C file is syntax-highlighted, so ":q!" is split by colour codes;
+        # the second pasted line shows the paste reached the buffer.
+        terminal.until(" 2 猫".encode())
         self.escape(terminal)
         terminal.send(b":wq\r")
         self.finish(terminal)

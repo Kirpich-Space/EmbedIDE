@@ -155,7 +155,7 @@ pub fn run(editor: Editor) -> Result<SessionReport, FrontendError> {
     }
     let (width, height) = terminal::size()?;
     let mut app = TuiEditor::new(editor, width, height);
-    let guard = guard::TerminalGuard::enter()?;
+    let guard = guard::TerminalGuard::enter(false)?;
     let mut screen = screen::Screen::default();
     screen.draw(&app.frame()?, &mut io::stdout())?;
     while !app.editor().state().is_closed() {

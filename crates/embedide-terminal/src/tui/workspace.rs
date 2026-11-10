@@ -40,9 +40,18 @@ use unicode_width::UnicodeWidthStr;
 
 const OUTPUT_LINES: usize = 2000;
 const COMMANDS: &[(&str, &str)] = &[
-    ("focus_explorer", "Explorer Panel (Alt+1)"),
-    ("focus_assistant", "AI Assistant Panel (Alt+2)"),
-    ("focus_terminal", "Terminal Panel (Alt+3)"),
+    ("focus_explorer", "Explorer Panel (Ctrl+Alt+1)"),
+    ("focus_assistant", "AI Assistant Panel (Ctrl+Alt+2)"),
+    ("focus_terminal", "Terminal Panel (Ctrl+Alt+3)"),
+    ("hide_explorer", "Hide Explorer Panel (Ctrl+Alt+1+Delete)"),
+    (
+        "hide_assistant",
+        "Hide AI Assistant Panel (Ctrl+Alt+2+Delete)",
+    ),
+    (
+        "hide_terminal",
+        "Hide Terminal Panel, shell keeps running (Ctrl+Alt+3+Delete)",
+    ),
     ("assistant", "Show / Hide AI Panel"),
     ("terminal_restart", "Restart Terminal Shell"),
     (
@@ -292,6 +301,8 @@ pub struct Workspace {
     assistant: Assistant,
     assistant_visible: bool,
     terminal: Option<TerminalPane>,
+    keyboard_enhanced: bool,
+    held_panel: Option<String>,
     user: UserConfig,
     manifest: Option<Manifest>,
     config_notes: Vec<String>,
@@ -386,6 +397,8 @@ impl Workspace {
             assistant,
             assistant_visible: true,
             terminal: None,
+            keyboard_enhanced: false,
+            held_panel: None,
             user,
             manifest,
             config_notes,
@@ -538,6 +551,74 @@ impl Workspace {
         }
         Ok(())
     }
+    /// Remove a panel from the layout. Its state (tree, conversation and unsent
+    /// input, the running shell) is kept and returns when the panel is reopened.
+    fn hide_panel(&mut self, id: &str) {
+        let (focus, name, digit) = match id {
+            "hide_explorer" => {
+                self.explorer_visible = false;
+                (Focus::Explorer, "Explorer hidden", '1')
+            }
+            "hide_assistant" => {
+                self.assistant_visible = false;
+                (Focus::Assistant, "AI panel hidden, chat kept", '2')
+            }
+            _ => {
+                if self.panel == Panel::Terminal {
+                    self.panel_visible = false;
+                }
+                (Focus::Terminal, "Terminal hidden, shell running", '3')
+            }
+        };
+        if self.focus == focus {
+            self.focus = Focus::Editor;
+        }
+        self.notification = format!("{name} ({} reopens)", self.panel_key(digit));
+    }
+    /// Tell the workspace whether the terminal reports kitty keyboard events
+    /// (press/repeat/release). Without them a held key cannot be observed.
+    pub fn set_keyboard_enhanced(&mut self, enhanced: bool) {
+        self.keyboard_enhanced = enhanced;
+        self.held_panel = None;
+    }
+    /// Ctrl+Alt+1/2/3 open a panel (again: back to the editor). With the digit
+    /// still held, Delete hides that panel. "Held" is known only from kitty
+    /// keyboard release events, so the hide chord is never inferred from a
+    /// sequence of separate presses. Returns None when the key is not a chord.
+    fn panel_chord(&mut self, key: KeyEvent) -> Option<Result<(), FrontendError>> {
+        let chord = key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT;
+        if chord && matches!(key.code, KeyCode::Char('0'..='9')) {
+            let id = self.shortcut(key).filter(|id| id.starts_with("focus_"));
+            match key.kind {
+                KeyEventKind::Release => {
+                    if self.held_panel.is_some() && self.held_panel == id {
+                        self.held_panel = None;
+                    }
+                    return Some(Ok(()));
+                }
+                KeyEventKind::Repeat if id.is_some() => return Some(Ok(())),
+                _ => {}
+            }
+            if let Some(id) = id {
+                if self.dialog.is_some() {
+                    return None;
+                }
+                self.held_panel = self.keyboard_enhanced.then(|| id.clone());
+                return Some(self.command(&id));
+            }
+        }
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if chord && key.code == KeyCode::Delete && self.dialog.is_none() {
+            if let Some(held) = self.held_panel.clone() {
+                self.hide_panel(&held.replacen("focus_", "hide_", 1));
+                return Some(Ok(()));
+            }
+        }
+        self.held_panel = None;
+        None
+    }
     fn apply_proposal(&mut self) -> Result<(), FrontendError> {
         let Some((path, proposal)) = self.assistant.take_proposal_if(true) else {
             return Ok(());
@@ -632,6 +713,32 @@ impl Workspace {
         self.focus = Focus::Editor;
         self.notification = format!("Opened {}", path.display());
         Ok(())
+    }
+    /// Open the document named on the command line: an existing file, or a new
+    /// unsaved buffer bound to a missing path (created only on `:w`, never
+    /// replacing a file that appears meanwhile).
+    pub fn open_launch_file(
+        &mut self,
+        file: &embedide_workspace::LaunchFile,
+    ) -> Result<(), FrontendError> {
+        match file {
+            embedide_workspace::LaunchFile::Existing(path) => self.open_file(path),
+            embedide_workspace::LaunchFile::New(path) => {
+                let doc = self.new_document(Editor::create(path)?);
+                if self.documents.len() == 1
+                    && self.editor().state().path().is_none()
+                    && !self.editor().state().is_modified()
+                {
+                    self.documents[0] = doc;
+                } else {
+                    self.documents.push(doc);
+                    self.active = self.documents.len() - 1;
+                }
+                self.focus = Focus::Editor;
+                self.notification = format!("New file {} (written on :w)", path.display());
+                Ok(())
+            }
+        }
     }
     fn refresh(&mut self) -> core::Result<()> {
         self.tree = explorer::read_directory(&self.root, &self.root)?
@@ -915,6 +1022,7 @@ impl Workspace {
                 }
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
+            "hide_explorer" | "hide_assistant" | "hide_terminal" => self.hide_panel(id),
             "assistant" => {
                 self.assistant_visible = !self.assistant_visible;
                 if !self.assistant_visible && self.focus == Focus::Assistant {
@@ -1672,7 +1780,16 @@ impl Workspace {
         Ok(())
     }
     fn shortcut(&self, key: KeyEvent) -> Option<String> {
-        let binding = if key.modifiers.contains(KeyModifiers::CONTROL) {
+        let digit = matches!(key.code, KeyCode::Char(ch) if ch.is_ascii_digit());
+        let binding = if key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT && digit {
+            if let KeyCode::Char(ch) = key.code {
+                format!("ctrl+alt+{ch}")
+            } else {
+                return None;
+            }
+        } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+Alt+<letter> stays Ctrl+<letter>: a legacy terminal turns Esc
+            // followed quickly by Ctrl+S (one read, e.g. over SSH) into ESC ^S.
             if let KeyCode::Char(ch) = key.code {
                 format!("ctrl+{}", ch.to_ascii_lowercase())
             } else {
@@ -1693,39 +1810,61 @@ impl Workspace {
         } else {
             return None;
         };
-        if let Some((id, _)) = self
-            .config
-            .keys
-            .iter()
-            .find(|(_, chord)| chord.to_lowercase() == binding)
-        {
-            return Some(id.clone());
+        // Without the kitty keyboard protocol a terminal cannot report
+        // Ctrl+Alt+<digit>: most send ESC <digit>, which is exactly Alt+<digit>
+        // (xterm-style terminals send ESC plus a control byte for 2..8). There,
+        // Alt+<digit> stands in for the Ctrl+Alt+<digit> bindings.
+        let legacy = binding
+            .strip_prefix("alt+")
+            .filter(|d| !self.keyboard_enhanced && d.len() == 1 && d.as_bytes()[0].is_ascii_digit())
+            .map(|d| format!("ctrl+alt+{d}"));
+        let candidates = [Some(binding.as_str()), legacy.as_deref()];
+        let mut candidates = candidates.iter().flatten().copied();
+        for binding in candidates.clone() {
+            if let Some((id, _)) = self
+                .config
+                .keys
+                .iter()
+                .find(|(_, chord)| chord.to_lowercase() == binding)
+            {
+                return Some(id.clone());
+            }
         }
-        let default = match binding.as_str() {
-            "alt+1" => "focus_explorer",
-            "alt+2" => "focus_assistant",
-            "alt+3" => "focus_terminal",
-            "ctrl+p" => "find",
-            "ctrl+k" => "palette",
-            "ctrl+s" => "save",
-            "ctrl+w" => "close",
-            "ctrl+q" => "quit",
-            "f1" => "help",
-            "f2" => "explorer",
-            "f3" => "problems",
-            "f4" => "panel",
-            "f5" => "build",
-            "f6" => "focus",
-            "f7" => "check",
-            "f8" => "cancel",
-            "f9" => "target",
-            "f10" => "next_document",
-            _ => return None,
-        };
+        let default = candidates.find_map(|binding| {
+            Some(match binding {
+                "ctrl+alt+1" => "focus_explorer",
+                "ctrl+alt+2" => "focus_assistant",
+                "ctrl+alt+3" => "focus_terminal",
+                "ctrl+p" => "find",
+                "ctrl+k" => "palette",
+                "ctrl+s" => "save",
+                "ctrl+w" => "close",
+                "ctrl+q" => "quit",
+                "f1" => "help",
+                "f2" => "explorer",
+                "f3" => "problems",
+                "f4" => "panel",
+                "f5" => "build",
+                "f6" => "focus",
+                "f7" => "check",
+                "f8" => "cancel",
+                "f9" => "target",
+                "f10" => "next_document",
+                _ => return None,
+            })
+        })?;
         if self.config.keys.contains_key(default) {
             None
         } else {
             Some(default.into())
+        }
+    }
+    /// How the focus chord for panel `digit` is typed in this terminal.
+    fn panel_key(&self, digit: char) -> String {
+        if self.keyboard_enhanced {
+            format!("Ctrl+Alt+{digit}")
+        } else {
+            format!("Alt+{digit}")
         }
     }
     /// Route terminal input with dialogs before global keys, then focused content.
@@ -1739,7 +1878,13 @@ impl Workspace {
     fn handle_inner(&mut self, event: Event) -> Result<(), FrontendError> {
         match event {
             Event::Resize(width, height) => self.size = (width, height),
-            Event::Key(key) if key.kind != KeyEventKind::Release => {
+            Event::Key(key) => {
+                if let Some(result) = self.panel_chord(key) {
+                    return result;
+                }
+                if key.kind == KeyEventKind::Release {
+                    return Ok(());
+                }
                 if self.dialog.is_some() {
                     return self.handle_dialog(key);
                 }
@@ -1747,7 +1892,7 @@ impl Workspace {
                 if self.focus == Focus::Terminal
                     && !shortcut
                         .as_deref()
-                        .is_some_and(|id| id.starts_with("focus_"))
+                        .is_some_and(|id| id.starts_with("focus_") || id.starts_with("hide_"))
                 {
                     // The shell owns the keyboard: Ctrl+C, Ctrl+D, Tab, Esc, F-keys.
                     match &mut self.terminal {
@@ -1913,7 +2058,9 @@ impl Workspace {
                         }
                         KeyCode::Char('r') => self.command("refresh")?,
                         KeyCode::Char('n') => self.command("new_file")?,
-                        KeyCode::Delete => self.command("delete")?,
+                        // Only a plain Delete deletes: a mistimed Ctrl+Alt+<digit>+Delete
+                        // hide chord must never open the delete prompt.
+                        KeyCode::Delete if key.modifiers.is_empty() => self.command("delete")?,
                         KeyCode::Char('/') => self.command("find")?,
                         KeyCode::Esc => self.focus = Focus::Editor,
                         _ => {}
@@ -2355,15 +2502,16 @@ impl Workspace {
                 lines.push("Commands (Ctrl+K or :name): edit_project_config, edit_user_config, reload, compilers, profile, target, theme".into());
                 lines
             }
-            Panel::Help => help_lines(&self.config.keys),
+            Panel::Help => help_lines(&self.config.keys, self.keyboard_enhanced),
             Panel::Terminal => self.terminal.as_ref().map_or_else(
-                || vec!["Alt+3 starts your shell here".into()],
+                || vec![format!("{} starts your shell here", self.panel_key('3'))],
                 |t| t.contents().lines().map(str::to_string).collect(),
             ),
         }
     }
     fn draw_terminal(&mut self, width: usize, height: usize) -> (Vec<Row>, Option<(u16, u16)>) {
         let focused = self.focus == Focus::Terminal;
+        let key = self.panel_key('3');
         let (title, mut body, cursor) = match &mut self.terminal {
             Some(t) => {
                 let state = match t.exited() {
@@ -2380,9 +2528,9 @@ impl Workspace {
                 "{}TERMINAL | {title} | {}",
                 if focused { "> " } else { "" },
                 if focused {
-                    "keys go to the shell; Alt+3 back to editor"
+                    format!("keys go to the shell; {key} back to editor")
                 } else {
-                    "Alt+3 focus"
+                    format!("{key} focus")
                 }
             ),
             width,
@@ -2782,6 +2930,13 @@ impl Workspace {
 }
 /// Run a project workspace. Startup performs local metadata and one directory read only.
 pub fn run(root: &Path) -> Result<(), FrontendError> {
+    run_with(root, None)
+}
+/// Run a workspace and open `file` (from `embed <file>`) in the editor first.
+pub fn run_with(
+    root: &Path,
+    file: Option<&embedide_workspace::LaunchFile>,
+) -> Result<(), FrontendError> {
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         return Err(FrontendError::NeedsTerminal);
     }
@@ -2790,7 +2945,11 @@ pub fn run(root: &Path) -> Result<(), FrontendError> {
     }
     let (width, height) = terminal::size()?;
     let mut app = Workspace::open(root, width, height)?;
-    let guard = guard::TerminalGuard::enter()?;
+    if let Some(file) = file {
+        app.open_launch_file(file)?;
+    }
+    let guard = guard::TerminalGuard::enter(true)?;
+    app.set_keyboard_enhanced(guard.keyboard_enhanced());
     let mut screen = Screen::default();
     let mut dirty = true;
     while !app.closed {
@@ -2886,7 +3045,7 @@ fn language_of(path: Option<&Path>) -> &'static str {
         {
             "cmake"
         }
-        _ => "text",
+        _ => embedide_editor::syntax::Language::detect(path, "").id(),
     }
 }
 
@@ -2910,7 +3069,15 @@ fn pad(row: &mut Row, width: usize) {
 /// Insert `text` (shown in inverse video) at display column `col`, truncating at `width`.
 fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
     use unicode_width::UnicodeWidthChar;
-    fn put(out: &mut Row, used: &mut usize, text: &str, selected: bool, width: usize) {
+    fn put(
+        out: &mut Row,
+        used: &mut usize,
+        text: &str,
+        selected: bool,
+        style: Option<embedide_editor::syntax::Highlight>,
+        cell: Option<layout::CellStyle>,
+        width: usize,
+    ) {
         let mut piece = String::new();
         for ch in text.chars() {
             let w = ch.width().unwrap_or(0);
@@ -2921,7 +3088,7 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
             *used += w;
         }
         if !piece.is_empty() {
-            out.push(&piece, selected);
+            out.push_attrs(&piece, selected, style, cell);
         }
     }
     let mut out = Row::default();
@@ -2932,15 +3099,20 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
         for ch in run.text.chars() {
             if !inserted && used >= col {
                 if !piece.is_empty() {
-                    out.push(&std::mem::take(&mut piece), run.selected);
+                    out.push_attrs(
+                        &std::mem::take(&mut piece),
+                        run.selected,
+                        run.style,
+                        run.cell,
+                    );
                 }
-                put(&mut out, &mut used, text, true, width);
+                put(&mut out, &mut used, text, true, None, None, width);
                 inserted = true;
             }
             let w = ch.width().unwrap_or(0);
             if used + w > width {
                 if !piece.is_empty() {
-                    out.push(&piece, run.selected);
+                    out.push_attrs(&piece, run.selected, run.style, run.cell);
                 }
                 break 'runs;
             }
@@ -2948,22 +3120,36 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
             used += w;
         }
         if !piece.is_empty() {
-            out.push(&piece, run.selected);
+            out.push_attrs(&piece, run.selected, run.style, run.cell);
         }
     }
     if !inserted && !text.is_empty() {
         if used < col {
             let gap = " ".repeat(col - used);
-            put(&mut out, &mut used, &gap, false, width);
+            put(&mut out, &mut used, &gap, false, None, None, width);
         }
-        put(&mut out, &mut used, text, true, width);
+        put(&mut out, &mut used, text, true, None, None, width);
     }
     out
 }
 
-fn help_lines(keys: &BTreeMap<String, String>) -> Vec<String> {
+fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<String> {
+    let mode: &[&str] = if keyboard_enhanced {
+        &["        Kitty keyboard protocol active. Ctrl+Alt+Delete may be taken by the desktop or console first"]
+    } else {
+        &[
+            "        This terminal does not speak the kitty keyboard protocol, so it cannot report Ctrl+Alt+<digit>",
+            "        or a held digit: use Alt+1/2/3 to switch, and :hide_explorer :hide_assistant :hide_terminal",
+            "        (or bind them in embedide.json \"native\": {\"keys\": {\"hide_terminal\": \"alt+6\"}}) to hide",
+        ]
+    };
     let mut lines: Vec<String> = [
-        "PANELS  Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal (press again to return to the editor)",
+        "PANELS  Ctrl+Alt+1 explorer | Ctrl+Alt+2 AI assistant | Ctrl+Alt+3 terminal (press again to return to the editor)",
+        "        Hold the digit and press Delete (Ctrl+Alt+1+Delete …) to hide that panel; its state is kept",
+    ]
+    .iter()
+    .chain(mode)
+    .chain(&[
         "        F2 show/hide explorer | F4 cycle bottom panels | F6 cycle focus | Ctrl+K command palette",
         "EDITOR  Vim modes: Normal (hjkl w b e 0 $ gg G x dd yy p u Ctrl+R / ? n N v V), Insert (i a o O, Esc),",
         "        Command (:w :q :q! :wq, plus :build :clean :cancel :e <file> :help :settings :complete :ai <question>)",
@@ -2971,15 +3157,14 @@ fn help_lines(keys: &BTreeMap<String, String>) -> Vec<String> {
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
         "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
-        "TERMINAL Alt+3: your shell in a real pseudo-terminal; all keys go to it except Alt+1/2/3",
-        "AI      Alt+2, type a message, Enter sends (only then). /file /sel /explain /edit <instr> /apply /reject",
+        "TERMINAL Ctrl+Alt+3: your shell in a real pseudo-terminal; all keys go to it except Ctrl+Alt+1/2/3",
+        "AI      Ctrl+Alt+2, type a message, Enter sends (only then). /file /sel /explain /edit <instr> /apply /reject",
         "        /complete or :complete shows a suggestion at the cursor: Tab accepts, Esc rejects. /help in the panel",
         "        AI is optional: without a provider the IDE works fully offline. EMBEDIDE_AI_OFFLINE=1 blocks requests",
         "EXPLORER j/k move, Enter/Right open or expand, Left collapse, n new file, Delete delete, r refresh, Esc editor",
         "PANEL   j/k scroll, PgUp/PgDn, End follow, / filter, Tab next panel, Esc editor",
         "Debugging, flashing and serial run only from explicit commands (Ctrl+K: debug, flash, serial).",
-    ]
-    .iter()
+    ])
     .map(|s| s.to_string())
     .collect();
     if !keys.is_empty() {
@@ -3026,6 +3211,131 @@ mod tests {
         assert_eq!(language_of(None), "text");
     }
 
+    fn press(code: KeyCode, kind: KeyEventKind) -> Event {
+        Event::Key(KeyEvent::new_with_kind(
+            code,
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            kind,
+        ))
+    }
+
+    #[test]
+    fn held_digit_and_delete_hide_a_panel_and_keep_its_state() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-hide-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.set_keyboard_enhanced(true);
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
+        assert_eq!(ws.focus(), Focus::Assistant);
+        for ch in "unsent draft".chars() {
+            ws.handle(Event::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::NONE,
+            )));
+        }
+        // Holding 2 (press, auto-repeat) and pressing Delete hides the AI panel.
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
+        assert_eq!(
+            ws.focus(),
+            Focus::Editor,
+            "second press returns to the editor"
+        );
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Repeat));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(!ws.assistant_visible);
+        assert_eq!(ws.focus(), Focus::Editor);
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Release));
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Release));
+        // Reopening restores the unsent input.
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Release));
+        assert!(ws.assistant_visible);
+        assert_eq!(ws.focus(), Focus::Assistant);
+        assert_eq!(ws.assistant.input, "unsent draft");
+        // Released digit, then Ctrl+Alt+Delete: separate presses never hide.
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(ws.assistant_visible);
+        // Explorer: same chord with 1.
+        ws.handle(press(KeyCode::Char('1'), KeyEventKind::Press));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(!ws.explorer_visible);
+        ws.handle(press(KeyCode::Char('1'), KeyEventKind::Release));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_release_events_the_hide_chord_is_never_inferred() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-legacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.set_keyboard_enhanced(false);
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(ws.assistant_visible, "a held key cannot be observed");
+        ws.command("hide_assistant").unwrap();
+        assert!(!ws.assistant_visible);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_terminals_switch_panels_with_alt_digit_and_honour_hide_bindings() {
+        // Regression: without the kitty protocol, Ctrl+Alt+<digit> arrives as
+        // ESC <digit> (crossterm: Alt+<digit>), and no key switched panels.
+        let dir = std::env::temp_dir().join(format!("embed-ws-alt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("embedide.json"),
+            r#"{"native": {"keys": {"hide_terminal": "alt+6", "focus_assistant": "ctrl+alt+5"}}}"#,
+        )
+        .unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.set_keyboard_enhanced(false);
+        let alt = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
+        assert_eq!(ws.focus(), Focus::Explorer, "no document: explorer first");
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Explorer);
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        // A rebound Ctrl+Alt chord follows the binding; the old default is free.
+        ws.handle(alt('5'));
+        assert_eq!(ws.focus(), Focus::Assistant);
+        ws.handle(alt('2'));
+        assert_eq!(ws.focus(), Focus::Assistant, "default moved to ctrl+alt+5");
+        // A hide binding works even while the shell owns the keyboard. The
+        // shell is the user's $SHELL; /bin/sh keeps the test hermetic.
+        ws.terminal =
+            Some(TerminalPane::spawn("/bin/sh", &dir, &BTreeMap::new(), &[], 10, 80).unwrap());
+        ws.handle(alt('3'));
+        assert_eq!(ws.focus(), Focus::Terminal);
+        ws.handle(alt('6'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        assert!(
+            ws.terminal.as_ref().unwrap().exited().is_none(),
+            "shell kept"
+        );
+        assert!(
+            ws.notification.contains("Alt+3 reopens"),
+            "{}",
+            ws.notification
+        );
+        // Regression: Esc then Ctrl+S in one read arrives as ESC ^S
+        // (Ctrl+Alt+S) and must still save, as before the Ctrl+Alt chords.
+        let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let save = KeyEvent::new(KeyCode::Char('s'), ctrl_alt);
+        assert_eq!(ws.shortcut(save).as_deref(), Some("save"));
+        // With the kitty protocol, Alt+digit is its own key again.
+        ws.set_keyboard_enhanced(true);
+        assert_eq!(ws.shortcut(save).as_deref(), Some("save"));
+        ws.handle(alt('1'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn panel_keys_toggle_focus_and_ex_commands_reach_the_host() {
         let dir = std::env::temp_dir().join(format!("embed-ws-unit-{}", std::process::id()));
@@ -3033,14 +3343,27 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("a.c"), "int a;\n").unwrap();
         let mut ws = Workspace::open(&dir, 120, 40).unwrap();
-        let alt = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
-        ws.handle(alt('2'));
+        ws.set_keyboard_enhanced(true);
+        // What crossterm decodes from kitty's `CSI 50;7u` (Ctrl+Alt+2).
+        let chord = |c| {
+            Event::Key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ))
+        };
+        ws.handle(chord('2'));
         assert_eq!(ws.focus(), Focus::Assistant);
-        ws.handle(alt('2'));
+        ws.handle(chord('2'));
         assert_eq!(ws.focus(), Focus::Editor);
-        ws.handle(alt('1'));
+        ws.handle(chord('1'));
         assert_eq!(ws.focus(), Focus::Explorer);
-        ws.handle(alt('1'));
+        ws.handle(chord('1'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        // With the kitty protocol Alt+digit is a distinct key and switches nothing.
+        ws.handle(Event::Key(KeyEvent::new(
+            KeyCode::Char('2'),
+            KeyModifiers::ALT,
+        )));
         assert_eq!(ws.focus(), Focus::Editor);
         for ch in ":e a.c".chars() {
             ws.handle(Event::Key(KeyEvent::new(

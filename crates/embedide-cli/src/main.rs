@@ -20,8 +20,11 @@ use std::{
     name = "embed",
     version,
     about = "EmbedIDE — engineering IDE for firmware, drivers, kernels and systems code",
-    long_about = "EmbedIDE terminal edition.\n\nRun `embed` (or `embed <directory>`) to open the full-screen, keyboard-driven IDE: \
-explorer (Alt+1), editor with Vim modes, AI assistant (Alt+2), interactive terminal (Alt+3), build output and diagnostics. \
+    long_about = "EmbedIDE terminal edition.\n\nRun `embed` to open the full-screen, keyboard-driven IDE in the current directory, \
+`embed <directory>` to open that directory, or `embed <file>` to open a file (a missing file in an existing directory \
+becomes a new buffer, written only on :w). The IDE has an explorer (Ctrl+Alt+1), editor with Vim modes and syntax \
+highlighting, AI assistant (Ctrl+Alt+2), interactive terminal (Ctrl+Alt+3), build output and diagnostics. \
+Subcommand names win over same-named files: use `embed ./build` for a file called build.\n\n\
 The subcommands below are for scripts and automation.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran, cross GCCs) and builds with exactly what you select. \
 It never installs toolchains, never flashes hardware and never starts a debugger on its own."
@@ -96,7 +99,8 @@ enum Commands {
         #[arg(long)]
         build_system: Option<BuildSystem>,
     },
-    /// Open the project TUI; --json or redirected I/O inspects metadata without execution.
+    /// Open the project TUI on a directory or file (`embed <path>` is the same);
+    /// --json or redirected I/O inspects metadata without execution.
     Open {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -248,15 +252,29 @@ fn execute(command: Commands, interactive: bool, out: &Out) -> CliResult<Execute
             false,
         ),
         Commands::Open { path } => {
+            let cwd = std::env::current_dir()
+                .map_err(|e| fail(format!("Cannot read the current directory: {e}")))?;
+            let launch = embedide_workspace::resolve_launch(&path, &cwd).map_err(|e| fail(e.0))?;
             if interactive {
-                embedide_terminal::tui::workspace::run(&path).map_err(|e| fail(e.to_string()))?;
-                (json!({"workspace": path, "closed": true}), 0, false)
+                embedide_terminal::tui::workspace::run_with(&launch.root, launch.file.as_ref())
+                    .map_err(|e| fail(e.to_string()))?;
+                (json!({"workspace": launch.root, "closed": true}), 0, false)
+            } else if let Some(embedide_workspace::LaunchFile::New(file)) = &launch.file {
+                // Usage error, like an unknown subcommand: scripts with a typo keep exit 2.
+                return Err(usage(format!(
+                    "{} does not exist and is not a subcommand (an interactive `embed {}` opens it as a new, unsaved file)",
+                    file.display(),
+                    path.display()
+                )));
             } else {
-                (
-                    serde_json::to_value(core::inspect(&path)?).unwrap_or_default(),
-                    0,
-                    false,
-                )
+                let mut value =
+                    serde_json::to_value(core::inspect(&launch.root)?).unwrap_or_default();
+                if let (Some(embedide_workspace::LaunchFile::Existing(file)), Some(map)) =
+                    (&launch.file, value.as_object_mut())
+                {
+                    map.insert("file".into(), json!(file));
+                }
+                (value, 0, false)
             }
         }
         Commands::Edit { path, batch, line } => {
@@ -389,9 +407,11 @@ fn main() -> ExitCode {
         }
         args.extend(["open".into(), ".".into()]);
     }
+    // `embed <path>`: a file or directory to open. Subcommand names and
+    // options keep their meaning; `embed ./build` opens a file named build.
     if args.len() == 2
         && !commands.iter().any(|name| args[1] == *name)
-        && std::path::Path::new(&args[1]).is_dir()
+        && !args[1].as_encoded_bytes().starts_with(b"-")
     {
         args.insert(1, "open".into());
     }

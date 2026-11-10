@@ -15,21 +15,23 @@ Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, R
 
 ```
 ┌ EmbedIDE 2.0 | build status | project | target | profile ────────────────────────────────┐
-│ EXPLORER (Alt+1) │ editor tabs, Vim modes (Normal/Insert/Visual/Command) │ AI (Alt+2)    │
+│ EXPLORER (C-A-1) │ editor tabs, Vim modes, syntax highlighting           │ AI (C-A-2)    │
 │                  │                                                        │ chat, context │
 │                  │                                                        │ edits, review │
-├ TERMINAL (Alt+3) — your shell in a real PTY │ BUILD OUTPUT │ PROBLEMS │ … (F4) ──────────┤
+├ TERMINAL (C-A-3) — your shell in a real PTY │ BUILD OUTPUT │ PROBLEMS │ … (F4) ──────────┤
 └ NORMAL | src/main.c | c | gcc | Ln 12, Col 5 | message ─────────────────────────────────┘
 ```
 
 ```sh
 cargo build --release --locked -p embedide-cli      # → target/release/embed
 install -m 755 target/release/embed ~/.local/bin/   # or: cargo install --path crates/embedide-cli
-cd my-project && embed                              # or: embed path/to/project
+cd my-project && embed                              # or: embed path/to/project, embed src/main.c
 ```
 
-Panels: **Alt+1** explorer, **Alt+2** AI assistant, **Alt+3** terminal (press again to return to the
-editor). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
+Panels: **Ctrl+Alt+1** explorer, **Ctrl+Alt+2** AI assistant, **Ctrl+Alt+3** terminal (press again to
+return to the editor); hold the digit and press Delete to hide a panel. These chords need a terminal with
+the kitty keyboard protocol; elsewhere **Alt+1/2/3** switch panels and `:hide_*` commands (or your own
+bindings) hide them — see [what terminals can report](docs/cli/tui.md#what-terminals-can-report). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
 command palette, `:help` lists every key. See [the TUI guide](docs/cli/tui.md).
 
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,

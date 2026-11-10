@@ -332,6 +332,7 @@ dependencies = [
  "embedide-editor",
  "embedide-toolchains",
  "embedide-workspace",
+ "nix 0.30.1",
  "portable-pty",
  "serde_json",
  "signal-hook",

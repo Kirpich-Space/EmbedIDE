@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = ["tui"]
-tui = ["dep:crossterm", "dep:unicode-segmentation", "dep:unicode-width", "dep:signal-hook", "dep:embedide-core", "dep:serde_json", "dep:portable-pty", "dep:vt100", "dep:embedide-build", "dep:embedide-workspace", "dep:embedide-toolchains", "dep:embedide-ai"]
+tui = ["dep:crossterm", "dep:unicode-segmentation", "dep:unicode-width", "dep:signal-hook", "dep:nix", "dep:embedide-core", "dep:serde_json", "dep:portable-pty", "dep:vt100", "dep:embedide-build", "dep:embedide-workspace", "dep:embedide-toolchains", "dep:embedide-ai"]
 
 [dependencies]
 embedide-editor.workspace = true
@@ -25,6 +25,7 @@ unicode-width = { version = "0.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = { version = "0.3", optional = true }
+nix = { version = "0.30", features = ["signal"], optional = true }
 
 [lints]
 workspace = true

@@ -1,6 +1,10 @@
 //! Terminal-only byte/grapheme/cell mapping; document coordinates remain bytes.
 use crate::FrontendError;
-use embedide_editor::{vim::SelectionKind, Editor, EditorState, Selection};
+use embedide_editor::{
+    syntax::{Highlight, Highlighter, Span},
+    vim::SelectionKind,
+    Editor, EditorState, Selection,
+};
 use std::{collections::VecDeque, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -16,6 +20,28 @@ pub struct Run {
     pub text: String,
     /// Whether the run should use inverse video.
     pub selected: bool,
+    /// Syntax category (never set on selected runs: selection stays uniform).
+    pub style: Option<Highlight>,
+    /// Colours and attributes a program running in the integrated terminal
+    /// asked for (never set on editor text).
+    pub cell: Option<CellStyle>,
+}
+
+/// SGR state of terminal-panel output. `None` colours keep the theme's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CellStyle {
+    /// Foreground colour.
+    pub fg: Option<crossterm::style::Color>,
+    /// Background colour.
+    pub bg: Option<crossterm::style::Color>,
+    /// Bold.
+    pub bold: bool,
+    /// Italic.
+    pub italic: bool,
+    /// Underlined.
+    pub underline: bool,
+    /// Inverse video (selection bars in `less`, `fzf`, `htop`, …).
+    pub inverse: bool,
 }
 
 /// A bounded screen row. Rows never contain source control characters.
@@ -26,16 +52,37 @@ pub struct Row {
 }
 impl Row {
     pub(crate) fn push(&mut self, text: &str, selected: bool) {
+        self.push_styled(text, selected, None);
+    }
+    pub(crate) fn push_styled(&mut self, text: &str, selected: bool, style: Option<Highlight>) {
+        self.push_attrs(text, selected, style, None);
+    }
+    /// Append text with every attribute a run can carry, merging with the
+    /// previous run when they are identical.
+    pub(crate) fn push_attrs(
+        &mut self,
+        text: &str,
+        selected: bool,
+        style: Option<Highlight>,
+        cell: Option<CellStyle>,
+    ) {
+        let (style, cell) = if selected {
+            (None, None)
+        } else {
+            (style, cell)
+        };
         if let Some(last) = self
             .runs
             .last_mut()
-            .filter(|last| last.selected == selected)
+            .filter(|last| last.selected == selected && last.style == style && last.cell == cell)
         {
             last.text.push_str(text);
         } else if !text.is_empty() {
             self.runs.push(Run {
                 text: text.into(),
                 selected,
+                style,
+                cell,
             });
         }
     }
@@ -61,7 +108,7 @@ enum Layout {
     },
 }
 
-fn unsafe_char(ch: char) -> bool {
+pub(crate) fn unsafe_char(ch: char) -> bool {
     ch.is_control()
         || matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
@@ -176,8 +223,20 @@ impl Layout {
         left: usize,
         width: usize,
         selection: Option<Selection>,
+        spans: &[Span],
         row: &mut Row,
     ) -> Result<(), FrontendError> {
+        // Tokens arrive in byte order, so one forward cursor finds each style.
+        let mut next_span = 0;
+        let mut style_at = |byte: usize| {
+            while spans.get(next_span).is_some_and(|s| s.range.end <= byte) {
+                next_span += 1;
+            }
+            spans
+                .get(next_span)
+                .filter(|s| s.range.start <= byte)
+                .map(|s| s.kind)
+        };
         let selected = |range: &Range<usize>| {
             selection.is_some_and(|s| {
                 let low = s.anchor.min(s.head);
@@ -206,10 +265,11 @@ impl Layout {
             } else {
                 selected(range)
             };
+            let style = style_at(range.start);
             if start == column && end == column + cells {
-                row.push(text, highlight);
+                row.push_styled(text, highlight, style);
             } else {
-                row.push(&" ".repeat(end - start), highlight);
+                row.push_styled(&" ".repeat(end - start), highlight, style);
             }
         };
         match self {
@@ -273,8 +333,13 @@ pub struct Viewport {
     cache: VecDeque<CachedLine>,
     cache_bytes: usize,
     tab_width: usize,
+    highlighter: Highlighter,
 }
 impl Viewport {
+    /// Syntax language detected for the document shown in this viewport.
+    pub fn language(&self) -> embedide_editor::syntax::Language {
+        self.highlighter.language()
+    }
     /// Configure tab rendering and invalidate cached line layouts.
     pub fn set_tab_width(&mut self, width: usize) {
         let width = width.clamp(1, 16);
@@ -393,11 +458,13 @@ pub fn compose(
             if gutter > 0 {
                 painted.push(&format!(" {:>digits$} ", row + 1), false);
             }
+            let spans = view.highlighter.spans(state, row);
             view.line(state, row)?.paint(
                 state,
                 left,
                 text_width,
                 state.selection(),
+                &spans,
                 &mut painted,
             )?;
         } else if width > 0 {
@@ -441,7 +508,7 @@ pub fn compose(
             let (end, _) = layout.cursor(state, text.len())?;
             let scroll = end.saturating_sub(width.saturating_sub(1));
             let mut row = Row::default();
-            layout.paint(state, scroll, width, None, &mut row)?;
+            layout.paint(state, scroll, width, None, &[], &mut row)?;
             rows.push(row);
             cursor =
                 (width > 0).then_some((end.saturating_sub(scroll) as u16, (height - 1) as u16));

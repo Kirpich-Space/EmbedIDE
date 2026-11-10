@@ -351,3 +351,32 @@ fn directory_shorthand_inspects_project_without_terminal_or_execution() {
         json!(["cargo"])
     );
 }
+
+#[test]
+fn positional_files_open_without_a_manifest_and_keep_subcommands() {
+    let f = Fixture::new();
+    f.write("Cargo.toml", "[package]\nname='fixture'\nversion='0.1.0'\n");
+    for name in ["main.c", "file with spaces.cpp", "файл.rs"] {
+        f.write(name, "int x;\n");
+        let out = f.cli(&[name]);
+        assert!(out.status.success(), "{name}: {out:?}");
+        let data = &json_output(&out)["data"];
+        assert!(
+            data["file"].as_str().is_some_and(|p| p.ends_with(name)),
+            "{data}"
+        );
+        assert_eq!(fs::read_to_string(f.0.join(name)).unwrap(), "int x;\n");
+    }
+    // A missing file is never created by a non-interactive launch.
+    let missing = f.cli(&["new.c"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("new, unsaved file"));
+    assert!(!f.0.join("new.c").exists());
+    let parent = f.cli(&["no/such/dir/x.c"]);
+    assert_eq!(parent.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&parent.stderr).contains("parent directory"));
+    // Subcommands and options keep their meaning.
+    for args in [vec!["--help"], vec!["--version"], vec!["doctor", "--json"]] {
+        assert!(f.cli(&args).status.success(), "{args:?}");
+    }
+}

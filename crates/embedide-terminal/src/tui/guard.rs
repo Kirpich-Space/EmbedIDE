@@ -1,7 +1,10 @@
 //! RAII terminal ownership; cleanup paths do not depend on editor success.
 use crossterm::{
     cursor::{SetCursorStyle, Show},
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     style::{Attribute, SetAttribute},
     terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen},
@@ -17,16 +20,22 @@ use std::{
 pub(super) struct TerminalGuard {
     raw: bool,
     screen: bool,
+    keyboard: bool,
     interrupted: Arc<AtomicBool>,
     resized: Arc<AtomicBool>,
     #[cfg(unix)]
     signals: Vec<signal_hook::SigId>,
 }
 impl TerminalGuard {
-    pub fn enter() -> io::Result<Self> {
+    /// Take over the terminal. With `enhanced_keys`, terminals that implement the
+    /// kitty keyboard protocol (answering `CSI ? u`) are asked to disambiguate
+    /// modified keys and report press/repeat/release, which is what makes
+    /// Ctrl+Alt+digit and held-key chords distinguishable at all.
+    pub fn enter(enhanced_keys: bool) -> io::Result<Self> {
         let mut guard = Self {
             raw: false,
             screen: false,
+            keyboard: false,
             interrupted: Arc::new(AtomicBool::new(false)),
             resized: Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]
@@ -58,7 +67,24 @@ impl TerminalGuard {
             EnableBracketedPaste,
             DisableLineWrap
         )?;
+        if enhanced_keys
+            && std::env::var_os("EMBEDIDE_KEYBOARD").is_none_or(|v| v != "legacy")
+            && terminal::supports_keyboard_enhancement().unwrap_or(false)
+        {
+            guard.keyboard = true;
+            execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            )?;
+        }
         Ok(guard)
+    }
+    /// Whether the kitty keyboard protocol (with event types) is active.
+    pub fn keyboard_enhanced(&self) -> bool {
+        self.keyboard
     }
     pub fn interrupted(&self) -> bool {
         self.interrupted.load(Ordering::Relaxed)
@@ -69,6 +95,9 @@ impl TerminalGuard {
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.keyboard {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
         if self.screen {
             // Output failure must never prevent attempting raw-mode restoration.
             let _ = execute!(

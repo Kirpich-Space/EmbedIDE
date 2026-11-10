@@ -2,10 +2,19 @@
 """End-to-end PTY tests for the `embed` terminal IDE.
 
 Drives the real binary through a private pseudo-terminal with keyboard input
-only: explorer / AI / terminal panels (Alt+1/2/3), Vim editing and saving,
-builds with a configured compiler, diagnostics jump, cancellation, the
-interactive shell and the AI panel against a local mock HTTP server. No real
-AI provider is contacted, nothing is flashed, no GUI or Node.js is used.
+only. The driver plays the outer terminal: in "kitty" mode it answers the
+kitty keyboard protocol query and sends exactly the bytes kitty sends
+(Ctrl+Alt+1 = CSI 49;7u, release = CSI 49;7:3u, Ctrl+Alt+Delete = CSI 3;7~,
+Esc = CSI 27u, Ctrl+C = CSI 99;5u); in "legacy" mode it answers only Primary
+Device Attributes and sends classic xterm bytes.
+
+Covered: explorer / AI / terminal panels (Ctrl+Alt+1/2/3) and the held-digit
++Delete hide chords, the interactive shell (sh, bash and fish when installed)
+with real commands, Ctrl+C, session preservation, PTY resize and cleanup,
+`embed <file|dir>` launches, syntax colours, Vim editing and saving, builds
+with a configured compiler, diagnostics jump, cancellation, and the AI panel
+against a local mock HTTP server. No real AI provider is contacted, nothing is
+flashed, no GUI or Node.js is used.
 
     python3 scripts/check-embed-pty.py --binary target/debug/embed
 """
@@ -19,6 +28,7 @@ from pathlib import Path
 import pty
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -31,23 +41,82 @@ spec = importlib.util.spec_from_file_location("line_pty", Path(__file__).with_na
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
 
-ALT_1, ALT_2, ALT_3 = b"\x1b1", b"\x1b2", b"\x1b3"
 F3, F5, F8 = b"\x1bOR", b"\x1b[15~", b"\x1b[19~"
-CTRL_P, CTRL_Q = b"\x10", b"\x11"
+KEYBOARD_QUERY = b"\x1b[?u"          # crossterm: kitty flags query (followed by DA1)
+KITTY_PUSH, KITTY_POP = b"\x1b[>3u", b"\x1b[<1u"  # disambiguate | report event types
+
+
+def chord(digit, kind=1):
+    """kitty: Ctrl+Alt+<digit> press (1), repeat (2) or release (3)."""
+    return f"\x1b[{ord(digit)};7{'' if kind == 1 else ':' + str(kind)}u".encode()
+
+
+CTRL_ALT_DELETE = b"\x1b[3;7~"
+CTRL_ALT_DELETE_RELEASE = b"\x1b[3;7:3~"
 
 
 class Ide(driver.Terminal):
-    """`embed` started with no arguments in `cwd`, like a user would."""
+    """`embed [args]` started in `cwd`, like a user would, behind a terminal
+    that speaks the kitty keyboard protocol (or only legacy xterm input)."""
 
-    def __init__(self, cwd, env, size=(40, 120)):
+    def __init__(self, cwd, env, size=(40, 120), args=(), keyboard="kitty"):
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
         self.before = termios.tcgetattr(self.slave)
         self.output = bytearray()
         self.offset = 0
-        self.process = subprocess.Popen([str(driver.BINARY)], cwd=cwd, env=env,
+        self.keyboard = keyboard
+        self.answered = 0
+        self.process = subprocess.Popen([str(driver.BINARY), *map(str, args)], cwd=cwd, env=env,
                                         stdin=self.slave, stdout=self.slave, stderr=self.slave,
                                         start_new_session=True)
+
+    def pump(self, timeout):
+        super().pump(timeout)
+        # Answer the keyboard capability query exactly once, as the terminal would.
+        while self.output.count(KEYBOARD_QUERY) > self.answered:
+            self.answered += 1
+            reply = b"\x1b[?0u" if self.keyboard == "kitty" else b""
+            self.send(reply + b"\x1b[?62;22c")
+
+    # Key encodings of the emulated terminal.
+    @property
+    def esc(self):
+        return b"\x1b[27u" if self.keyboard == "kitty" else b"\x1b"
+
+    def ctrl(self, letter):
+        if self.keyboard == "kitty":
+            return f"\x1b[{ord(letter)};5u".encode()
+        return bytes([ord(letter) - ord("a") + 1])
+
+    def panel(self, digit):
+        """Tap Ctrl+Alt+<digit>: press then release."""
+        self.keys(chord(digit), chord(digit, 3))
+
+    def hide(self, digit):
+        """Hold Ctrl+Alt+<digit>, press Delete, release both."""
+        self.keys(chord(digit), chord(digit, 2), CTRL_ALT_DELETE, CTRL_ALT_DELETE_RELEASE, chord(digit, 3))
+
+    def type(self, text):
+        for ch in text:
+            self.keys(ch.encode())
+
+    def resize(self, rows, cols):
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        os.killpg(self.process.pid, signal.SIGWINCH)
+
+    def latest(self, pattern, timeout=15):
+        """Wait for a regex in new output and return its match."""
+        deadline = time.monotonic() + timeout
+        regex = re.compile(pattern)
+        while True:
+            match = regex.search(bytes(self.output), self.offset)
+            if match:
+                self.offset = match.end()
+                return match
+            if self.process.poll() is not None or time.monotonic() >= deadline:
+                raise AssertionError(f"missing {pattern!r}; screen:\n{self.screen()}")
+            self.pump(0.05)
 
     def until(self, marker, timeout=15):
         deadline = time.monotonic() + timeout
@@ -154,24 +223,29 @@ class EmbedContracts(unittest.TestCase):
             '[toolchain]\nc = "gcc"\n[profiles.debug]\nflags = ["-O0", "-g"]\n'
             f'[profiles.release]\nflags = ["-O2"]\n{extra}')
 
-    def ide(self, size=(40, 120)):
-        ide = Ide(self.root, self.env, size)
+    def ide(self, size=(40, 120), args=(), keyboard="kitty", cwd=None):
+        ide = Ide(cwd or self.root, self.env, size, args, keyboard)
         self.addCleanup(ide.close)
         ide.until(b"EmbedIDE 2.0")
+        if keyboard == "kitty":
+            self.assertIn(KITTY_PUSH, ide.output, "kitty keyboard flags were not requested")
+        else:
+            self.assertNotIn(KITTY_PUSH, ide.output)
         return ide
 
     def open_file(self, ide, name):
-        ide.keys(b"\x1b")  # the IDE starts in the explorer; Esc focuses the editor
-        for ch in f":e {name}":
-            ide.keys(ch.encode())
+        ide.keys(ide.esc)  # the IDE starts in the explorer; Esc focuses the editor
+        ide.type(f":e {name}")
         ide.keys(b"\r")
         ide.until(b"NORMAL | " + name.encode())
 
     def quit(self, ide):
-        ide.keys(CTRL_Q)
+        ide.keys(ide.ctrl("q"))
         self.assertEqual(ide.finish(), 0, bytes(ide.output[-2000:]))
         for sequence in (b"\x1b[?25h", b"\x1b[?1049l"):
             self.assertIn(sequence, ide.output)
+        if ide.keyboard == "kitty":
+            self.assertIn(KITTY_POP, ide.output, "kitty keyboard flags were not restored")
 
     def test_no_arguments_open_the_ide_and_vim_editing_saves_a_real_file(self):
         ide = self.ide()
@@ -181,7 +255,7 @@ class EmbedContracts(unittest.TestCase):
         ide.until(b"Ln 2, Col 2")
         ide.keys(b"i")
         ide.until(b"INSERT | notes.txt")
-        ide.keys("猫".encode(), b"\x1b")
+        ide.keys("猫".encode(), ide.esc)
         ide.until(b"NORMAL | notes.txt [+]")
         ide.keys(b":", b"w", b"\r")
         ide.until(b"Saved")
@@ -189,33 +263,33 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(b":", b"q", b"\r")  # last document: :q leaves the IDE
         self.assertEqual(ide.finish(), 0)
 
-    def test_alt_keys_switch_explorer_assistant_and_terminal(self):
+    def test_ctrl_alt_keys_switch_explorer_assistant_and_terminal(self):
         ide = self.ide()
-        ide.keys(ALT_2)
+        ide.panel("2")
         ide.until(b"ASSISTANT \xc2\xb7 NORMAL")
-        ide.keys(ALT_2)  # again: back to the editor
+        ide.panel("2")  # again: back to the editor
         ide.until(b"\x1b[49mNORMAL | [untitled]")
-        ide.keys(ALT_1)
+        ide.panel("1")
         ide.until(b"> EXPLORER")
         ide.until(b"EXPLORER \xc2\xb7 NORMAL")
         # Explorer: src/ is first; expand it and open main.c with j/Enter.
         ide.keys(b"\r", b"j", b"\r")
         ide.until(b"NORMAL | src/main.c")
         ide.until(b"| c | no embedide.toml")
-        ide.keys(ALT_3)
+        ide.panel("3")
         ide.until(b"> TERMINAL")
         ide.keys(b"echo marker-$((6*7)) && printf shell > made-by-shell.txt\r")
         ide.until(b"marker-42")
         self.assertEqual((self.root / "made-by-shell.txt").read_text(), "shell")
         # Ctrl+C and Esc belong to the shell, not to the IDE.
-        ide.keys(b"sleep 30\r", b"\x03")
+        ide.keys(b"sleep 30\r", ide.ctrl("c"))
         ide.keys(b"echo still-$((1+1))\r")
         ide.until(b"still-2")
-        ide.keys(b"cat -v\r", b"\x1b", b"\r", b"\x04")  # Esc reaches the program, Ctrl+D ends it
+        ide.keys(b"cat -v\r", ide.esc, b"\r", ide.ctrl("d"))  # Esc reaches the program, Ctrl+D ends it
         ide.until(b"^[")
         ide.keys(b"echo after-$((2*2))cat\r")
         ide.until(b"after-4cat")
-        ide.keys(ALT_3)
+        ide.panel("3")
         ide.until(b"NORMAL | src/main.c")
         self.quit(ide)
 
@@ -273,7 +347,7 @@ class EmbedContracts(unittest.TestCase):
         self.env["OPENAI_API_KEY"] = "sk-test-only"
         ide = self.ide()
         self.open_file(ide, "src/main.c")
-        ide.keys(ALT_2)
+        ide.panel("2")
         ide.until(b"openai/mock-model")
         self.assertEqual(MockProvider.requests, [], "nothing may be sent before Enter")
         for ch in "/file":
@@ -299,7 +373,7 @@ class EmbedContracts(unittest.TestCase):
             ide.keys(ch.encode())
         ide.keys(b"\r")
         ide.until(b"AI edit applied")
-        ide.keys(ALT_2)
+        ide.panel("2")
         ide.until(b"NORMAL | src/main.c [+]")
         ide.keys(b":", b"w", b"\r")
         ide.until(b"Saved")
@@ -308,7 +382,7 @@ class EmbedContracts(unittest.TestCase):
         # Inline completion: explicit request, ghost text, Tab accepts.
         ide.keys(b"G", b"o")
         ide.until(b"INSERT | src/main.c")
-        ide.keys(b"\x1b")
+        ide.keys(ide.esc)
         for ch in ":complete":
             ide.keys(ch.encode())
         ide.keys(b"\r")
@@ -322,14 +396,14 @@ class EmbedContracts(unittest.TestCase):
         self.assertIn("return 42;", (self.root / "src" / "main.c").read_text())
         self.assertEqual(len(MockProvider.requests), 3)
         # Reject path: a new suggestion dismissed with Esc changes nothing.
-        ide.keys(b"o", b"\x1b", b":", b"w", b"\r")
+        ide.keys(b"o", ide.esc, b":", b"w", b"\r")
         ide.until(b"Saved")
         before = (self.root / "src" / "main.c").read_text()
         for ch in ":complete":
             ide.keys(ch.encode())
         ide.keys(b"\r")
         ide.until(b"Tab accepts, Esc rejects")
-        ide.keys(b"\x1b")
+        ide.keys(ide.esc)
         ide.until(b"Suggestion rejected")
         ide.keys(b":", b"w", b"\r")
         self.quit(ide)
@@ -338,13 +412,13 @@ class EmbedContracts(unittest.TestCase):
     def test_ide_works_offline_without_ai_configuration(self):
         self.env["EMBEDIDE_AI_OFFLINE"] = "1"
         ide = self.ide()
-        ide.keys(ALT_2)
+        ide.panel("2")
         ide.until(b"no provider")
         for ch in "hello":
             ide.keys(ch.encode())
         ide.keys(b"\r")
         ide.until(b"No provider")
-        ide.keys(b"\x1b")
+        ide.keys(ide.esc)
         self.open_file(ide, "notes.txt")
         ide.keys(b"d", b"d", b":", b"w", b"\r")
         ide.until(b"Saved")
@@ -353,24 +427,24 @@ class EmbedContracts(unittest.TestCase):
 
     def test_narrow_terminal_keeps_panels_reachable(self):
         ide = self.ide(size=(24, 80))
-        ide.keys(ALT_2)  # AI panel overlays the editor below 100 columns
+        ide.panel("2")  # AI panel overlays the editor below 100 columns
         ide.until(b"> AI \xc2\xb7 no provider")
-        ide.keys(ALT_3)
+        ide.panel("3")
         ide.until(b"> TERMINAL")
         ide.keys(b"echo narrow-$((2+3))\r")
         ide.until(b"narrow-5")
-        ide.keys(ALT_1)
+        ide.panel("1")
         ide.until(b"> EXPLORER")
         self.quit(ide)
 
     def test_command_mode_runs_ide_commands(self):
         ide = self.ide()
-        ide.keys(b"\x1b")
+        ide.keys(ide.esc)
         for ch in ":help":
             ide.keys(ch.encode())
         ide.keys(b"\r")
-        ide.until(b"Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal")
-        ide.keys(b"\x1b")
+        ide.until(b"Ctrl+Alt+1 explorer | Ctrl+Alt+2 AI assistant | Ctrl+Alt+3 terminal")
+        ide.keys(ide.esc)
         for ch in ":e notes.txt":
             ide.keys(ch.encode())
         ide.keys(b"\r")
@@ -381,6 +455,270 @@ class EmbedContracts(unittest.TestCase):
         ide.until(b"Unknown command :nonsense")
         self.quit(ide)
 
+
+    # --- Integrated terminal: the real shell inside the real IDE -------------
+
+    def shell_session(self, shell):
+        """Steps 1-12 of the alpha terminal contract for one shell."""
+        path = shutil.which(shell)
+        if not path:
+            self.skipTest(f"{shell} not installed")
+        self.env["SHELL"] = path
+        if shell == "fish":
+            # Isolated fish config/history; fish still runs its startup queries.
+            self.env["XDG_CONFIG_HOME"] = str(self.config / "xdg-config")
+            self.env["XDG_DATA_HOME"] = str(self.config / "xdg-data")
+        assign = "set x 42" if shell == "fish" else "x=42"
+        marker = f"{shell}-{os.getpid()}"
+        ide = self.ide()
+        ide.keys(ide.esc)
+        # 2-3. open the terminal panel and wait for the interactive prompt
+        ide.panel("3")
+        ide.until(b"> TERMINAL | " + path.encode())
+        # 4-5. a unique command whose output differs from its echo
+        ide.type("printf 'EMBED_%s_OK\\n' TERMINAL\r")
+        ide.until(b"EMBED_TERMINAL_OK", timeout=20)
+        pid_var = "$fish_pid" if shell == "fish" else "$$"
+        ide.type(f"printf 'PID_%s_PID\\n' {pid_var}\r")
+        pid = ide.latest(rb"PID_(\d+)_PID").group(1)
+        ide.type(f"{assign}\r")
+        ide.type("echo 'to stderr' 1>&2; printf 'ERR_%s\\n' SEEN\r")
+        ide.until(b"ERR_SEEN")
+        self.assertIn(b"to stderr", ide.output)
+        # 6-7. switch to other panels and come back to the same session
+        ide.panel("1")
+        ide.until(b"> EXPLORER")
+        ide.panel("2")
+        ide.until(b"ASSISTANT \xc2\xb7 NORMAL")
+        ide.panel("3")
+        ide.until(b"> TERMINAL")
+        # 8-9. the same shell: same PID and the variable set before switching
+        ide.type(f"printf 'PID_%s_PID X_%s_X\\n' {pid_var} $x\r")
+        again = ide.latest(rb"PID_(\d+)_PID X_(\w*)_X")
+        self.assertEqual(again.group(1), pid, "a new shell was started")
+        self.assertEqual(again.group(2), b"42", "shell state was lost")
+        # 10. Ctrl+C (as the outer terminal encodes it) interrupts the foreground job
+        ide.type("sleep 30\r")
+        time.sleep(0.5)
+        started = time.monotonic()
+        ide.keys(ide.ctrl("c"))
+        ide.type("printf 'AFTER_%s\\n' INT\r")
+        ide.until(b"AFTER_INT", timeout=10)
+        self.assertLess(time.monotonic() - started, 8, "Ctrl+C did not interrupt sleep")
+        # 11. resizing the IDE resizes the shell's PTY (panel rows x width)
+        ide.type("stty size | sed 's/^/SIZE_/'\r")
+        ide.latest(rb"SIZE_17 119")
+        ide.resize(30, 100)
+        time.sleep(0.3)
+        ide.type("stty size | sed 's/^/SIZE_/'\r")
+        ide.latest(rb"SIZE_12 99")
+        # 12. leave a foreground and a background job running, then quit
+        ide.type(f"sleep 4242{len(marker)} &\r")
+        ide.type(f"sleep 4343{len(marker)}\r")
+        time.sleep(0.5)
+        ide.panel("3")  # back to the editor; the shell keeps running
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        self.quit(ide)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            alive = subprocess.run(["pgrep", "-f", f"sleep 4[23]4[23]{len(marker)}"], capture_output=True).stdout
+            if not alive:
+                break
+            time.sleep(0.1)
+        self.assertEqual(alive, b"", f"{shell}: child processes survived the IDE")
+        self.assertEqual(subprocess.run(["ps", "-p", pid.decode()], capture_output=True).returncode, 1,
+                         "the shell survived the IDE")
+
+    def test_terminal_session_with_sh(self):
+        self.shell_session("sh")
+
+    def test_terminal_session_with_bash(self):
+        self.shell_session("bash")
+
+    def test_terminal_session_with_fish(self):
+        # fish 4 blocks on terminal queries (DA1, cursor position) before every
+        # prompt; this is the configuration the integrated terminal failed with.
+        self.shell_session("fish")
+
+    def test_terminal_keeps_shell_colours_and_inverse_video(self):
+        self.env["SHELL"] = "/bin/sh"
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("3")
+        ide.until(b"> TERMINAL | /bin/sh")
+        # The echoed command line has no SGR; only the output is red/inverse.
+        ide.type("printf '\\033[31mRED_%s\\033[0m \\033[7mINV_%s\\033[0m\\n' OK OK\r")
+        ide.latest(rb"\x1b\[38;5;1m(?:\x1b\[[0-9;]*m)*RED_OK")
+        ide.latest(rb"\x1b\[7m(?:\x1b\[[0-9;]*m)*INV_OK")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.panel("3")
+        self.quit(ide)
+
+    # --- Panel chords ---------------------------------------------------------
+
+    def test_held_digit_delete_hides_panels_and_reopening_restores_state(self):
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("2")
+        ide.until(b"ASSISTANT \xc2\xb7 NORMAL")
+        ide.type("unsent draft")
+        ide.hide("2")
+        ide.until(b"AI panel hidden, chat kept")
+        ide.panel("2")
+        ide.until(b"> unsent draft")
+        ide.keys(ide.esc)
+        ide.panel("3")
+        ide.until(b"> TERMINAL")
+        ide.type("printf 'KEEP_%s\\n' ME\r")
+        ide.until(b"KEEP_ME")
+        ide.type("printf 'PID_%s_PID\\n' $$\r")
+        pid = ide.latest(rb"PID_(\d+)_PID").group(1)
+        ide.hide("3")
+        ide.until(b"Terminal hidden, shell running")
+        ide.panel("3")
+        ide.until(b"KEEP_ME")  # previous output is restored with the session
+        ide.type("printf 'PID_%s_PID\\n' $$\r")
+        self.assertEqual(ide.latest(rb"PID_(\d+)_PID").group(1), pid)
+        ide.panel("3")
+        ide.hide("1")
+        ide.until(b"Explorer hidden")
+        # Separate presses (released digit, then Ctrl+Alt+Delete) never hide.
+        ide.panel("1")
+        ide.until(b"> EXPLORER")
+        ide.keys(CTRL_ALT_DELETE, CTRL_ALT_DELETE_RELEASE)
+        time.sleep(0.3)
+        self.assertNotIn(b"CONFIRM", ide.output[ide.offset:], "Ctrl+Alt+Delete opened the delete prompt")
+        ide.keys(ide.esc)
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.pump(0.3)
+        self.assertIn("notes.txt", ide.screen(), "the explorer was hidden by separate presses")
+        self.quit(ide)
+
+    def test_legacy_terminal_switches_panels_with_alt_digits(self):
+        ide = self.ide(keyboard="legacy")
+        ide.keys(ide.esc)
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        # A legacy terminal sends ESC 1 for both Alt+1 and Ctrl+Alt+1: that is
+        # the fallback for the chord it cannot report.
+        ide.keys(b"\x1b1")
+        ide.until(b"> EXPLORER")
+        ide.keys(b"\x1b1")
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.keys(b"\x1b3")
+        ide.until(b"> TERMINAL")
+        ide.until(b"Alt+3 back to editor")
+        ide.type("printf 'LEGACY_%s\\n' OK\r")
+        ide.until(b"LEGACY_OK")
+        ide.keys(b"\x1b3")
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        # The command fallback hides panels everywhere; the shell keeps running.
+        ide.type(":hide_terminal\r")
+        ide.until(b"Terminal hidden, shell running (Alt+3")
+        ide.keys(b"\x1b3")
+        ide.until(b"> TERMINAL")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.keys(ide.esc)
+        ide.keys(ide.ctrl("q"))
+        self.assertEqual(ide.finish(), 0)
+
+    # --- Editor state across panels, save and reopen ----------------------------
+
+    def test_unsaved_edits_survive_panel_switching_then_save_and_reopen(self):
+        (self.root / "main.c").write_text("int main(void) {\n    return 0;\n}\n")
+        ide = self.ide(args=["main.c"])
+        ide.until(b"NORMAL | main.c | c |")
+        ide.keys(b"O")
+        ide.type("// edited")
+        ide.keys(ide.esc)
+        ide.until(b"NORMAL | main.c [+]")
+        for digit, marker in (("1", b"> EXPLORER"), ("2", b"ASSISTANT \xc2\xb7"), ("3", b"> TERMINAL")):
+            ide.panel(digit)
+            ide.until(marker)
+        ide.type("printf 'RAN_%s\\n' CMD\r")
+        ide.until(b"RAN_CMD")
+        for digit in "123":
+            ide.hide(digit)
+        # Hiding panels never closes documents or drops unsaved changes.
+        ide.latest(rb"NORMAL \| main\.c \[\+\][^\x1b]*Terminal hidden")
+        self.assertEqual((self.root / "main.c").read_text(), "int main(void) {\n    return 0;\n}\n")
+        # Quitting with unsaved changes asks first; cancelling keeps the edit.
+        ide.keys(ide.ctrl("q"))
+        ide.until(b"Discard ALL unsaved documents")
+        ide.keys(b"n")
+        ide.until(b"NORMAL | main.c [+]")
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.quit(ide)
+        self.assertEqual((self.root / "main.c").read_text(),
+                         "// edited\nint main(void) {\n    return 0;\n}\n")
+        ide = self.ide(args=["main.c"])
+        ide.until(b"// edited")
+        ide.until(b"NORMAL | main.c | c |")
+        self.quit(ide)
+
+    # --- embed <path> -------------------------------------------------------------
+
+    def test_positional_files_directories_and_new_files(self):
+        names = ["file with spaces.cpp", "файл ядра.c"]
+        for name in names:
+            (self.root / name).write_text("int x;\n")
+        for name in names:
+            ide = self.ide(args=[name])
+            ide.until(f"NORMAL | {name}".encode())
+            self.quit(ide)
+            self.assertEqual((self.root / name).read_text(), "int x;\n", "opening modified a file")
+        outside = Path(self.directory.name) / "elsewhere" / "kernel"
+        outside.mkdir(parents=True)
+        (outside / "main.c").write_text("int k;\n")
+        ide = self.ide(args=[outside / "main.c"])  # absolute path outside cwd
+        ide.until(b"| kernel |")  # workspace = the file's directory
+        ide.until(b"NORMAL | main.c")
+        self.quit(ide)
+        project = self.root / "my-project"
+        project.mkdir()
+        (project / "only-here.txt").write_text("x\n")
+        ide = self.ide(args=["./my-project/"])
+        ide.until(b"| my-project |")
+        ide.until(b"only-here.txt")
+        self.quit(ide)
+        # A missing file in an existing directory becomes a new buffer, written on :w.
+        ide = self.ide(args=["new.rs"])
+        ide.until(b"New file")
+        self.assertFalse((self.root / "new.rs").exists())
+        ide.keys(b"i")
+        ide.type("fn main() {}")
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.quit(ide)
+        self.assertEqual((self.root / "new.rs").read_text(), "fn main() {}")
+        # A missing parent directory is reported before the TUI starts.
+        failed = subprocess.run([str(driver.BINARY), "no/such/dir/x.c"], cwd=self.root, env=self.env,
+                                capture_output=True, text=True)
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("parent directory", failed.stderr)
+
+    def test_launch_sh_is_highlighted_not_plain(self):
+        (self.root / "launch.sh").write_text(
+            '#!/usr/bin/env bash\n# build\nset -e\nDIR="${1:-build}"\n'
+            'if [[ -d "$DIR" ]]; then\n    echo "in $DIR" >&2\nfi\nexit 0\n')
+        self.env["COLORTERM"] = "truecolor"
+        ide = self.ide(args=["launch.sh"])
+        ide.until(b"NORMAL | launch.sh | shell |")
+        colours = set(re.findall(rb"\x1b\[38;2;(\d+;\d+;\d+)m", bytes(ide.output)))
+        self.assertGreaterEqual(len(colours), 6, colours)
+        # Editing and saving still work with highlighting on.
+        ide.keys(b"G", b"o")
+        ide.type("echo done")
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.quit(ide)
+        saved = (self.root / "launch.sh").read_text()
+        self.assertIn("exit 0\n", saved)
+        self.assertIn("echo done", saved)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

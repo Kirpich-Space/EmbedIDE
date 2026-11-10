@@ -19,3 +19,4 @@ build/bootstrap/
 # Native local machine settings and generated build output
 embedide.local.json
 .embedide-build/
+__pycache__/

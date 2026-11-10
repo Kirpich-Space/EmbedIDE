@@ -17,6 +17,7 @@ pub mod file;
 mod motion;
 mod search;
 mod session;
+pub mod syntax;
 pub mod vim;
 
 pub use document::{EditorError, EditorState, Position, Register, Selection};

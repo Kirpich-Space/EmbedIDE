@@ -7,10 +7,12 @@
 //! edits rewrite only the file being configured, atomically.
 
 pub mod config;
+pub mod launch;
 pub mod manifest;
 pub mod templates;
 
 pub use config::{config_dir, ConfigFile, UserConfig};
+pub use launch::{resolve_launch, Launch, LaunchFile};
 pub use manifest::{BuildKind, Manifest, Profile, MANIFEST_FILE};
 
 use std::fmt;

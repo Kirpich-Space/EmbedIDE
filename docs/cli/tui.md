@@ -1,7 +1,9 @@
 # `embed` — the terminal IDE
 
 `embed` (no arguments) opens the IDE on the current directory; `embed <directory>` opens another
-project. It needs an interactive terminal (`TERM` other than `dumb`); no GUI, Electron or Node.js.
+project; `embed <file>` opens that file (in the nearest directory with `embedide.toml`, or the current
+directory when the file is inside it). A missing file in an existing directory becomes a new buffer that
+is written only on `:w`. Subcommand names win over same-named files: use `embed ./build`. It needs an interactive terminal (`TERM` other than `dumb`); no GUI, Electron or Node.js.
 
 ```
 EmbedIDE 2.0 | Ready | project | target | profile              ← build status, project, target, profile
@@ -36,9 +38,10 @@ Global (work in every panel except where noted):
 
 | Key | Action |
 |---|---|
-| **Alt+1** | Explorer — press again to return to the editor |
-| **Alt+2** | AI assistant — press again to return to the editor |
-| **Alt+3** | Terminal — press again to return to the editor |
+| **Ctrl+Alt+1** | Explorer — press again to return to the editor |
+| **Ctrl+Alt+2** | AI assistant — press again to return to the editor |
+| **Ctrl+Alt+3** | Terminal — press again to return to the editor |
+| **Ctrl+Alt+1/2/3 + Delete** | Hold the digit, press Delete: hide that panel (its state and shell are kept) |
 | Ctrl+K | Command palette (every command below, plus targets, profiles, tasks and files) |
 | Ctrl+P | Find a file among loaded explorer entries |
 | Ctrl+S | Save the active document |
@@ -51,9 +54,32 @@ Global (work in every panel except where noted):
 | F6 | Cycle focus: editor → explorer → bottom panel → AI → editor |
 | F9 / F10 | Select target / next document |
 
+### What terminals can report
+
+`Ctrl+Alt+<digit>` and "digit still held" exist only with the
+[kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) (for example kitty, foot,
+WezTerm, Ghostty, Alacritty 0.13+). `embed` asks the terminal at startup and enables
+it only when the terminal answers; `EMBEDIDE_KEYBOARD=legacy` turns it off.
+
+Without it (commonly xterm, tmux/screen and the Linux console; check `:help`, which says which mode
+is active) the terminal cannot report these chords at all: Ctrl+Alt+1 arrives as `ESC 1` — the same
+bytes as **Alt+1** — and xterm-style terminals send Ctrl+Alt+3 as `ESC ESC` (indistinguishable from
+two Esc presses). There:
+
+* **Alt+1 / Alt+2 / Alt+3** switch panels (and `ESC <digit>` from Ctrl+Alt+1 works as well);
+* the hide chord is never guessed from separate presses; use `:hide_explorer`, `:hide_assistant`,
+  `:hide_terminal` (also in Ctrl+K), or bind them, e.g. in `embedide.json`:
+  `{"native": {"keys": {"hide_terminal": "alt+6", "hide_explorer": "f12"}}}`. Bindings may be
+  F1–F12, `ctrl+a`…`ctrl+z`, `alt+0`…`alt+9` or `ctrl+alt+0`…`ctrl+alt+9` (in a legacy terminal a
+  `ctrl+alt+N` binding answers to Alt+N).
+
+Ctrl+Alt+Delete is a system shortcut on many desktops and on the Linux console (it may reboot); such
+a system takes it before any terminal program sees it, so prefer a bound key there.
+
 In the **terminal** every key — Ctrl+C, Ctrl+D, Ctrl+K, Tab, Esc, F-keys, arrows — goes to your
-shell; only Alt+1/2/3 are taken by the IDE. Paste is forwarded as bracketed paste when the program
-asks for it. When the shell exits, Enter starts a new one; `:terminal_restart` restarts it.
+shell; only the panel keys (Ctrl+Alt+1/2/3, Alt+1/2/3 without the kitty protocol) and keys you bound
+to `hide_*` commands are taken by the IDE. Colours and attributes (bold, underline, inverse) of the
+program's output are kept. Paste is forwarded as bracketed paste when the program asks for it. When the shell exits, Enter starts a new one; `:terminal_restart` restarts it.
 
 **Editor** (Vim/Kenit modal editing, shared engine `embedide-editor`):
 
@@ -128,7 +154,7 @@ path = "/opt/vendor sdk/bin/gcc"
 them; `:compilers` (and the Settings panel) shows which compiler each language uses and why.
 EmbedIDE detects and reuses installed toolchains; it never installs or downloads one.
 
-## AI assistant (Alt+2)
+## AI assistant (Ctrl+Alt+2)
 
 Optional. Without a provider, or with `EMBEDIDE_AI_OFFLINE=1`, the IDE works fully offline and the
 panel only explains what is missing. Providers, models and keys are configured exactly as for
