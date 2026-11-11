@@ -18,6 +18,8 @@ use std::{
 };
 use unicode_width::UnicodeWidthChar;
 
+mod agent;
+
 /// What the editor shares with the assistant for one action.
 #[derive(Debug, Clone, Default)]
 pub struct EditorContext {
@@ -52,6 +54,20 @@ enum Kind {
     Header,
     /// Quiet line under an answer (time, tokens).
     Meta,
+    /// Agent activity: a command (`$ make`) or a tool (`Read src/a.c`).
+    Step,
+    /// Tail of a command's output.
+    Output,
+    /// A command succeeded.
+    StepOk,
+    /// A command failed.
+    StepFail,
+    /// A file changed.
+    Changed,
+    /// A refused action.
+    Denied,
+    /// An action waiting for the user's approval.
+    Approval,
 }
 
 /// A completion ready to be accepted in the editor.
@@ -113,12 +129,31 @@ pub struct Assistant {
     pub suggestion: Option<Suggestion>,
     engine: Option<(complete::Engine, Option<PathBuf>, usize)>,
     scroll: usize,
+    /// Agent turn in progress.
+    run: Option<agent::AgentRun>,
+    /// Agent conversation kept between turns (CLI session).
+    session: Option<embedide_ai::agent::Session>,
+    /// Plain text starts an agent task instead of a chat message.
+    agent_mode: bool,
+    /// Policy for the next agent turn.
+    policy: embedide_ai::agent::Policy,
+    /// What the last agent turn changed (for /changes, /review, /revert).
+    review: Option<agent::Review>,
+    /// Skills activated for agent tasks.
+    skills: Vec<embedide_ai::agent::SkillText>,
+    /// Files the agent changed that the editor should reload.
+    changed: Vec<PathBuf>,
+    /// A message the host should show even when the panel is hidden.
+    attention: Option<String>,
 }
 
 const HELP: &str = "Type here (this panel) and press Enter. Start with: /provider claude-code  or  /provider codex-cli \
 (your installed, logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
-Then: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
-/apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers · /help. Nothing is sent until Enter.";
+Chat: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
+/apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers. \
+Agent (claude-code / codex-cli works in the project): /agent task · /mode agent|chat · /policy read-only|workspace-write|approval-required \
+· y / a / n answer approvals · /changes · /review [file] · /revert file|all · /fix [command] · /new · \
+/skills · /skill name · /skill off name. Nothing is sent until Enter.";
 
 impl Assistant {
     /// Panel state from the user configuration (no network).
@@ -161,7 +196,17 @@ impl Assistant {
             suggestion: None,
             engine: None,
             scroll: 0,
+            run: None,
+            session: None,
+            agent_mode: false,
+            policy: Default::default(),
+            review: None,
+            skills: Vec::new(),
+            changed: Vec::new(),
+            attention: None,
         };
+        a.agent_mode = a.cfg.agent.mode == "agent";
+        a.policy = a.cfg.agent.policy.parse().unwrap_or_default();
         let start = match a.cli_backend() {
             Some(kind) => format!("Backend {} ({}). Type a message and press Enter; /help lists commands.", kind.id(), kind.name()),
             None if a.provider.is_some() => format!("Backend {}. Type a message and press Enter; /help lists commands.", a.provider_label()),
@@ -179,10 +224,14 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     fn note(&mut self, kind: Kind, text: impl Into<String>) {
         self.transcript.push((kind, text.into()));
-        if self.transcript.len() > 500 {
-            self.transcript.drain(..100);
+        if self.transcript.len() > 2000 {
+            self.transcript.drain(..200);
             if let Some(job) = &mut self.job {
-                job.slot = job.slot.and_then(|i| i.checked_sub(100));
+                job.slot = job.slot.and_then(|i| i.checked_sub(200));
+            }
+            if let Some(run) = &mut self.run {
+                run.text_slot = run.text_slot.and_then(|i| i.checked_sub(200));
+                run.command_slot = run.command_slot.and_then(|i| i.checked_sub(200));
             }
         }
         self.scroll = 0;
@@ -234,27 +283,33 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     /// Animated activity for the panel title: a spinner and the elapsed time.
     fn activity(&self) -> Option<String> {
-        const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        if let Some(a) = self.agent_activity() {
+            return Some(a);
+        }
         let job = self.job.as_ref()?;
         let elapsed = job.started.elapsed();
-        let spin = SPIN[(elapsed.as_millis() / 100) as usize % SPIN.len()];
+        let spin = spinner(elapsed);
         let what = if job.streaming { "writing" } else { "thinking" };
         Some(format!("{spin} {what} {}s", elapsed.as_secs()))
     }
 
     fn state(&self) -> &'static str {
+        if self.run.is_some() {
+            return "agent running";
+        }
         match &self.job {
             Some(j) if j.streaming => "streaming",
             Some(_) => "waiting",
             None if self.suggestion.is_some() => "suggestion ready",
             None if self.proposal.is_some() => "edit proposed",
+            None if self.agent_mode => "agent mode",
             None => "idle",
         }
     }
 
     /// Whether a request is running (for the event-loop interval).
     pub fn busy(&self) -> bool {
-        self.job.is_some() || self.checks.is_some() || self.engine.is_some()
+        self.job.is_some() || self.checks.is_some() || self.engine.is_some() || self.run.is_some()
     }
 
     fn backend(&self) -> Result<(Box<dyn Backend>, String), String> {
@@ -318,6 +373,9 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             .and_then(|a| a.strip_suffix('>'))
             .unwrap_or(arg)
             .trim();
+        if self.agent_command(cmd, arg, &line, ctx) {
+            return;
+        }
         match cmd {
             "/help" => self.note(Kind::Info, HELP),
             "/status" => {
@@ -550,6 +608,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 Kind::Error,
                 format!("Unknown command {c}. /help lists commands"),
             ),
+            _ if self.agent_mode => self.start_agent(ctx, line.clone(), None),
             _ => self.chat(&line),
         }
     }
@@ -814,6 +873,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     /// stopped the CLI child, so no process outlives the IDE.
     pub fn shutdown(&mut self) {
         self.dismiss();
+        self.shutdown_agent();
         self.checks = None; // probes end on their own time limit
         if let Some(mut job) = self.job.take() {
             job.cancel.cancel();
@@ -836,6 +896,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     /// Cancel the running request.
     pub fn cancel(&mut self) {
+        self.cancel_agent();
         if let Some(job) = self.job.take() {
             job.cancel.cancel();
             self.note(Kind::Info, "Cancelled");
@@ -870,7 +931,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     /// Poll worker results. Returns whether the panel changed.
     pub fn tick(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.tick_agent();
         // Spinner and caret advance every 100 ms while a request runs; the
         // screen diff sends only the cells that changed.
         if let Some(job) = &self.job {
@@ -1054,12 +1115,18 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         let mut input = Row::default();
         input.push_styled("› ", false, Some(Highlight::Keyword));
         if visible.is_empty() {
-            let hint = if self.job.is_some() {
+            let hint = if self.approval_pending() {
+                "y allow · a allow similar · n deny · /cancel stops the agent".to_string()
+            } else if self.run.is_some() {
+                "/cancel stops the agent (and every command it started)".to_string()
+            } else if self.job.is_some() {
                 "/cancel stops the answer".to_string()
             } else if self.provider.is_none() {
                 "/provider claude-code  or  /provider codex-cli".to_string()
+            } else if self.agent_mode {
+                format!("Task for the {who} agent · Enter runs · /mode chat · /help")
             } else {
-                format!("Message {who} · Enter sends · /help")
+                format!("Message {who} · Enter sends · /agent task · /help")
             };
             let hint: String = hint.chars().take(width.saturating_sub(2)).collect();
             input.push_styled(&hint, false, Some(Highlight::Comment));
@@ -1084,11 +1151,18 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     /// indented bodies, code blocks and diffs coloured, quiet notes.
     fn transcript_lines(&self, width: usize) -> Vec<Line> {
         let mut out: Vec<Line> = Vec::new();
-        let streaming = self.job.as_ref().and_then(|j| j.slot);
-        let blink = self
+        let streaming = self
             .job
             .as_ref()
-            .is_some_and(|j| j.started.elapsed().as_millis() / 450 % 2 == 0);
+            .and_then(|j| j.slot)
+            .or_else(|| self.run.as_ref().and_then(|r| r.text_slot));
+        let started = self
+            .job
+            .as_ref()
+            .map(|j| j.started)
+            .or_else(|| self.run.as_ref().map(|r| r.started));
+        let blink = started.is_some_and(|s| s.elapsed().as_millis() / 450 % 2 == 0);
+        let running_step = self.run.as_ref().and_then(|r| r.command_slot);
         for (index, (kind, text)) in self.transcript.iter().enumerate() {
             match kind {
                 Kind::Header => {
@@ -1157,6 +1231,39 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 Kind::Info => wrap_into(&mut out, "  · ", text, Some(Highlight::Comment), width),
                 Kind::Meta => wrap_into(&mut out, "  ", text, Some(Highlight::Comment), width),
                 Kind::Error => wrap_into(&mut out, "  ✗ ", text, Some(Highlight::Constant), width),
+                Kind::Step => {
+                    let style = if text.starts_with("$ ") {
+                        Highlight::Keyword
+                    } else {
+                        Highlight::Function
+                    };
+                    wrap_into(&mut out, "  ", text, Some(style), width);
+                    if running_step == Some(index) {
+                        if let (Some(last), Some(s)) = (out.last_mut(), started) {
+                            last.push((
+                                format!(" {}", spinner(s.elapsed())),
+                                Some(Highlight::Comment),
+                            ));
+                        }
+                    }
+                }
+                Kind::Output => {
+                    for raw in text.lines() {
+                        wrap_into(&mut out, "    │ ", raw, Some(Highlight::Comment), width);
+                    }
+                }
+                Kind::StepOk => wrap_into(&mut out, "    ✓ ", text, Some(Highlight::String), width),
+                Kind::StepFail => {
+                    wrap_into(&mut out, "    ✗ ", text, Some(Highlight::Constant), width)
+                }
+                Kind::Changed => wrap_into(&mut out, "  ✎ ", text, Some(Highlight::Type), width),
+                Kind::Denied => wrap_into(&mut out, "  ⊘ ", text, Some(Highlight::Constant), width),
+                Kind::Approval => {
+                    for (i, raw) in text.lines().enumerate() {
+                        let lead = if i == 0 { "  ⚠ " } else { "    " };
+                        wrap_into(&mut out, lead, raw, Some(Highlight::Preprocessor), width);
+                    }
+                }
                 Kind::Diff => {
                     for raw in text.lines() {
                         let style = match raw.as_bytes().first() {
@@ -1169,6 +1276,16 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                     }
                 }
             }
+        }
+        if !self.skills.is_empty() {
+            let names: Vec<&str> = self.skills.iter().map(|s| s.name.as_str()).collect();
+            wrap_into(
+                &mut out,
+                "  + ",
+                &format!("skills for agent tasks: {}", names.join(", ")),
+                Some(Highlight::Comment),
+                width,
+            );
         }
         if !self.attachments.is_empty() {
             let names: Vec<&str> = self.attachments.iter().map(|(l, _)| l.as_str()).collect();
@@ -1186,6 +1303,12 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
 /// One display line: styled pieces.
 type Line = Vec<(String, Option<Highlight>)>;
+
+/// Braille spinner frame for an elapsed time.
+fn spinner(elapsed: Duration) -> char {
+    const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    SPIN[(elapsed.as_millis() / 100) as usize % SPIN.len()]
+}
 
 /// Wrap `text` to `width` cells at spaces (a word longer than the line is
 /// split); continuation lines are indented like the first.
@@ -1253,6 +1376,210 @@ mod usage_tests {
         rows.iter()
             .map(|r| r.runs.iter().map(|x| x.text.as_str()).collect::<String>())
             .collect()
+    }
+
+    /// The AI panel with a mock Claude Code agent and a disposable workspace.
+    #[cfg(unix)]
+    fn agent_fixture(name: &str) -> (Assistant, EditorContext, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "embedide-panel-agent-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../embedide-ai/tests/fixtures/mock_agent.py");
+        let program = dir.join("claude");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nexec python3 '{}' claude edit '{}' \"$@\"\n",
+                script.display(),
+                dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut cfg = AiConfig {
+            provider: Some("claude-code".into()),
+            ..AiConfig::default()
+        };
+        cfg.providers.insert(
+            "claude-code".into(),
+            ProviderConfig {
+                cli: Some(program),
+                ..Default::default()
+            },
+        );
+        let ctx = EditorContext {
+            root: ws.clone(),
+            ..Default::default()
+        };
+        (Assistant::new(cfg), ctx, dir)
+    }
+
+    #[cfg(unix)]
+    fn tick_until(a: &mut Assistant, what: &str, done: impl Fn(&Assistant) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done(a) {
+            a.tick();
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}: {:#?}",
+                a.transcript
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_task_shows_steps_asks_for_approval_and_can_be_reviewed_and_reverted() {
+        let (mut a, ctx, dir) = agent_fixture("flow");
+        a.input = "/agent implement add".into();
+        a.submit(&ctx);
+        assert!(a.agent_running());
+        // Reading /etc/hostname is outside the workspace: asked, and denied with n.
+        tick_until(&mut a, "first approval", Assistant::approval_pending);
+        let shown = text(&a.rows(100, 40, true).0).join("\n");
+        assert!(
+            shown.contains("⚠ Approval needed: Read /etc/hostname"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("approval needed"),
+            "title shows the wait: {shown}"
+        );
+        assert!(shown.contains("y allow · a allow similar"), "{shown}");
+        assert_eq!(
+            a.take_attention()
+                .as_deref()
+                .map(|m| m.starts_with("AI agent needs approval")),
+            Some(true)
+        );
+        // Typed text cannot slip past a pending approval.
+        a.input = "hello".into();
+        a.submit(&ctx);
+        assert!(a.approval_pending());
+        a.input = "n".into();
+        a.submit(&ctx);
+        // `rm -rf build` asks next; allow it.
+        tick_until(&mut a, "second approval", Assistant::approval_pending);
+        a.answer(embedide_ai::agent::Decision::Allow);
+        tick_until(&mut a, "the end", |a| !a.agent_running());
+        let shown = text(&a.rows(120, 200, false).0).join("\n");
+        for needle in [
+            "▍Agent · Claude Code · workspace-write",
+            "Write add.c",
+            "$ gcc -o app main.c add.c && ./app",
+            "✓ ok",
+            "$ make broken",
+            "│ make: *** No rule to make target 'broken'",
+            "✗ exit 2",
+            "⊘ Read: The user refused this action",
+            "Allowed: $ rm -rf build",
+            "■ done · 1 file(s) changed · 3 command(s) (1 failed) · 2 approval(s) · 1 refused",
+            "✎ add.c (added)",
+        ] {
+            assert!(shown.contains(needle), "missing {needle:?} in\n{shown}");
+        }
+        assert_eq!(
+            shown.matches("Created add.c; built.").count(),
+            1,
+            "summary once: {shown}"
+        );
+        let changed = a.take_changed_files();
+        assert_eq!(changed, [ctx.root.canonicalize().unwrap().join("add.c")]);
+        a.input = "/review".into();
+        a.submit(&ctx);
+        assert!(a
+            .transcript
+            .iter()
+            .any(|(k, t)| *k == Kind::Diff && t.contains("+int add")));
+        a.input = "/revert all".into();
+        a.submit(&ctx);
+        assert!(!ctx.root.join("add.c").exists());
+        // The next task continues the CLI session.
+        a.input = "/agent".into();
+        a.submit(&ctx);
+        let status = &a.transcript.iter().rev().nth(1).unwrap().1;
+        assert!(status.contains("1 turn(s)"), "{status}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_mode_routes_plain_text_and_cancel_stops_the_task() {
+        let (mut a, ctx, dir) = agent_fixture("mode");
+        a.input = "/mode agent".into();
+        a.submit(&ctx);
+        a.input = "/policy read-only".into();
+        a.submit(&ctx);
+        a.input = "inspect the code".into();
+        a.submit(&ctx);
+        assert!(a.agent_running(), "plain text started an agent task");
+        tick_until(&mut a, "approval", Assistant::approval_pending);
+        a.input = "/cancel".into();
+        a.submit(&ctx);
+        tick_until(&mut a, "stop", |a| !a.agent_running());
+        let shown: String = a.transcript.iter().map(|(_, t)| format!("{t}\n")).collect();
+        assert!(shown.contains("Agent · Claude Code · read-only"), "{shown}");
+        assert!(shown.contains("Agent stopped"), "{shown}");
+        assert!(
+            !ctx.root.join("add.c").exists(),
+            "read-only changed nothing"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skills_are_listed_activated_and_reported() {
+        let dir =
+            std::env::temp_dir().join(format!("embedide-panel-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let skill = dir.join(".embedide/skills/c-style");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: c-style\ndescription: C style rules\nallowed-tools: Bash\n---\nUse stdint types.\n",
+        )
+        .unwrap();
+        let ctx = EditorContext {
+            root: dir.clone(),
+            ..Default::default()
+        };
+        let mut a = Assistant::new(AiConfig::default());
+        a.input = "/skills".into();
+        a.submit(&ctx);
+        assert!(a
+            .transcript
+            .iter()
+            .any(|(_, t)| t.contains("○ c-style (project) — C style rules")));
+        a.input = "/skill c-style".into();
+        a.submit(&ctx);
+        assert_eq!(a.skills.len(), 1);
+        assert!(a.skills[0].body.starts_with("Use stdint types."));
+        assert!(a
+            .transcript
+            .iter()
+            .any(|(_, t)| t.contains("cannot grant permissions")));
+        let shown = text(&a.rows(100, 30, false).0).join("\n");
+        assert!(shown.contains("skills for agent tasks: c-style"), "{shown}");
+        a.input = "/skill nope".into();
+        a.submit(&ctx);
+        assert!(a
+            .transcript
+            .last()
+            .unwrap()
+            .1
+            .contains("Available: c-style"));
+        a.input = "/skill off c-style".into();
+        a.submit(&ctx);
+        assert!(a.skills.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

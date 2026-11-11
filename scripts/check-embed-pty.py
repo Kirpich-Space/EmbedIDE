@@ -533,6 +533,79 @@ class EmbedContracts(unittest.TestCase):
         self.assertEqual(subprocess.run(["pgrep", "-f", str(hang_log)], capture_output=True).stdout, b"")
         self.assertEqual(subprocess.run(["pgrep", "-f", "^sleep 3001$"], capture_output=True).stdout, b"")
 
+    def mock_agent(self, kind, scenario):
+        """An executable `claude`/`codex` running the repository's mock agent CLI."""
+        script = Path(__file__).resolve().parent.parent / "crates/embedide-ai/tests/fixtures/mock_agent.py"
+        logdir = self.config / f"agent-{kind}-{scenario}"
+        logdir.mkdir(exist_ok=True)
+        program = logdir / kind
+        program.write_text(f"#!/bin/sh\nexec python3 '{script}' {kind} {scenario} '{logdir}' \"$@\"\n")
+        program.chmod(0o755)
+        return program, logdir
+
+    def test_agent_tasks_with_mock_claude_code_and_codex(self):
+        claude, claude_log = self.mock_agent("claude", "edit")
+        codex, codex_log = self.mock_agent("codex", "edit")
+        hang, hang_log = self.mock_agent("claude", "hang")
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{claude}"\n'
+            f'[ai.providers.codex-cli]\ncli = "{codex}"\n')
+        (self.root / "add.c").write_text("// old\n")
+        ide = self.ide()
+        self.open_file(ide, "add.c")
+        ide.panel("2")
+        self.say(ide, "/agent implement add")
+        self.until_panel(ide, "Agent · Claude Code · workspace-write")
+        # Outside the workspace: asked; one key answers.
+        self.until_panel(ide, "Approval needed: Read /etc/hostname")
+        ide.keys(b"n")
+        self.until_panel(ide, "Approval needed: $ rm -rf build")
+        ide.keys(b"y")
+        self.until_panel(ide, "■ done")
+        for text in ("$ gcc -o app main.c add.c && ./app", "✓ ok", "✗ exit 2", "✎ add.c (modified)",
+                     "Allowed: $ rm -rf build"):
+            self.until_panel(ide, text)
+        self.assertIn("return a + b", (self.root / "add.c").read_text())
+        # The open, unmodified buffer shows the agent's version.
+        ide.until(b"Reloaded 1 agent-changed file(s)")
+        self.until_panel_text(ide, "1 int add(int a, int b) { return a + b; }")
+        args = json.loads((claude_log / "runs").read_text().splitlines()[0])
+        self.assertIn("--permission-prompt-tool", args)
+        self.say(ide, "/review")
+        self.until_panel(ide, "+int add(int a, int b) { return a + b; }")
+        self.say(ide, "/revert all")
+        self.until_panel(ide, "Reverted add.c (restored)")
+        self.assertEqual((self.root / "add.c").read_text(), "// old\n")
+        # Codex under approval-required: a read-only plan first, then approval.
+        self.say(ide, "/provider codex-cli")
+        self.say(ide, "/policy approval-required")
+        self.until_panel(ide, "plans read-only first")
+        self.say(ide, "/agent implement add")
+        self.until_panel(ide, "Approve this plan?")
+        runs = (codex_log / "runs").read_text().splitlines()
+        self.assertEqual(len(runs), 1)
+        self.assertIn("read-only", runs[0])
+        ide.keys(b"y")
+        self.until_panel(ide, "■ done")
+        self.until_panel(ide, "Done: add.c created, app prints 5.")
+        self.assertIn('sandbox_mode=\\"workspace-write\\"', (codex_log / "runs").read_text().splitlines()[1])
+        # A task that never ends: /cancel stops the CLI and its children.
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{hang}"\n')
+        ide.keys(ide.esc)
+        self.say(ide, ":reload")
+        ide.panel("2")
+        self.say(ide, "/agent never ends")
+        self.wait_file(ide, hang_log / "grandchild")
+        self.say(ide, "/cancel")
+        self.until_panel(ide, "Agent stopped")
+        time.sleep(0.5)
+        self.assertEqual(subprocess.run(["pgrep", "-f", str(hang_log)], capture_output=True).stdout, b"")
+        self.assertEqual(subprocess.run(["pgrep", "-f", "^sleep 3001$"], capture_output=True).stdout, b"")
+        ide.keys(ide.esc)
+        ide.keys(ide.ctrl("q"))
+        self.assertEqual(ide.finish(), 0)
+
     def test_streamed_answer_survives_notes_arriving_meanwhile(self):
         slow, _ = self.mock_cli("claude", "slow")
         (self.config / "config.toml").write_text(

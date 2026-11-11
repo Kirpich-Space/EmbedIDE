@@ -2788,6 +2788,20 @@ impl Workspace {
                         KeyCode::Down => self.assistant.scroll(-1),
                         KeyCode::PageUp => self.assistant.scroll(10),
                         KeyCode::PageDown => self.assistant.scroll(-10),
+                        // One key answers an agent approval: y allow, a allow similar, n deny
+                        KeyCode::Char(ch @ ('y' | 'a' | 'n'))
+                            if self.assistant.approval_pending()
+                                && self.assistant.input.is_empty()
+                                && !key
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                        {
+                            self.assistant.answer(match ch {
+                                'y' => embedide_ai::agent::Decision::Allow,
+                                'a' => embedide_ai::agent::Decision::AllowSimilar,
+                                _ => embedide_ai::agent::Decision::Deny(String::new()),
+                            });
+                        }
                         KeyCode::Char(ch)
                             if !key
                                 .modifiers
@@ -2947,6 +2961,55 @@ impl Workspace {
         }
         Ok(())
     }
+    /// Reload open buffers whose files an agent changed (or reverted). A
+    /// buffer with unsaved edits is never replaced; the user is told instead.
+    fn reload_changed(&mut self, files: &[PathBuf]) -> Option<String> {
+        let wanted: Vec<PathBuf> = files
+            .iter()
+            .map(|f| f.canonicalize().unwrap_or_else(|_| f.clone()))
+            .collect();
+        let mut reloaded = 0;
+        let mut kept = Vec::new();
+        for index in 0..self.documents.len() {
+            let Some(path) = self.documents[index]
+                .editor()
+                .state()
+                .path()
+                .map(Path::to_path_buf)
+            else {
+                continue;
+            };
+            if !wanted.contains(&path) && !files.contains(&path) {
+                continue;
+            }
+            if self.documents[index].editor().state().is_modified() {
+                kept.push(path.display().to_string());
+                continue;
+            }
+            if !path.exists() {
+                kept.push(format!("{} (deleted)", path.display()));
+                continue;
+            }
+            match crate::open(&path) {
+                Ok(editor) => {
+                    let doc = self.new_document(editor);
+                    self.documents[index] = doc;
+                    reloaded += 1;
+                }
+                Err(e) => kept.push(format!("{} ({e})", path.display())),
+            }
+        }
+        if !kept.is_empty() {
+            Some(format!(
+                "Changed on disk by the AI agent, not reloaded: {}",
+                kept.join(", ")
+            ))
+        } else if reloaded > 0 {
+            Some(format!("Reloaded {reloaded} agent-changed file(s)"))
+        } else {
+            None
+        }
+    }
     /// Keep inline suggestions consistent with the cursor and request new ones
     /// while typing (only with `ai.inline = true`).
     fn after_editor_input(&mut self) {
@@ -3013,6 +3076,31 @@ impl Workspace {
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
+        let attention = self.assistant.take_attention();
+        let files = self.assistant.take_changed_files();
+        let reloaded = if files.is_empty() {
+            None
+        } else {
+            changed = true;
+            self.reload_changed(&files)
+        };
+        match (attention, reloaded) {
+            (Some(message), _) if self.assistant.approval_pending() => {
+                // An approval must be visible wherever the user is working.
+                self.assistant_visible = true;
+                self.notification = message;
+                changed = true;
+            }
+            (Some(message), Some(r)) => {
+                self.notification = format!("{r} · {message}");
+                changed = true;
+            }
+            (Some(message), None) | (None, Some(message)) => {
+                self.notification = message;
+                changed = true;
+            }
+            (None, None) => {}
+        }
         changed |= self.poll_lsp();
         if let Some(view) = &mut self.binary {
             changed |= view.tick();

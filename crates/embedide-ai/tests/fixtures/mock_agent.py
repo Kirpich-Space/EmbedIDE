@@ -39,6 +39,13 @@ if args in (["--help"], ["exec", "--help"]):
         print("  -s, --sandbox <SANDBOX_MODE>\n  --json\n  --ephemeral\n  resume\n")
     sys.exit(0)
 
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "pro"}))
+    sys.exit(0)
+if args[:2] == ["login", "status"]:
+    print("Logged in using ChatGPT")
+    sys.exit(0)
+
 log("runs", json.dumps(args))
 with open(os.path.join(logdir, "env"), "w") as f:
     json.dump(dict(os.environ), f)
