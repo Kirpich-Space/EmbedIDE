@@ -204,12 +204,7 @@ pub fn parse(text: &str) -> Result<Frontmatter, String> {
             "license" => fm.license = Some(value),
             "allowed-tools" | "allowed_tools" => {
                 fm.allowed_tools = if list.is_empty() {
-                    value
-                        .split([',', ' '])
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                        .collect()
+                    split_tools(&value)
                 } else {
                     list
                 }
@@ -231,6 +226,36 @@ pub fn parse(text: &str) -> Result<Frontmatter, String> {
         ));
     }
     Ok(fm)
+}
+
+/// Split `Bash(git *), Read Edit` at commas and spaces outside parentheses.
+fn split_tools(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    for c in value.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                cur.push(c);
+            }
+            ',' | ' ' | '\t' if depth == 0 => {
+                if !cur.trim().is_empty() {
+                    out.push(cur.trim().to_string());
+                }
+                cur.clear();
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
 }
 
 /// Names: 1–64 lowercase letters, digits and hyphens, not starting or ending
@@ -487,6 +512,37 @@ mod tests {
             format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_example_skills_parse_and_load() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skills");
+        let cfg = SkillsConfig {
+            dirs: vec![examples],
+            ..Default::default()
+        };
+        let cat = discover(None, &cfg);
+        let mut names: Vec<&str> = cat
+            .skills
+            .iter()
+            .filter(|s| s.scope == Scope::Extra)
+            .map(|s| s.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "asm-review",
+                "c-firmware",
+                "embedded-bringup",
+                "rust-crate",
+                "zig-build"
+            ]
+        );
+        for s in cat.skills.iter().filter(|s| s.scope == Scope::Extra) {
+            assert!(s.warnings.is_empty(), "{}: {:?}", s.name, s.warnings);
+            assert!(load(s, 64 * 1024).unwrap().body.len() > 200, "{}", s.name);
+        }
     }
 
     #[test]
