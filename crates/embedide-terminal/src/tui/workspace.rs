@@ -68,6 +68,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "suggest",
         "Suggest Completions at the Cursor (Ctrl+Space, Insert mode)",
     ),
+    (
+        "ai_suggest",
+        "AI Inline Suggestion at the Cursor (Alt+\\, Insert mode; Tab accepts)",
+    ),
     ("lsp_restart", "Restart Language Servers (completion)"),
     ("labels", "Go to Label (assembly: labels of this file)"),
     ("hex", "Open in HEX View (current file; :hex <path>)"),
@@ -586,6 +590,12 @@ impl Workspace {
                 .as_ref()
                 .map(|m| m.ai.exclude.clone())
                 .unwrap_or_default(),
+            indent_tabs: state.indent().tabs,
+            indent_width: state.indent().width,
+            project: self
+                .manifest
+                .as_ref()
+                .map(|m| format!("{} ({})", m.project.name, m.project.language)),
             text,
         }
     }
@@ -1349,6 +1359,18 @@ impl Workspace {
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
             "suggest" => self.suggest(true, None)?,
+            "ai_suggest" => {
+                if self.binary.is_some() {
+                    self.notification = "AI suggestions work in text files".into();
+                } else if self.editor().input().mode() != Mode::Insert {
+                    self.notification =
+                        "AI suggestions work in Insert mode (press i, then Alt+\\)".into();
+                } else {
+                    self.focus = Focus::Editor;
+                    let ctx = self.editor_context();
+                    self.notification = self.assistant.suggest_now(&ctx);
+                }
+            }
             "hex" | "elf" | "disasm" => {
                 if self.binary.is_none() {
                     let path = self
@@ -2229,6 +2251,7 @@ impl Workspace {
                 "ctrl+alt+3" => "focus_terminal",
                 "ctrl+p" => "find",
                 "ctrl+space" => "suggest",
+                "alt+\\" => "ai_suggest",
                 "ctrl+k" => "palette",
                 "ctrl+s" => "save",
                 "ctrl+w" => "close",
@@ -2843,6 +2866,11 @@ impl Workspace {
                         if pending && key.code == KeyCode::Esc {
                             self.assistant.dismiss();
                             self.notification = "Suggestion rejected".into();
+                        } else if key.code == KeyCode::Esc
+                            && self.assistant.inline_status().is_some()
+                        {
+                            self.assistant.dismiss();
+                            self.notification = "AI suggestion cancelled".into();
                         }
                         self.documents[self.active].handle(Event::Key(key));
                         if let Some(command) = self.documents[self.active].take_host_command() {
@@ -3020,7 +3048,16 @@ impl Workspace {
         }
         let edited = mark.0 == self.edit_mark.0 && mark.1 != self.edit_mark.1;
         self.edit_mark = mark;
-        if self.assistant.suggestion.is_some() {
+        if edited && self.assistant.suggestion.is_some() {
+            // Typing the start of the suggestion keeps the rest on screen.
+            let state = self.editor().state();
+            let text = state.buffer().contents();
+            let (path, cursor) = (state.path().map(Path::to_path_buf), state.cursor());
+            if self.assistant.type_through(path.as_deref(), &text, cursor) {
+                return;
+            }
+        }
+        if self.assistant.suggestion.is_some() || self.assistant.inline_status().is_some() {
             self.assistant.dismiss();
         }
         if edited && self.assistant.inline_enabled() && self.editor().input().mode() == Mode::Insert
@@ -3076,6 +3113,10 @@ impl Workspace {
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
+        if self.focus != Focus::Editor {
+            // No suggestion requests for an editor the user is not typing in.
+            self.assistant.pause_requests();
+        }
         let attention = self.assistant.take_attention();
         let files = self.assistant.take_changed_files();
         let reloaded = if files.is_empty() {
@@ -3397,13 +3438,9 @@ impl Workspace {
                     ));
                 }
                 lines.push(format!(
-                    "AI: {} | inline suggestions: {} (ai.inline)",
+                    "AI: {} | inline suggestions: {} (ai.completion.mode; Alt+\\ asks)",
                     self.assistant.status(),
-                    if self.assistant.inline_enabled() {
-                        "on"
-                    } else {
-                        "off"
-                    }
+                    self.assistant.inline_mode()
                 ));
                 lines.push(format!(
                     "Serial: {} @ {} | receive_only={}",
@@ -3577,6 +3614,8 @@ impl Workspace {
             "F8 cancels"
         } else if self.assistant.suggestion.is_some() {
             "Tab accepts, Esc rejects"
+        } else if self.assistant.inline_status().is_some() {
+            "AI suggestion… Esc cancels"
         } else {
             "Ctrl+K commands"
         };
@@ -3596,7 +3635,9 @@ impl Workspace {
             format!("{place} | {info} | {hint} | {}", self.notification)
         }
     }
-    /// Show a pending AI completion at the cursor without touching the buffer.
+    /// Show a pending AI completion at the cursor without touching the buffer:
+    /// the first line at the cursor, further lines as virtual rows below it
+    /// (the code underneath moves down while the suggestion is shown).
     fn ghost_text(&self, frame: &mut Frame, width: usize) {
         let Some(s) = &self.assistant.suggestion else {
             return;
@@ -3606,18 +3647,44 @@ impl Workspace {
             return;
         }
         let Some((x, y)) = frame.cursor else { return };
-        let Some(row) = frame.rows.get_mut(usize::from(y)) else {
+        let y = usize::from(y);
+        let tab = " ".repeat(self.config.tab_width.max(1));
+        let mut lines = s.text.split('\n');
+        let first = lines.next().unwrap_or("");
+        let rest: Vec<&str> = lines.collect();
+        // Text rows end before the editor's two status rows.
+        let body = frame.rows.len().saturating_sub(2);
+        let Some(row) = frame.rows.get(y).filter(|_| y < body) else {
             return;
         };
-        let mut lines = s.text.lines();
-        let first = lines.next().unwrap_or("");
-        let more = lines.count();
-        let mut ghost = first.replace('\t', "    ");
-        if more > 0 {
-            ghost.push_str(&format!(" … (+{more} lines)"));
+        let gutter = gutter_width(row);
+        let shown = rest.len().min(body.saturating_sub(y + 1)).min(16);
+        let hidden = rest.len() - shown;
+        let mut ghost = first.replace('\t', &tab);
+        if hidden > 0 && shown == 0 {
+            ghost.push_str(&format!(" … (+{hidden} lines)"));
         }
-        let text = sanitize(&ghost);
-        *row = insert_at(row, usize::from(x), &text, width);
+        frame.rows[y] = insert_at(&frame.rows[y], usize::from(x), &sanitize(&ghost), width);
+        if shown == 0 {
+            return;
+        }
+        let mut virtual_rows = Vec::with_capacity(shown);
+        for (i, line) in rest[..shown].iter().enumerate() {
+            let mut text = line.replace('\t', &tab);
+            if i + 1 == shown && hidden > 0 {
+                text.push_str(&format!(" … (+{hidden} lines)"));
+            }
+            let blank = Row::default();
+            let mut row = insert_at(&blank, gutter, &sanitize(&text), width);
+            if text.is_empty() {
+                row = insert_at(&blank, gutter, " ", width);
+            }
+            virtual_rows.push(row);
+        }
+        let at = y + 1;
+        frame.rows.splice(at..at, virtual_rows);
+        // Keep the frame height: drop the text rows pushed below the view.
+        frame.rows.drain(body..body + shown);
     }
     /// Compose an adaptive bounded frame, reusing the editor's cached grapheme layout.
     pub fn frame(&mut self) -> Result<Frame, FrontendError> {
@@ -4158,6 +4225,25 @@ fn pad(row: &mut Row, width: usize) {
 }
 
 /// Insert `text` (shown in inverse video) at display column `col`, truncating at `width`.
+/// Cells of the line-number gutter (`" 12 "`) at the start of an editor row.
+fn gutter_width(row: &Row) -> usize {
+    let text: String = row.runs.iter().map(|r| r.text.as_str()).collect();
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() && b[i] == b' ' {
+        i += 1;
+    }
+    let digits = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > digits && b.get(i) == Some(&b' ') {
+        i + 1
+    } else {
+        0
+    }
+}
+
 fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
     use unicode_width::UnicodeWidthChar;
     fn put(
@@ -4285,6 +4371,47 @@ mod tests {
 
     fn text(row: &Row) -> String {
         row.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn multiline_ghost_text_uses_virtual_rows_and_keeps_the_frame_height() {
+        let dir = std::env::temp_dir().join(format!("embedide-ghost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.c");
+        std::fs::write(&file, "int add(int a, int b) {\n    \n}\nint z;\n").unwrap();
+        let mut ws = Workspace::open(&dir, 80, 20).unwrap();
+        ws.open_file(&file).unwrap();
+        let editor = &mut ws.documents[ws.active].session.editor;
+        editor.set_cursor(28).unwrap();
+        let cursor = ws.editor().state().cursor();
+        ws.assistant.suggestion = Some(crate::tui::assistant::Suggestion {
+            path: Some(file.canonicalize().unwrap()),
+            offset: cursor,
+            text: "int s = a + b;\n    return s;".into(),
+            after: String::new(),
+        });
+        ws.documents[ws.active].size = (60, 12);
+        let mut frame = ws.documents[ws.active].frame().unwrap();
+        let height = frame.rows.len();
+        ws.ghost_text(&mut frame, 60);
+        assert_eq!(frame.rows.len(), height, "the frame keeps its height");
+        let rows: Vec<String> = frame.rows.iter().map(text).collect();
+        assert!(rows[1].contains("    int s = a + b;"), "{rows:?}");
+        assert_eq!(
+            rows[2].trim_end(),
+            "       return s;",
+            "a virtual row after the gutter: {rows:?}"
+        );
+        assert!(
+            rows[3].contains("3 }"),
+            "the code below moved down: {rows:?}"
+        );
+        assert!(
+            ws.editor().state().buffer().contents().len() < 40,
+            "nothing was inserted"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

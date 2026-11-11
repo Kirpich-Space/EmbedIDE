@@ -10,15 +10,11 @@ use embedide_ai::{
 use embedide_editor::syntax::Highlight;
 use embedide_workspace::config::AiConfig;
 use std::time::Instant;
-use std::{
-    path::PathBuf,
-    sync::{mpsc, Arc},
-    thread,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
 use unicode_width::UnicodeWidthChar;
 
 mod agent;
+mod inline;
 
 /// What the editor shares with the assistant for one action.
 #[derive(Debug, Clone, Default)]
@@ -41,6 +37,12 @@ pub struct EditorContext {
     pub language: String,
     /// Project `[ai] exclude` patterns.
     pub exclude: Vec<String>,
+    /// The buffer indents with tabs.
+    pub indent_tabs: bool,
+    /// Indentation width in columns.
+    pub indent_width: usize,
+    /// One line about the project (name, language, target) for suggestions.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +81,9 @@ pub struct Suggestion {
     pub offset: usize,
     /// Text to insert.
     pub text: String,
+    /// Text after the cursor when the suggestion was made (typing through
+    /// it keeps the suggestion only while this is unchanged).
+    pub after: String,
 }
 
 enum JobEvent {
@@ -127,7 +132,14 @@ pub struct Assistant {
     proposal: Option<(PathBuf, edit::Proposal)>,
     /// Completion awaiting Tab (accept) or Esc (reject).
     pub suggestion: Option<Suggestion>,
-    engine: Option<(complete::Engine, Option<PathBuf>, usize)>,
+    engine: Option<inline::Inline>,
+    /// Inline suggestions paused until then (after an auth or rate error).
+    inline_paused: Option<Instant>,
+    /// Inline mode set with /inline (overrides the configuration).
+    inline_mode: Option<&'static str>,
+    /// Indentation of the buffer suggestions are for.
+    inline_tabs: bool,
+    inline_width: usize,
     scroll: usize,
     /// Agent turn in progress.
     run: Option<agent::AgentRun>,
@@ -195,6 +207,10 @@ impl Assistant {
             proposal: None,
             suggestion: None,
             engine: None,
+            inline_paused: None,
+            inline_mode: None,
+            inline_tabs: false,
+            inline_width: 4,
             scroll: 0,
             run: None,
             session: None,
@@ -309,7 +325,10 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     /// Whether a request is running (for the event-loop interval).
     pub fn busy(&self) -> bool {
-        self.job.is_some() || self.checks.is_some() || self.engine.is_some() || self.run.is_some()
+        self.job.is_some()
+            || self.checks.is_some()
+            || self.engine.as_ref().is_some_and(|e| e.busy())
+            || self.run.is_some()
     }
 
     fn backend(&self) -> Result<(Box<dyn Backend>, String), String> {
@@ -604,6 +623,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             "/edit" if !arg.is_empty() => self.start_edit(ctx, arg),
             "/apply" | "/reject" => self.note(Kind::Error, "No proposed edit"),
             "/complete" => self.start_completion(ctx),
+            "/inline" => self.inline_command(arg),
             c if c.starts_with('/') => self.note(
                 Kind::Error,
                 format!("Unknown command {c}. /help lists commands"),
@@ -769,66 +789,6 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         });
     }
 
-    fn completion_request(&self, ctx: &EditorContext) -> complete::CompletionRequest {
-        complete::CompletionRequest {
-            language: ctx.language.clone(),
-            path: ctx.path.as_ref().map(|p| {
-                p.strip_prefix(&ctx.root)
-                    .unwrap_or(p)
-                    .to_string_lossy()
-                    .into_owned()
-            }),
-            text: ctx.text.clone(),
-            line: ctx.line,
-            column: ctx.column,
-            related: Vec::new(),
-            max_tokens: self.cfg.max_tokens.min(256),
-        }
-    }
-
-    /// Whether automatic inline suggestions are enabled (`ai.inline = true`).
-    pub fn inline_enabled(&self) -> bool {
-        self.cfg.inline
-    }
-
-    /// Typing in Insert mode: queue a debounced suggestion (only with `ai.inline = true`).
-    pub fn on_edit(&mut self, ctx: &EditorContext) {
-        self.suggestion = None;
-        if !self.cfg.inline || ctx.path.is_none() || self.gather(ctx).is_err() {
-            return;
-        }
-        if self.engine.is_none() {
-            match self.backend() {
-                Ok((b, model)) => {
-                    let engine = complete::Engine::new(
-                        Arc::from(b),
-                        model,
-                        Duration::from_millis(self.cfg.completion_debounce_ms),
-                    );
-                    self.engine = Some((engine, None, 0));
-                }
-                Err(e) => {
-                    self.cfg.inline = false;
-                    return self.note(Kind::Error, format!("Inline completion disabled: {e}"));
-                }
-            }
-        }
-        let req = self.completion_request(ctx);
-        if let Some((engine, path, offset)) = &mut self.engine {
-            engine.submit(req);
-            *path = ctx.path.clone();
-            *offset = ctx.offset;
-        }
-    }
-
-    /// Drop a pending suggestion (cursor moved, mode changed, Esc).
-    pub fn dismiss(&mut self) {
-        self.suggestion = None;
-        if let Some((engine, _, _)) = &self.engine {
-            engine.cancel();
-        }
-    }
-
     /// Inspect the official CLIs in the background (it runs `--version`,
     /// `--help` and their login-status commands, which take a moment).
     fn check_backends(&mut self, kinds: Vec<CliKind>) {
@@ -954,20 +914,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        if let Some((engine, path, offset)) = &self.engine {
-            if let Some((_, r)) = engine.poll() {
-                if let Ok(c) = r {
-                    if !c.insertion.is_empty() {
-                        self.suggestion = Some(Suggestion {
-                            path: path.clone(),
-                            offset: *offset,
-                            text: c.insertion,
-                        });
-                    }
-                }
-                changed = true;
-            }
-        }
+        changed |= self.tick_inline();
         let Some(job) = &mut self.job else {
             return changed;
         };
@@ -1052,6 +999,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                             path,
                             offset,
                             text: c.insertion,
+                            after: String::new(),
                         });
                     }
                 }

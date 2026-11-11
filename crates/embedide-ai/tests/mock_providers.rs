@@ -314,6 +314,7 @@ fn completion_pipeline_through_http() {
         column: 5,
         related: vec![("math.h".into(), "int add(int a, int b);".into())],
         max_tokens: 64,
+        ..Default::default()
     };
     let c = complete::complete(b.as_ref(), &req, "kimi-test", &Cancel::default()).unwrap();
     assert_eq!(c.insertion, "return a + b;");

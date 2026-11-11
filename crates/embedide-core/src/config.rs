@@ -342,13 +342,14 @@ impl NativeConfig {
                     letter == "space"
                         || letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase()
                 })
+                || binding == "alt+\\"
                 || binding
                     .strip_prefix("ctrl+alt+")
                     .or_else(|| binding.strip_prefix("alt+"))
                     .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit());
             if !valid || !bindings.insert(binding) {
                 return Err(Error(
-                    "Key bindings must be unique F1..F12, ctrl+a..ctrl+z, ctrl+space, alt+0..alt+9 or ctrl+alt+0..ctrl+alt+9 chords"
+                    "Key bindings must be unique F1..F12, ctrl+a..ctrl+z, ctrl+space, alt+\\, alt+0..alt+9 or ctrl+alt+0..ctrl+alt+9 chords"
                         .into(),
                 ));
             }

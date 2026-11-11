@@ -165,7 +165,8 @@ class MockProvider(http.server.BaseHTTPRequestHandler):
         MockProvider.requests.append({"auth": self.headers.get("Authorization"), "body": body})
         system = next((m["content"] for m in body["messages"] if m["role"] == "system"), "")
         if system.startswith("You are a code completion engine"):
-            text = "return 42;"
+            prompt = body["messages"][-1]["content"]
+            text = "int total = a + b;\n    return total;" if "// MULTI" in prompt else "return 42;"
         elif system.startswith("You edit one source file"):
             text = "// reviewed\nint main(void) {\n    return 0;\n}\n"
         else:
@@ -408,6 +409,87 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(b":", b"w", b"\r")
         self.quit(ide)
         self.assertEqual((self.root / "src" / "main.c").read_text(), before)
+
+    def test_inline_ai_suggestion_alt_backslash_multiline_type_through_tab_and_undo(self):
+        MockProvider.requests = []
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockProvider)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        (self.config / "config.toml").write_text(
+            '[ai]\nprovider = "openai"\n[ai.providers.openai]\n'
+            f'base_url = "http://127.0.0.1:{server.server_port}/v1"\nmodel = "mock-model"\n'
+            '[ai.completion]\nmode = "manual"\n')
+        self.env["OPENAI_API_KEY"] = "sk-test-only"
+        source = "// MULTI\nint sum(int a, int b) {\n    \n}\n"
+        (self.root / "src" / "sum.c").write_text(source)
+        ide = self.ide()
+        self.open_file(ide, "src/sum.c")
+        ide.keys(b"3", b"G", b"A")
+        ide.until(b"INSERT | src/sum.c")
+        time.sleep(0.5)
+        self.assertEqual(MockProvider.requests, [], "manual mode sends nothing while editing")
+        ide.keys(b"\x1b[92;3u")  # Alt+\\ (kitty)
+        self.until_panel_text(ide, "3     int total = a + b;")
+        self.until_panel_text(ide, "      return total;")  # a virtual row; `}` moved down
+        lines = ide.screen().splitlines()
+        row = next(i for i, l in enumerate(lines) if "      return total;" in l)
+        self.assertIn("| 4 }", lines[row + 1], "the closing brace moved below the virtual row")
+        ide.until(b"Tab accepts")
+        self.assertEqual((self.root / "src" / "sum.c").read_text(), source, "nothing written before Tab")
+        prompt = MockProvider.requests[-1]["body"]["messages"][-1]["content"]
+        self.assertIn("<|cursor|>", prompt)
+        # Typing the start of the suggestion keeps the rest without a new request.
+        ide.keys(b"i", b"n", b"t")
+        self.until_panel_text(ide, "3     int total = a + b;")
+        self.assertEqual(len(MockProvider.requests), 1)
+        ide.keys(b"\t")
+        ide.until(b"Suggestion inserted")
+        ide.keys(ide.esc, b":", b"w", b"\r")
+        ide.until(b"Saved")
+        self.assertEqual((self.root / "src" / "sum.c").read_text(),
+                         "// MULTI\nint sum(int a, int b) {\n    int total = a + b;\n    return total;\n}\n")
+        # Undo removes the insert session with the accepted suggestion; redo restores it.
+        accepted = (self.root / "src" / "sum.c").read_text()
+        ide.keys(b"u", b":", b"w", b"\r")
+        ide.until(b"Saved")
+        self.assertEqual((self.root / "src" / "sum.c").read_text(), source)
+        ide.keys(ide.ctrl("r"), b":", b"w", b"\r")
+        ide.until(b"Saved")
+        self.assertEqual((self.root / "src" / "sum.c").read_text(), accepted)
+        # Without a suggestion Tab still indents.
+        ide.keys(b"o", b"\t", b"x", ide.esc, b":", b"w", b"\r")
+        ide.until(b"Saved")
+        self.assertIn("\n        x\n", (self.root / "src" / "sum.c").read_text())
+        self.assertEqual(len(MockProvider.requests), 1)
+        self.quit(ide)
+
+    def test_inline_ai_auto_mode_is_debounced_and_only_at_line_end(self):
+        MockProvider.requests = []
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockProvider)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        (self.config / "config.toml").write_text(
+            '[ai]\nprovider = "openai"\ncompletion_debounce_ms = 300\n[ai.providers.openai]\n'
+            f'base_url = "http://127.0.0.1:{server.server_port}/v1"\nmodel = "mock-model"\n'
+            '[ai.completion]\nmode = "auto"\n')
+        self.env["OPENAI_API_KEY"] = "sk-test-only"
+        ide = self.ide()
+        self.open_file(ide, "src/main.c")
+        ide.keys(b"2", b"G", b"A")
+        ide.until(b"INSERT | src/main.c")
+        for ch in b" // x":
+            ide.keys(bytes([ch]), pause=0.02)
+        ide.until(b"Tab accepts")
+        self.assertEqual(len(MockProvider.requests), 1, "five keystrokes, one debounced request")
+        # Mid-line (text after the cursor): no request.
+        ide.keys(ide.esc, b"0", b"i", b"x")
+        time.sleep(1.0)
+        ide.pump(0.1)
+        self.assertEqual(len(MockProvider.requests), 1)
+        ide.keys(ide.esc, b"u", b":", b"q", b"!", b"\r")
+        self.assertEqual(ide.finish(), 0)
 
     def test_mouse_is_opt_in_and_clicks_open_files(self):
         (self.root / "clicked.c").write_text("int clicked;\n")

@@ -568,6 +568,7 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
                 column,
                 related: rel,
                 max_tokens: c.max_tokens,
+                ..Default::default()
             };
             if pick.dry_run {
                 let r = complete::request(&req, &c.model).map_err(to_err)?;

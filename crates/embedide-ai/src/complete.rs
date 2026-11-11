@@ -5,6 +5,7 @@
 use crate::{Backend, Cancel, Error, Message, Request, Result, Usage};
 use serde::Serialize;
 use std::{
+    collections::VecDeque,
     sync::{mpsc, Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
@@ -24,7 +25,7 @@ markdown fences, no repetition of code before or after the marker. Complete the 
 whole function body as appropriate. If nothing sensible fits, reply with nothing.";
 
 /// One completion request.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CompletionRequest {
     /// Source language id (c, cpp, rust, zig, asm, fortran, …).
     pub language: String,
@@ -40,6 +41,14 @@ pub struct CompletionRequest {
     pub related: Vec<(String, String)>,
     /// Output token cap.
     pub max_tokens: u32,
+    /// Declarations elsewhere in the file (see [`symbols`]).
+    pub symbols: Vec<String>,
+    /// One line about the project (name, target, language).
+    pub project: Option<String>,
+    /// Characters before the cursor sent (0: [`PREFIX_CHARS`]).
+    pub prefix_chars: usize,
+    /// Characters after the cursor sent (0: [`SUFFIX_CHARS`]).
+    pub suffix_chars: usize,
 }
 
 /// Result.
@@ -97,11 +106,122 @@ fn head(s: &str, n: usize) -> &str {
     s.char_indices().nth(n).map(|(b, _)| &s[..b]).unwrap_or(s)
 }
 
+/// Declarations of the file outside the sent window (function, type and
+/// macro heads, assembly labels): cheap context about nearby symbols.
+/// `window` is the byte range already sent.
+pub fn symbols(
+    text: &str,
+    language: &str,
+    window: std::ops::Range<usize>,
+    max: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    for line in text.split_inclusive('\n') {
+        let start = pos;
+        pos += line.len();
+        if start >= window.start && start < window.end {
+            continue;
+        }
+        let l = line.trim_end();
+        if l.is_empty() || l.starts_with([' ', '\t']) || l.len() > 160 {
+            continue;
+        }
+        let words = [
+            "fn ", "pub ", "struct ", "enum ", "union ", "typedef ", "impl ", "trait ", "type ",
+            "const ", "static ", "extern ", "#define ", "mod ", "class ", "def ", "export ",
+        ];
+        let decl = match language {
+            "asm" => l.ends_with(':') && !l.starts_with(['.', ';', '#']),
+            _ => {
+                words.iter().any(|w| l.starts_with(w))
+                    || (l.contains('(')
+                        && !l.starts_with(['#', '/', '*', '}'])
+                        && !l.ends_with(';')
+                        && l.chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphabetic() || c == '_'))
+                    || (l.contains('(') && l.ends_with(");") && !l.starts_with(['#', '/']))
+            }
+        };
+        if decl {
+            out.push(l.trim_end_matches('{').trim_end().to_string());
+            if out.len() >= max {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Re-indent the continuation lines of a suggestion in the buffer's style
+/// (tabs, or `width` spaces).
+pub fn reindent(text: &str, tabs: bool, width: usize) -> String {
+    let width = width.max(1);
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        if i == 0 {
+            out.push_str(line);
+            continue;
+        }
+        let lead: String = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let cells: usize = lead
+            .chars()
+            .map(|c| if c == '\t' { width } else { 1 })
+            .sum();
+        if tabs {
+            out.push_str(&"\t".repeat(cells / width));
+            out.push_str(&" ".repeat(cells % width));
+        } else {
+            out.push_str(&" ".repeat(cells));
+        }
+        out.push_str(&line[lead.len()..]);
+    }
+    out
+}
+
+/// At most `max` lines of a suggestion.
+pub fn limit_lines(text: &str, max: usize) -> String {
+    match text.split_inclusive('\n').nth(max.max(1)) {
+        Some(_) => text
+            .split_inclusive('\n')
+            .take(max.max(1))
+            .collect::<String>()
+            .trim_end_matches('\n')
+            .to_string(),
+        None => text.to_string(),
+    }
+}
+
 /// Build the provider request (no network).
 pub fn request(req: &CompletionRequest, model: &str) -> Result<Request> {
     let at = offset(&req.text, req.line, req.column)?;
     let (before, after) = req.text.split_at(at);
+    let prefix = if req.prefix_chars == 0 {
+        PREFIX_CHARS
+    } else {
+        req.prefix_chars
+    };
+    let suffix = if req.suffix_chars == 0 {
+        SUFFIX_CHARS
+    } else {
+        req.suffix_chars
+    };
     let mut prompt = String::new();
+    if let Some(p) = &req.project {
+        prompt.push_str(&format!("Project: {p}\n"));
+    }
+    if !req.symbols.is_empty() {
+        prompt.push_str("Declarations elsewhere in this file:\n");
+        for s in &req.symbols {
+            prompt.push_str(s);
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
     for (name, content) in &req.related {
         prompt.push_str(&format!(
             "Related file {name}:\n```\n{}\n```\n\n",
@@ -112,8 +232,8 @@ pub fn request(req: &CompletionRequest, model: &str) -> Result<Request> {
         "Language: {}\nFile: {}\n```\n{}{CURSOR}{}\n```\n",
         req.language,
         req.path.as_deref().unwrap_or("(unsaved buffer)"),
-        tail(before, PREFIX_CHARS),
-        head(after, SUFFIX_CHARS)
+        tail(before, prefix),
+        head(after, suffix)
     ));
     Ok(Request {
         model: model.into(),
@@ -175,32 +295,76 @@ pub fn complete(
 }
 
 struct State {
-    pending: Option<(u64, CompletionRequest, Instant)>,
+    /// (id, request, queued at, debounce for this request)
+    pending: Option<(u64, CompletionRequest, Instant, Duration)>,
     latest: u64,
     in_flight: Option<Cancel>,
     shutdown: bool,
+    cache: VecDeque<(u64, String)>,
+}
+
+/// Engine settings.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    /// Wait after the last keystroke.
+    pub debounce: Duration,
+    /// Longest one request may run.
+    pub timeout: Duration,
+    /// Suggestions remembered by context (0: no cache).
+    pub cache_entries: usize,
+}
+
+/// Key for the suggestion cache: the text around the cursor.
+fn cache_key(req: &CompletionRequest) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let at = offset(&req.text, req.line, req.column).ok()?;
+    let (before, after) = req.text.split_at(at);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    req.path.hash(&mut h);
+    req.language.hash(&mut h);
+    tail(before, 2000).hash(&mut h);
+    head(after, 500).hash(&mut h);
+    Some(h.finish())
 }
 
 /// Debounced, superseding completion service for editors.
 pub struct Engine {
     shared: Arc<(Mutex<State>, Condvar)>,
     results: mpsc::Receiver<(u64, Result<Completion>)>,
+    tx: mpsc::Sender<(u64, Result<Completion>)>,
+    debounce: Duration,
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl Engine {
     /// Start a worker that asks `backend`/`model`, waiting `debounce` after the last keystroke.
     pub fn new(backend: Arc<dyn Backend>, model: String, debounce: Duration) -> Self {
+        Self::with_options(
+            backend,
+            model,
+            Options {
+                debounce,
+                timeout: Duration::from_secs(60),
+                cache_entries: 0,
+            },
+        )
+    }
+
+    /// Start a worker with explicit [`Options`].
+    pub fn with_options(backend: Arc<dyn Backend>, model: String, options: Options) -> Self {
+        let debounce = options.debounce;
         let shared = Arc::new((
             Mutex::new(State {
                 pending: None,
                 latest: 0,
                 in_flight: None,
                 shutdown: false,
+                cache: VecDeque::new(),
             }),
             Condvar::new(),
         ));
         let (tx, results) = mpsc::channel();
+        let worker_tx = tx.clone();
         let s = shared.clone();
         let worker = thread::spawn(move || loop {
             let (lock, cv) = &*s;
@@ -213,7 +377,7 @@ impl Engine {
             }
             // Debounce: wait until no newer request arrived for `debounce`
             loop {
-                let (_, _, at) = st.pending.as_ref().expect("pending");
+                let (_, _, at, debounce) = st.pending.as_ref().expect("pending");
                 let wait = debounce.saturating_sub(at.elapsed());
                 if wait.is_zero() || st.shutdown {
                     break;
@@ -223,27 +387,78 @@ impl Engine {
             if st.shutdown {
                 return;
             }
-            let (id, req, _) = st.pending.take().expect("pending");
+            let (id, req, _, _) = st.pending.take().expect("pending");
             let cancel = Cancel::default();
             st.in_flight = Some(cancel.clone());
             drop(st);
-            let result = complete(backend.as_ref(), &req, &model, &cancel);
+            // A watchdog cancels a request that takes longer than the timeout.
+            let (done_tx, done_rx) = mpsc::channel::<()>();
+            let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let watchdog = {
+                let cancel = cancel.clone();
+                let timed_out = timed_out.clone();
+                let timeout = options.timeout;
+                thread::spawn(move || {
+                    if let Err(mpsc::RecvTimeoutError::Timeout) = done_rx.recv_timeout(timeout) {
+                        timed_out.store(true, std::sync::atomic::Ordering::Release);
+                        cancel.cancel();
+                    }
+                })
+            };
+            let mut result = complete(backend.as_ref(), &req, &model, &cancel);
+            let _ = done_tx.send(());
+            let _ = watchdog.join();
+            let expired = timed_out.load(std::sync::atomic::Ordering::Acquire);
+            if expired {
+                result = Err(Error::Network(format!(
+                    "no suggestion within {} s (ai.completion.timeout_secs)",
+                    options.timeout.as_secs()
+                )));
+            }
             let mut st = lock.lock().expect("lock");
             st.in_flight = None;
+            if let (Ok(c), Some(key)) = (&result, cache_key(&req)) {
+                if options.cache_entries > 0 && !c.insertion.is_empty() {
+                    st.cache.retain(|(k, _)| *k != key);
+                    st.cache.push_back((key, c.insertion.clone()));
+                    while st.cache.len() > options.cache_entries {
+                        st.cache.pop_front();
+                    }
+                }
+            }
             // Superseded or cancelled results are dropped, never shown
-            if id == st.latest && !cancel.is_cancelled() {
-                let _ = tx.send((id, result));
+            if id == st.latest && (!cancel.is_cancelled() || expired) {
+                let _ = worker_tx.send((id, result));
             }
         });
         Self {
             shared,
             results,
+            tx,
+            debounce,
             worker: Some(worker),
         }
     }
 
+    /// Queue a request without the debounce (an explicit request).
+    pub fn submit_now(&self, req: CompletionRequest) -> u64 {
+        self.queue(req, Duration::ZERO)
+    }
+
+    /// Whether a request is queued or running.
+    pub fn busy(&self) -> bool {
+        let (lock, _) = &*self.shared;
+        lock.lock()
+            .map(|st| st.pending.is_some() || st.in_flight.is_some())
+            .unwrap_or(false)
+    }
+
     /// Queue a request; any older pending or in-flight request is superseded.
     pub fn submit(&self, req: CompletionRequest) -> u64 {
+        self.queue(req, self.debounce)
+    }
+
+    fn queue(&self, req: CompletionRequest, debounce: Duration) -> u64 {
         let (lock, cv) = &*self.shared;
         let mut st = lock.lock().expect("lock");
         st.latest += 1;
@@ -251,7 +466,25 @@ impl Engine {
         if let Some(c) = &st.in_flight {
             c.cancel();
         }
-        st.pending = Some((id, req, Instant::now()));
+        // The same context was answered before: no request at all.
+        let cached = cache_key(&req).and_then(|key| {
+            st.cache
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, text)| text.clone())
+        });
+        if let Some(insertion) = cached {
+            st.pending = None;
+            let _ = self.tx.send((
+                id,
+                Ok(Completion {
+                    insertion,
+                    usage: Usage::default(),
+                }),
+            ));
+            return id;
+        }
+        st.pending = Some((id, req, Instant::now(), debounce));
         cv.notify_all();
         id
     }
@@ -346,7 +579,96 @@ mod tests {
             column,
             related: Vec::new(),
             max_tokens: 64,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn cache_answers_the_same_context_without_a_request_and_timeouts_report() {
+        let fake = Arc::new(Fake {
+            calls: AtomicUsize::new(0),
+            delay: Duration::from_millis(5),
+            reply: "1;".into(),
+        });
+        let e = Engine::with_options(
+            fake.clone(),
+            "m".into(),
+            Options {
+                debounce: Duration::from_millis(1),
+                timeout: Duration::from_secs(5),
+                cache_entries: 8,
+            },
+        );
+        e.submit_now(req("int x = ", 1, 9));
+        assert_eq!(
+            e.wait(Duration::from_secs(2)).unwrap().1.unwrap().insertion,
+            "1;"
+        );
+        let id = e.submit(req("int x = ", 1, 9));
+        let (got, r) = e.wait(Duration::from_secs(2)).unwrap();
+        assert_eq!((got, r.unwrap().insertion.as_str()), (id, "1;"));
+        assert_eq!(
+            fake.calls.load(Ordering::SeqCst),
+            1,
+            "second answer came from the cache"
+        );
+        let slow = Arc::new(Fake {
+            calls: AtomicUsize::new(0),
+            delay: Duration::from_secs(5),
+            reply: "x".into(),
+        });
+        let e = Engine::with_options(
+            slow,
+            "m".into(),
+            Options {
+                debounce: Duration::ZERO,
+                timeout: Duration::from_millis(100),
+                cache_entries: 0,
+            },
+        );
+        e.submit(req("a", 1, 2));
+        let (_, r) = e
+            .wait(Duration::from_secs(3))
+            .expect("a timeout is reported");
+        assert!(r.unwrap_err().to_string().contains("timeout_secs"));
+    }
+
+    #[test]
+    fn symbols_reindent_and_line_limits() {
+        let text = "#include <stdio.h>\nstatic int count;\nint add(int a, int b) {\n    return a + b;\n}\nvoid run(void);\n";
+        let s = symbols(text, "c", 0..0, 10);
+        assert_eq!(
+            s,
+            [
+                "static int count;",
+                "int add(int a, int b)",
+                "void run(void);"
+            ]
+        );
+        let at = text.find("int add").unwrap();
+        assert!(!symbols(text, "c", at..text.len(), 10)
+            .iter()
+            .any(|l| l.contains("add")));
+        let asm = "_start:\n    mov rax, 60\n.Lloop:\nloop:\n";
+        assert_eq!(symbols(asm, "asm", 0..0, 10), ["_start:", "loop:"]);
+        assert_eq!(reindent("{\n        x;\n    }", true, 4), "{\n\t\tx;\n\t}");
+        assert_eq!(reindent("{\n\tx;\n}", false, 4), "{\n    x;\n}");
+        assert_eq!(limit_lines("a\nb\nc\n", 2), "a\nb");
+        assert_eq!(limit_lines("a\nb", 5), "a\nb");
+        let r = request(
+            &CompletionRequest {
+                symbols: vec!["int add(int a, int b)".into()],
+                project: Some("blink (C, cortex-m4)".into()),
+                prefix_chars: 3,
+                ..req("abcdefgh", 1, 9)
+            },
+            "m",
+        )
+        .unwrap();
+        let p = &r.messages[0].content;
+        assert!(p.contains("Project: blink"));
+        assert!(p.contains("Declarations elsewhere in this file:\nint add"));
+        assert!(p.contains("```\nfgh<|cursor|>"), "{p}");
     }
 
     #[test]
