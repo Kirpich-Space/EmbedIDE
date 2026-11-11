@@ -214,7 +214,7 @@ pub struct TaskConfig {
 pub struct NativeConfig {
     /// Schema version, currently 1.
     pub version: u32,
-    /// dark, light or mono.
+    /// dark (default: terminal colours, grey bars), light or mono (inverse video only).
     pub theme: String,
     /// Tab display width, 1..=16.
     pub tab_width: usize,
@@ -257,7 +257,7 @@ impl Default for NativeConfig {
     fn default() -> Self {
         Self {
             version: 1,
-            theme: "mono".into(),
+            theme: "dark".into(),
             tab_width: 4,
             profiles: BTreeMap::from([
                 ("debug".into(), Profile::default()),

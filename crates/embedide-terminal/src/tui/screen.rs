@@ -44,11 +44,12 @@ impl Screen {
                 Clear(ClearType::CurrentLine)
             )?;
             for run in &row.runs {
-                let mut colors = match self.theme {
-                    Theme::Mono => (Color::Reset, Color::Reset),
-                    Theme::Dark => (Color::Grey, Color::Black),
-                    Theme::Light => (Color::Black, Color::White),
-                };
+                // Text keeps the terminal's own colours (dark) or dark-on-light
+                // (light). Bars, titles and selections ("chrome") use a muted
+                // grey background instead of inverse video, which on a dark
+                // terminal turns into a bright white block. Mono, and
+                // terminals without 256 colours, keep inverse video.
+                let (mut colors, chrome) = run_colors(self.theme, run.selected, colors256());
                 if let Some(kind) = run.style {
                     colors.0 = syntax_color(self.theme, kind);
                 }
@@ -63,7 +64,10 @@ impl Screen {
                 colors.1 = cell.bg.map_or(colors.1, degrade);
                 queue!(self.output, SetAttribute(Attribute::Reset))?;
                 for (on, attribute) in [
-                    (run.selected || cell.inverse, Attribute::Reverse),
+                    (
+                        (run.selected && !chrome) || cell.inverse,
+                        Attribute::Reverse,
+                    ),
                     (cell.bold, Attribute::Bold),
                     (cell.dim, Attribute::Dim),
                     (cell.italic, Attribute::Italic),
@@ -156,6 +160,36 @@ pub fn syntax_color(theme: Theme, kind: Highlight) -> Color {
     }
 }
 
+/// Foreground/background of a run, and whether it is drawn as "chrome"
+/// (a grey bar instead of inverse video).
+pub fn run_colors(theme: Theme, selected: bool, colors256: bool) -> ((Color, Color), bool) {
+    let chrome = selected && theme != Theme::Mono && colors256;
+    let colors = match (theme, chrome) {
+        (Theme::Mono, _) | (Theme::Dark, false) => (Color::Reset, Color::Reset),
+        (Theme::Dark, true) => (Color::AnsiValue(252), Color::AnsiValue(237)),
+        (Theme::Light, false) => (Color::Black, Color::White),
+        (Theme::Light, true) => (Color::AnsiValue(234), Color::AnsiValue(252)),
+    };
+    (colors, chrome)
+}
+
+/// The terminal shows the 256-colour palette (xterm-256color and friends,
+/// or a truecolor COLORTERM); the Linux console and plain `xterm` do not.
+fn colors256() -> bool {
+    static COLORS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *COLORS.get_or_init(|| {
+        truecolor()
+            || std::env::var("TERM").is_ok_and(|t| {
+                t.contains("256")
+                    || t.contains("kitty")
+                    || t.contains("direct")
+                    || t == "foot"
+                    || t.starts_with("wezterm")
+                    || t == "alacritty"
+            })
+    })
+}
+
 fn truecolor() -> bool {
     static TRUECOLOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TRUECOLOR
@@ -189,12 +223,12 @@ pub fn ansi256(r: u8, g: u8, b: u8) -> u8 {
 /// Restrained terminal palette. Monochrome uses only inverse video.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
-    /// Terminal default colors.
-    #[default]
+    /// Terminal default colors; bars and selections in inverse video.
     Mono,
-    /// Light text on a dark background.
+    /// The terminal's own colours; muted grey bars and selections (default).
+    #[default]
     Dark,
-    /// Dark text on a light background.
+    /// Dark text on a light background; light grey bars and selections.
     Light,
 }
 impl Screen {
@@ -204,5 +238,26 @@ impl Screen {
             self.theme = theme;
             self.previous = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bars_are_muted_grey_not_inverse_white_where_the_terminal_allows() {
+        // Default theme: the terminal's own text colours, grey bars.
+        assert_eq!(Theme::default(), Theme::Dark);
+        assert_eq!(
+            run_colors(Theme::Dark, false, true),
+            ((Color::Reset, Color::Reset), false)
+        );
+        let ((fg, bg), chrome) = run_colors(Theme::Dark, true, true);
+        assert!(chrome && fg == Color::AnsiValue(252) && bg == Color::AnsiValue(237));
+        // Without 256 colours, and in mono, bars stay inverse video.
+        assert!(!run_colors(Theme::Dark, true, false).1);
+        assert!(!run_colors(Theme::Mono, true, true).1);
+        assert!(run_colors(Theme::Light, true, true).1);
     }
 }

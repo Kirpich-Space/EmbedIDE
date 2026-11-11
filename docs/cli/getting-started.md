@@ -137,7 +137,29 @@ Inside the IDE (Ctrl+K, type the command name):
 
 Hardware paths were tested with virtual serial ports and fake tools only; see [status](status.md).
 
-## 6. Configuration
+## 6. AI with your Claude Code or Codex subscription
+
+If `claude` (Claude Code) or `codex` (Codex CLI) is installed and logged in, nothing else is needed:
+
+1. Ctrl+Alt+2 (or Alt+2) opens the AI panel.
+2. `/provider claude-code` (or `/provider codex-cli`) — the panel checks the CLI and shows e.g.
+   `Claude Code 2.1.322 … ready, logged in via claude.ai (pro)`.
+3. `/file` attaches the current file; type a question and press Enter. `/cancel` stops a request.
+4. `/edit <instruction>` shows a diff; `/apply` puts it into the buffer (undo with `u`; `:w` saves).
+
+Requests count against that CLI's plan and limits, not an API key. Not logged in? Run `claude` or
+`codex login` in a normal terminal once. To make it the default: `ai.provider = "claude-code"` in
+`~/.config/embedide/config.toml`. Details: [AI](ai.md).
+
+## 7. Assembly and binaries
+
+* `embed hello.asm` / `embed start.S`: the dialect (NASM, GNU as AT&T/Intel, ARM, AArch64, RISC-V) is
+  detected; `:label name` jumps to a label; F5 runs your Makefile; errors appear in F3 PROBLEMS.
+  Try `examples/asm`.
+* `embed ./prog` (any binary): HEX view, `e` ELF headers/sections/symbols, `d` disassembly, `m` main,
+  `g` go to offset/address, `/` search. Editing starts only with `i` and writes only after `w` + `y`.
+
+## 8. Configuration
 
 | File | Scope |
 |---|---|
@@ -150,7 +172,7 @@ All files are optional. Errors in them never stop the IDE: they are shown at sta
 `:settings`, and defaults are used. `:edit_project_config`, `:edit_user_config` open them; `:reload`
 applies changes.
 
-## 7. Known limitations of 0.1.0
+## 9. Known limitations
 
 * Verified on Linux only; Windows/macOS are untested.
 * One shell session in the terminal panel; 5000 lines of history.

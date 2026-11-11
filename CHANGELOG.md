@@ -1,5 +1,28 @@
 # Changelog
 
+## `embed` 0.2.0 — in development (`0.2.0-dev`, not released)
+
+### Added
+- AI backends `claude-code` and `codex-cli`: the installed official CLIs with their own login,
+  streaming structured output, cancellation of the whole process group, time and output limits,
+  login/limit/error classification, `/providers`, `/status`, `/file <paths>`, `/selection`, `/diff`,
+  `/history`; `[ai.cli]` settings. No API keys or parent Claude Code session variables are passed.
+- Assembly dialects (NASM, GNU as AT&T/Intel, ARM, AArch64, RISC-V): dialect-aware highlighting with
+  branch colour, `:label` / Go to Label, completion of labels/instructions/registers/directives,
+  `native.asm.syntax`, `examples/asm`.
+- Binary view: paged HEX viewer/editor (search, goto, confirmed atomic save, undo/redo), ELF
+  inspector, objdump/llvm-objdump disassembly; `native.binary`.
+
+### Changed
+- Default theme `dark`: the terminal's own text colours with muted grey bars and selections instead of
+  bright inverse video (`mono` keeps inverse video; terminals without 256 colours fall back to it).
+
+### Fixed
+- NASM and GNU as error messages (no column) now reach PROBLEMS.
+- GNU as `;` (statement separator) and `@function` were highlighted as comments.
+- A failed CLI capability probe was cached until restart; the IDE could exit before stopping a running
+  CLI request; a backend status check blocked sending a message.
+
 ## `embed` 0.1.0 — release candidate (unreleased, not published)
 
 First release of the Rust terminal IDE (`crates/`, binary `embed`). Entries numbered 2.x further

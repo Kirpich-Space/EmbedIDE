@@ -43,6 +43,19 @@ scroll through history; `:mouse` turns on mouse support. Enter indents by langua
 popup appears while you type (rust-analyzer, clangd and zls when installed, otherwise words of the
 file). See [the TUI guide](docs/cli/tui.md).
 
+**Development version 0.2.0-dev** adds:
+
+- **Claude Code and Codex CLI as AI backends** — `/provider claude-code` or `/provider codex-cli` in the
+  AI panel uses your installed, already logged-in official CLI (your subscription, no API key, no second
+  login), streams the answer, and gives the model no file access (Claude Code) or a read-only sandbox
+  (Codex). See [AI](docs/cli/ai.md#claude-code-and-codex-cli-backends-claude-code-codex-cli).
+- **Assembly** — NASM, GNU as AT&T/Intel, ARM, AArch64 and RISC-V dialects detected per file; branch
+  highlighting, labels (`:label`), completion of labels/instructions/registers, assembler errors in
+  PROBLEMS; [examples/asm](examples/asm).
+- **Binary files** — HEX viewer with search and a confirmed, undoable edit mode; ELF inspector (headers,
+  segments, sections, symbols); disassembly via objdump/llvm-objdump. See
+  [binary files](docs/cli/tui.md#binary-files-hex-elf-and-disassembly).
+
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds
 with exactly what you select in `embedide.toml` (per project and profile) or in your user

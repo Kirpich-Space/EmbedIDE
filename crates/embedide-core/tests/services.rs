@@ -100,7 +100,7 @@ fn configuration_preserves_unknown_project_fields_and_layers_local_settings() {
 fn missing_configuration_uses_defaults_and_key_bindings_are_validated() {
     let f = Fixture::new();
     let config = NativeConfig::load(&f.0).unwrap();
-    assert_eq!((config.theme.as_str(), config.tab_width), ("mono", 4));
+    assert_eq!((config.theme.as_str(), config.tab_width), ("dark", 4));
     assert!(!config.mouse && config.keys.is_empty());
     f.write(
         "embedide.local.json",

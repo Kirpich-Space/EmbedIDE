@@ -78,6 +78,8 @@ struct Job {
     streaming: bool,
     /// The worker thread; joined on shutdown so a CLI child is always stopped.
     handle: Option<thread::JoinHandle<()>>,
+    /// Transcript entry the answer streams into (other notes may follow it).
+    slot: Option<usize>,
 }
 
 /// The panel's state.
@@ -159,6 +161,9 @@ impl Assistant {
         self.transcript.push((kind, text.into()));
         if self.transcript.len() > 500 {
             self.transcript.drain(..100);
+            if let Some(job) = &mut self.job {
+                job.slot = job.slot.and_then(|i| i.checked_sub(100));
+            }
         }
         self.scroll = 0;
     }
@@ -542,6 +547,7 @@ impl Assistant {
         );
         self.history.push(Message::user(content));
         self.note(Kind::Assistant, String::new());
+        let slot = Some(self.transcript.len() - 1);
         let cancel = Cancel::default();
         let c2 = cancel.clone();
         let (tx, rx) = mpsc::channel();
@@ -557,6 +563,7 @@ impl Assistant {
             cancel,
             streaming: false,
             handle: Some(handle),
+            slot,
         });
     }
 
@@ -602,6 +609,7 @@ impl Assistant {
             cancel,
             streaming: false,
             handle: Some(handle),
+            slot: None,
         });
     }
 
@@ -642,6 +650,7 @@ impl Assistant {
             cancel,
             streaming: false,
             handle: Some(handle),
+            slot: None,
         });
     }
 
@@ -739,6 +748,7 @@ impl Assistant {
             cancel: Cancel::default(),
             streaming: false,
             handle: Some(handle),
+            slot: None,
         });
     }
 
@@ -838,7 +848,9 @@ impl Assistant {
             match job.rx.try_recv() {
                 Ok(JobEvent::Delta(d)) => {
                     job.streaming = true;
-                    if let Some((Kind::Assistant, t)) = self.transcript.last_mut() {
+                    if let Some((Kind::Assistant, t)) =
+                        job.slot.and_then(|i| self.transcript.get_mut(i))
+                    {
                         t.push_str(&d);
                     }
                     changed = true;
@@ -857,11 +869,13 @@ impl Assistant {
             }
         }
         if let Some(ev) = finished {
-            self.job = None;
+            let slot = self.job.take().and_then(|j| j.slot);
             changed = true;
             match ev {
                 JobEvent::Chat(Ok(r)) => {
-                    if let Some((Kind::Assistant, t)) = self.transcript.last_mut() {
+                    if let Some((Kind::Assistant, t)) =
+                        slot.and_then(|i| self.transcript.get_mut(i))
+                    {
                         if t.is_empty() {
                             t.push_str(&r.text);
                         }
@@ -872,9 +886,10 @@ impl Assistant {
                     }
                 }
                 JobEvent::Chat(Err(e)) => {
-                    if matches!(self.transcript.last(), Some((Kind::Assistant, t)) if t.is_empty())
-                    {
-                        self.transcript.pop();
+                    if let Some(i) = slot.filter(|&i| {
+                        matches!(self.transcript.get(i), Some((Kind::Assistant, t)) if t.is_empty())
+                    }) {
+                        self.transcript.remove(i);
                     }
                     self.history.pop();
                     self.note(Kind::Error, e.to_string());

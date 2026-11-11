@@ -3,7 +3,7 @@
 
 mock_cli.py KIND MODE LOGDIR [cli args...]
 KIND: claude | codex | old-claude (no structured output in --help)
-MODE: ok | auth | limit | crash | hang | huge | noread | loggedout | child
+MODE: ok | slow | auth | limit | crash | hang | huge | noread | loggedout | child
 Writes LOGDIR/args, LOGDIR/env, LOGDIR/cwd, LOGDIR/stdin for inspection.
 """
 import json, os, subprocess, sys, time
@@ -94,7 +94,7 @@ if kind == "claude":
     for p in parts:
         emit({"type": "stream_event", "event": {"type": "content_block_delta",
               "delta": {"type": "text_delta", "text": p}}})
-        time.sleep(0.02)
+        time.sleep(0.6 if mode == "slow" else 0.02)
     emit({"type": "assistant", "message": {"model": "mock-model", "content": [{"type": "text", "text": "".join(parts)}]}})
     emit({"type": "result", "subtype": "success", "is_error": False, "result": "".join(parts),
           "usage": {"input_tokens": 11, "output_tokens": 7}})

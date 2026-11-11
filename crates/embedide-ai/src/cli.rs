@@ -320,10 +320,10 @@ fn stop(child: &mut Child) {
                 while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
                     thread::sleep(Duration::from_millis(10));
                 }
-                if matches!(child.try_wait(), Ok(None)) {
-                    let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
-                }
             }
+            // Always: a launcher (codex.js) may exit while the real CLI in
+            // its group is still shutting down "gracefully".
+            let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
         }
     }
     let _ = child.kill();

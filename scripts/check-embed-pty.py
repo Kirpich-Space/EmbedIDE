@@ -268,7 +268,7 @@ class EmbedContracts(unittest.TestCase):
         ide.panel("2")
         ide.until(b"ASSISTANT \xc2\xb7 NORMAL")
         ide.panel("2")  # again: back to the editor
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         ide.panel("1")
         ide.until(b"> EXPLORER")
         ide.until(b"EXPLORER \xc2\xb7 NORMAL")
@@ -413,7 +413,7 @@ class EmbedContracts(unittest.TestCase):
         (self.root / "clicked.c").write_text("int clicked;\n")
         ide = self.ide()
         ide.keys(ide.esc)
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         self.assertNotIn(b"\x1b[?1000h", ide.output, "mouse must be off by default")
         ide.type(":mouse\r")
         ide.until(b"\x1b[?1000h")
@@ -485,6 +485,7 @@ class EmbedContracts(unittest.TestCase):
         self.until_panel(ide, "Attached src/main.c")
         self.say(ide, "Explain please")
         self.until_panel(ide, "answer for Explain please")
+
         env = json.loads((claude_log / "env").read_text())
         self.assertNotIn("ANTHROPIC_API_KEY", env, "no silent API-key billing")
         self.assertIn("int main(void)", (claude_log / "stdin").read_text())
@@ -529,6 +530,23 @@ class EmbedContracts(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual(subprocess.run(["pgrep", "-f", str(hang_log)], capture_output=True).stdout, b"")
         self.assertEqual(subprocess.run(["pgrep", "-f", "^sleep 3001$"], capture_output=True).stdout, b"")
+
+    def test_streamed_answer_survives_notes_arriving_meanwhile(self):
+        slow, _ = self.mock_cli("claude", "slow")
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("2")
+        ide.until(b"claude-code")
+        self.say(ide, "Interleaved question")
+        self.until_panel(ide, "ai: Привет")             # streaming has started
+        self.say(ide, "/status")                         # notes arrive mid-stream
+        self.until_panel(ide, "logged in via claude.ai")
+        self.until_panel(ide, "ai: Привет red 猫 answer for Interleaved question")
+        ide.keys(ide.esc)
+        ide.panel("2")
+        self.quit(ide)
 
     def test_ide_works_offline_without_ai_configuration(self):
         self.env["EMBEDIDE_AI_OFFLINE"] = "1"
@@ -638,7 +656,7 @@ class EmbedContracts(unittest.TestCase):
         ide.type(f"sleep 4343{len(marker)}\r")
         time.sleep(0.5)
         ide.panel("3")  # back to the editor; the shell keeps running
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         self.quit(ide)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -798,7 +816,7 @@ class EmbedContracts(unittest.TestCase):
         ide.until(b"keys go to the shell")
         # 10. back to the editor, fix line 2, save, build with F5 in the IDE
         ide.panel("3")
-        ide.until(b"\x1b[49mNORMAL | main.c")
+        ide.until(b"mNORMAL | main.c")
         ide.type(":2\r$i;")
         ide.keys(ide.esc)
         ide.type(":w\r")
@@ -1067,7 +1085,7 @@ class EmbedContracts(unittest.TestCase):
         time.sleep(0.3)
         self.assertNotIn(b"CONFIRM", ide.output[ide.offset:], "Ctrl+Alt+Delete opened the delete prompt")
         ide.keys(ide.esc)
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         ide.pump(0.3)
         self.assertIn("notes.txt", ide.screen(), "the explorer was hidden by separate presses")
         self.quit(ide)
@@ -1075,20 +1093,20 @@ class EmbedContracts(unittest.TestCase):
     def test_legacy_terminal_switches_panels_with_alt_digits(self):
         ide = self.ide(keyboard="legacy")
         ide.keys(ide.esc)
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         # A legacy terminal sends ESC 1 for both Alt+1 and Ctrl+Alt+1: that is
         # the fallback for the chord it cannot report.
         ide.keys(b"\x1b1")
         ide.until(b"> EXPLORER")
         ide.keys(b"\x1b1")
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         ide.keys(b"\x1b3")
         ide.until(b"> TERMINAL")
         ide.until(b"Alt+3 back to editor")
         ide.type("printf 'LEGACY_%s\\n' OK\r")
         ide.until(b"LEGACY_OK")
         ide.keys(b"\x1b3")
-        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        ide.until(b"mNORMAL | [untitled]")
         # The command fallback hides panels everywhere; the shell keeps running.
         ide.type(":hide_terminal\r")
         ide.until(b"Terminal hidden, shell running (Alt+3")

@@ -1,4 +1,4 @@
-# CLI status — verified vs. unverified (2026-11-11, `embed` 0.1.0 release candidate)
+# CLI status — verified vs. unverified (2026-11-11, `embed` 0.2.0-dev)
 
 Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test --workspace`,
 `crates/embedide-cli/tests/workflows.rs` (real compilers), `crates/embedide-cli/tests/ai.rs` and
@@ -29,6 +29,10 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | Editor: `:<line>`, `:w <file>`/`:saveas` (refuses to overwrite), untitled `:w` explains how to name the file, explorer refresh keeps expanded directories and the selection | unit tests on the real workspace |
 | Automatic indentation: Enter/`o`/`O` per language (Rust, C, C++, Zig, shell, Python, assembly, plain), Enter between braces, closers aligned with their opener, strings/comments ignored, Tab/Shift+Tab in Insert/Normal/Visual, width/tabs/detect configuration, undo/redo, literal paste | engine tests; typed in the real binary through a PTY |
 | Completion popup with real language servers in the real binary through a PTY: `values.le` → `len` from rust-analyzer 1.99.1, `strle` → `strlen` from clangd 23.1.3, `std.me` → `mem` from zls 0.17.0; accepted with Down+Tab and saved | rust-analyzer, clangd, zls installed on this machine |
+| Claude Code / Codex CLI backends with the **real installed CLIs** through the IDE: login state (`claude.ai (pro)`, `ChatGPT`), attached file, a short streamed answer from each, `/cancel` of a running Codex request | Claude Code 2.1.322, Codex CLI 0.163.0 (a few short prompts on the user's subscription) |
+| CLI backends with a mock CLI: streaming, plain-text fallback, login/limit/crash errors, broken pipe, oversized output, timeout, cancellation of the whole process group, concurrency, no API keys or parent-session variables passed, edit → diff → reject/apply, quitting during a request | scripted mock CLI; PTY test of the panel |
+| Assembly: dialect detection (incl. the example files), per-dialect comments/registers, branch highlighting, labels, `:label`, completion of labels/mnemonics, NASM and GNU as errors in PROBLEMS with jump, F5 build of `examples/asm` and running the program; AT&T/Intel programs built and run; AArch64/RISC-V assembled to objects | nasm 3.02, GNU as/ld 2.47, llvm-mc |
+| Binary files: paged HEX view, goto/search, edit mode with byte undo/redo, confirmed byte-exact save, refusal when changed on disk, permissions kept; ELF64 from GCC, ELF32 and big-endian (PowerPC64) objects, truncated/garbage files without panics; objdump listing agreeing with the ELF reader; GCC build → HEX → ELF → `main` → disassembly → address → bytes, file unchanged | gcc 16.2.1, objdump 2.47, llvm-objdump |
 | LSP protocol: initialize, UTF-8/UTF-16 negotiation and conversion, didOpen/didChange/didClose, server requests answered, superseded requests cancelled and stale answers ignored, crash/garbage handling, process-group cleanup; local word fallback, selection rules, Unicode, Esc/Insert interaction | scripted mock server; workspace unit tests |
 
 ## Verified only with mocks / fakes
@@ -69,6 +73,13 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
   (the IDE's mouse mode is for the IDE itself); the history of a full-screen program is its own.
 - Completion: plain-text insertion of snippets, no automatic-import edits, no signature help, hover or
   LSP diagnostics; one server per workspace root; full-text document sync.
+- CLI backends: Codex answers arrive per message (its `--json` mode has no token deltas); Codex keeps
+  read access to files your user can read (its read-only sandbox forbids writes and network only);
+  each request starts a new CLI process (a few seconds of start-up); model listing is not available.
+- Assembly completion uses fixed mnemonic/register lists; ARM/AArch64/RISC-V were assembled but not
+  linked or run (no cross linker or emulator on the test machine).
+- Binary view: one binary at a time; replace-only editing (no insert/delete); ownership, xattrs, ACLs
+  and hard links are not preserved by a save; no DWARF source mapping or GDB integration in the view.
 - Mouse is off by default; while it is on, selecting text in the outer terminal usually needs
   Shift+drag. No drag selection inside the editor.
 - Real terminal emulators (kitty, foot, xterm, VTE, tmux) were not driven by hand in this session; the
