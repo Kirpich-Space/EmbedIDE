@@ -14,11 +14,11 @@
 
 pub mod auth;
 pub mod chat;
+pub mod cli;
 pub mod complete;
 pub mod context;
 pub mod edit;
 pub mod providers;
-mod subscription;
 mod wire;
 
 use serde::Serialize;
@@ -216,7 +216,13 @@ pub fn backend(
                 .unwrap_or_else(|| provider.info().base_url.to_string());
             Ok(Box::new(wire::HttpBackend::new(provider, base, key)?))
         }
-        AuthMode::Subscription => subscription::backend(provider, pc.cli.clone()),
+        AuthMode::Subscription => {
+            let configured = cli::CliKind::for_provider(provider)
+                .and_then(|k| cfg.providers.get(k.id()))
+                .and_then(|c| c.cli.clone())
+                .or(pc.cli.clone());
+            cli::backend(provider, configured, cfg.cli.clone())
+        }
     }
 }
 

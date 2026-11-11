@@ -435,6 +435,101 @@ class EmbedContracts(unittest.TestCase):
         self.assertEqual((self.root / "clicked.c").read_text(), "int clickedx;\n")
         self.assertIn(b"\x1b[?1000l", ide.output, "mouse capture was not released")
 
+    def mock_cli(self, kind, mode):
+        """An executable `claude`/`codex` running the repository's mock CLI."""
+        script = Path(__file__).resolve().parent.parent / "crates/embedide-ai/tests/fixtures/mock_cli.py"
+        logdir = self.config / f"mock-{kind}-{mode}"
+        logdir.mkdir(exist_ok=True)
+        program = logdir / ("codex" if kind == "codex" else "claude")
+        program.write_text(f"#!/bin/sh\nexec python3 '{script}' {kind} {mode} '{logdir}' \"$@\"\n")
+        program.chmod(0o755)
+        return program, logdir
+
+    def say(self, ide, text):
+        for ch in text:
+            ide.keys(ch.encode())
+        ide.keys(b"\r")
+
+    def until_panel(self, ide, text, timeout=20):
+        """Wait for `text` in the AI column, ignoring where the panel wraps it."""
+        deadline = time.monotonic() + timeout
+        while True:
+            column = "".join(line.split("|")[-1] for line in ide.screen().splitlines() if "|" in line)
+            if text in column:
+                return
+            if ide.process.poll() is not None or time.monotonic() >= deadline:
+                raise AssertionError(f"missing {text!r} in the AI panel:\n{column}")
+            ide.pump(0.1)
+
+    def wait_file(self, ide, path):
+        deadline = time.monotonic() + 15
+        while not path.exists():
+            self.assertLess(time.monotonic(), deadline, f"{path} never appeared")
+            ide.pump(0.1)
+
+    def test_claude_code_and_codex_cli_backends_with_mock_clis(self):
+        claude, claude_log = self.mock_cli("claude", "ok")
+        codex, _ = self.mock_cli("codex", "ok")
+        hang, hang_log = self.mock_cli("codex", "child")
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{claude}"\n'
+            f'[ai.providers.codex-cli]\ncli = "{codex}"\n')
+        self.env["ANTHROPIC_API_KEY"] = "sk-ant-must-not-reach-the-cli"
+        ide = self.ide()
+        self.open_file(ide, "src/main.c")
+        ide.panel("2")
+        ide.until(b"claude-code")
+        self.say(ide, "/status")
+        self.until_panel(ide, "logged in via claude.ai")
+        self.say(ide, "/file")
+        self.until_panel(ide, "Attached src/main.c")
+        self.say(ide, "Explain please")
+        self.until_panel(ide, "answer for Explain please")
+        env = json.loads((claude_log / "env").read_text())
+        self.assertNotIn("ANTHROPIC_API_KEY", env, "no silent API-key billing")
+        self.assertIn("int main(void)", (claude_log / "stdin").read_text())
+        # Edit: diff preview, nothing written, /apply into the buffer only.
+        self.say(ide, "/edit add a review line")
+        self.until_panel(ide, "+// reviewed by mock")
+        self.say(ide, "/reject")
+        self.until_panel(ide, "Proposal rejected")
+        self.say(ide, "/edit add a review line")
+        self.until_panel(ide, "+// reviewed by mock")
+        self.say(ide, "/apply")
+        ide.until(b"AI edit applied")
+        self.assertEqual((self.root / "src" / "main.c").read_text(), "int main(void) {\n    return 0;\n}\n",
+                         "nothing is written before :w")
+        # Codex CLI (the AI panel still has the focus).
+        self.say(ide, "/provider codex-cli")
+        self.until_panel(ide, "logged in via ChatGPT")
+        self.say(ide, "hello codex")
+        self.until_panel(ide, "codex answer for hello codex")
+        # A request that never ends: /cancel stops the CLI and its children.
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "codex-cli"\n[ai.providers.codex-cli]\ncli = "{hang}"\n')
+        ide.keys(ide.esc)
+        self.say(ide, ":reload")
+        ide.panel("2")
+        self.say(ide, "never answers")
+        self.wait_file(ide, hang_log / "stdin")
+        self.say(ide, "/cancel")
+        self.until_panel(ide, "Cancelled")
+        time.sleep(0.8)
+        self.assertEqual(subprocess.run(["pgrep", "-f", str(hang_log)], capture_output=True).stdout, b"",
+                         "the cancelled CLI is still running")
+        # Quit while a request runs: the CLI stops with the IDE.
+        (hang_log / "stdin").unlink()
+        self.say(ide, "never answers either")
+        self.wait_file(ide, hang_log / "stdin")
+        ide.keys(ide.esc)
+        ide.keys(ide.ctrl("q"))
+        ide.until(b"Discard ALL unsaved")
+        ide.keys(b"y")
+        self.assertEqual(ide.finish(), 0)
+        time.sleep(0.5)
+        self.assertEqual(subprocess.run(["pgrep", "-f", str(hang_log)], capture_output=True).stdout, b"")
+        self.assertEqual(subprocess.run(["pgrep", "-f", "^sleep 3001$"], capture_output=True).stdout, b"")
+
     def test_ide_works_offline_without_ai_configuration(self):
         self.env["EMBEDIDE_AI_OFFLINE"] = "1"
         ide = self.ide()

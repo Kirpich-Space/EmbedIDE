@@ -13,5 +13,8 @@ toml.workspace = true
 embedide-workspace.workspace = true
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["signal"] }
+
 [lints]
 workspace = true

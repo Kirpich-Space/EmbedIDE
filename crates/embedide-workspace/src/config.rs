@@ -55,6 +55,30 @@ pub struct ProviderConfig {
     pub cli: Option<PathBuf>,
 }
 
+/// `[ai.cli]`: how the official Claude Code / Codex CLIs are run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct CliConfig {
+    /// Longest a single CLI request may run, in seconds.
+    pub timeout_secs: u64,
+    /// Output accepted from one CLI request, in bytes.
+    pub max_output_bytes: usize,
+    /// Pass ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY through to the
+    /// CLI. Off by default so a subscription request never becomes a billed
+    /// API request because a key happens to be in the environment.
+    pub allow_api_key: bool,
+}
+
+impl Default for CliConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 600,
+            max_output_bytes: 8 * 1024 * 1024,
+            allow_api_key: false,
+        }
+    }
+}
+
 /// `[ai]`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -74,6 +98,8 @@ pub struct AiConfig {
     /// Suggest completions automatically while typing in the editor. Off by
     /// default: every suggestion is a provider request.
     pub inline: bool,
+    /// Official CLI backends (`claude-code`, `codex-cli`).
+    pub cli: CliConfig,
 }
 
 impl Default for AiConfig {
@@ -86,6 +112,7 @@ impl Default for AiConfig {
             max_context_bytes: 32 * 1024,
             completion_debounce_ms: 250,
             inline: false,
+            cli: CliConfig::default(),
         }
     }
 }

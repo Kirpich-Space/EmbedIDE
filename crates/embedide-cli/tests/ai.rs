@@ -400,7 +400,7 @@ fn subscription_mode_runs_the_official_cli_in_an_empty_directory() {
     let fake = t.dir.join("fake claude");
     let log = t.dir.join("claude-log.txt");
     std::fs::write(&fake, format!(
-        "#!/bin/sh\n{{ echo \"args:$*\"; echo \"cwd:$(pwd)\"; echo \"files:$(ls -A | wc -l)\"; cat; }} > '{}'\necho 'answer from the subscription CLI'\n",
+        "#!/bin/sh\nif [ \"$1\" = --help ]; then echo '  -p, --print  Print response and exit'; exit 0; fi\n{{ echo \"args:$*\"; echo \"cwd:$(pwd)\"; echo \"files:$(ls -A | wc -l)\"; cat; }} > '{}'\necho 'answer from the subscription CLI'\n",
         log.display()
     )).unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();

@@ -7,17 +7,72 @@ providers and models for chat, completion and edits.
 
 | Provider | Models | API protocol (default base URL) | Key variable | Subscription mode |
 |---|---|---|---|---|
-| `anthropic` | Claude | Messages API (`https://api.anthropic.com`, `x-api-key`, `anthropic-version: 2023-06-01`) | `ANTHROPIC_API_KEY` | Claude Code CLI, `claude -p --output-format text` |
-| `openai` | GPT / Codex | Chat Completions (`https://api.openai.com/v1`, `max_completion_tokens`) | `OPENAI_API_KEY` | Codex CLI, `codex exec --sandbox read-only` |
+| `anthropic` | Claude | Messages API (`https://api.anthropic.com`, `x-api-key`, `anthropic-version: 2023-06-01`) | `ANTHROPIC_API_KEY` | backend `claude-code` (Claude Code CLI) |
+| `openai` | GPT / Codex | Chat Completions (`https://api.openai.com/v1`, `max_completion_tokens`) | `OPENAI_API_KEY` | backend `codex-cli` (Codex CLI) |
 | `moonshot` | Kimi | Chat Completions (`https://api.moonshot.ai/v1`) | `MOONSHOT_API_KEY` | not integrated |
 | `xai` | Grok | Chat Completions (`https://api.x.ai/v1`) | `XAI_API_KEY` | not integrated |
 
-Subscription mode runs only the provider's **official CLI**, logged in with its own login. EmbedIDE
-never reads browser cookies, session tokens or private credentials, and does not claim that a
-ChatGPT/Claude subscription grants API access. Kimi Code CLI exists, but its non-interactive
-interface has not been verified for EmbedIDE; no verified official subscription CLI interface was found
-for xAI. Both use API keys. Subscription CLIs run in an empty temporary directory and receive the
-prompt on stdin, so they cannot read your project by themselves. They do not report token usage.
+Kimi Code CLI exists, but its non-interactive interface has not been verified for EmbedIDE; no
+verified official subscription CLI interface was found for xAI. Both use API keys.
+
+## Claude Code and Codex CLI backends (`claude-code`, `codex-cli`)
+
+If Claude Code or the OpenAI Codex CLI is installed and logged in on your machine, EmbedIDE can use it
+directly: **no API key, no second login**. Select it in the AI panel (`/provider claude-code`,
+`/provider codex-cli`), with `ai.provider = "claude-code"` in `config.toml`, or with
+`embed ai chat --provider claude-code …`. `/providers` lists every backend; `/status` checks the
+selected CLI.
+
+**How it works.** EmbedIDE runs the installed CLI as a child process for each request, with the
+prompt on stdin, in a fresh empty temporary directory, in its own process group:
+
+| Backend | Command (flags are used only when the installed CLI's `--help` lists them) | Tools the model gets |
+|---|---|---|
+| `claude-code` | `claude -p --output-format stream-json --verbose --include-partial-messages --tools "" --no-session-persistence` | **none** (`--tools ""`): no file access, no commands |
+| `codex-cli` | `codex exec --skip-git-repo-check --sandbox read-only --json --ephemeral --color never -C <empty dir> -` | Codex's shell in its **read-only sandbox**: no writes, no network; it can read files your user can read |
+
+Answers stream into the panel (Claude Code token by token, Codex message by message). `/cancel`,
+closing the IDE or the time limit stop the CLI **and every process it started**. Output is bounded.
+Sessions are not saved in the CLIs' history (`--no-session-persistence`, `--ephemeral`). An older CLI
+without the structured mode is used in plain-text mode (`claude -p --output-format text`, `codex exec
+--output-last-message`).
+
+**Authentication stays with the CLI.** EmbedIDE never reads, copies or stores the CLIs' tokens,
+cookies or configuration, never talks to their login endpoints and never impersonates them. Login
+state comes only from `claude auth status --json` and `codex login status`; the panel shows the method
+and plan (for example `claude.ai (pro)`, `ChatGPT`) and nothing personal. If a CLI is not logged in,
+the message says what to run: `claude` (or `claude auth login`) or `codex login`, in a terminal.
+
+**Subscription versus API billing.** Requests through `claude-code` / `codex-cli` count against the
+plan or credentials **that CLI is logged in with** and its usage limits (EmbedIDE does not bypass or
+pool them). A ChatGPT or Claude subscription does not include API credits: the `anthropic` and `openai`
+backends always need an API key and are billed per request. To prevent a silent switch to API billing,
+EmbedIDE removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY` and `CODEX_API_KEY` from
+the CLI's environment unless you set `ai.cli.allow_api_key = true`. It also removes the variables that
+attach a process to a running Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …), so `embed`
+started inside Claude Code runs an independent, non-interactive CLI instead of joining that session.
+
+**Errors** are classified: not installed (with the setting to point at it), unsupported (no
+non-interactive mode in `--help`), not logged in / expired (with the login command), rate or usage
+limit, CLI failure (exit code and the CLI's message, credentials redacted), timeout.
+
+Configuration (`config.toml`):
+
+```toml
+[ai]
+provider = "claude-code"              # or "codex-cli", "anthropic", "openai", …
+[ai.providers.claude-code]            # optional: a CLI outside PATH, a model the CLI accepts
+cli = "/opt/claude/bin/claude"
+model = "sonnet"
+[ai.providers.codex-cli]
+cli = "/usr/local/bin/codex"
+[ai.cli]
+timeout_secs = 600                    # per request
+max_output_bytes = 8388608
+allow_api_key = false
+```
+
+`ai.providers.anthropic.cli` / `ai.providers.openai.cli` with `auth = "subscription"` keep working.
 
 ## Models
 
@@ -62,10 +117,26 @@ Common options: `--provider`, `--model`, `--auth api-key|subscription`, `--max-t
 
 ## In the `embed` IDE
 
-The AI panel (Alt+2) uses the same configuration, credentials and safeguards: chat with history,
-`/file` and `/sel` context, `/explain`, `/edit` with diff review and `/apply` into the editor buffer,
-and `:complete` inline suggestions (Tab accepts, Esc rejects). Automatic suggestions while typing
-require `ai.inline = true`. See the [TUI guide](tui.md#ai-assistant-alt2).
+The AI panel (Ctrl+Alt+2) uses the same configuration, credentials and safeguards. Nothing is sent
+until you press Enter.
+
+| Command | Action |
+|---|---|
+| `/providers` | All backends: API providers (key present or not) and the installed CLIs with version and login state |
+| `/provider <id>` | `claude-code`, `codex-cli`, `anthropic`, `openai`, `moonshot`, `xai` |
+| `/status` | Backend, model and state; checks the selected CLI |
+| `/file` / `/file a.c b.h` | Attach the current buffer / named project files (exclusion rules and secret patterns apply) |
+| `/selection` (`/sel`) | Attach the Visual selection |
+| `/explain [question]` | Explain the selection or file |
+| `/edit <instruction>` | Ask for a change: the reply becomes a **diff to review**; nothing is changed yet |
+| `/diff` | Show the pending diff again |
+| `/apply` / `/reject` | Put the change into the editor buffer (undo with `u`; nothing is written until `:w`) / discard it. If the buffer changed since the request, `/apply` refuses |
+| `/history` | Recent conversation |
+| `/cancel`, `/clear`, `/model <id>`, `/auth <mode>`, `/complete`, `/help` | as before |
+
+AI output never runs commands in EmbedIDE and never writes files: the only path to your files is
+`/apply` into a buffer you then save yourself. `:complete` shows inline suggestions (Tab accepts, Esc
+rejects); automatic suggestions while typing require `ai.inline = true`.
 
 ## For the Qt editor
 
@@ -79,5 +150,12 @@ explicit base URL.
 
 The Anthropic and Chat Completions wire formats, streaming, model listing, error mapping and
 redaction, completion, edit and the CLI commands were tested only against a local mock HTTP
-server. The subscription path was tested with a fake `claude` executable. **No request was sent to
-a real provider or real subscription CLI.**
+server; no request was sent to a paid API.
+
+The CLI backends were tested with a mock CLI (streaming, structured and plain modes, login and limit
+errors, crashes, broken pipes, oversized output, ANSI/Unicode, timeouts, cancellation of the process
+group, concurrent requests, edit/diff/apply, quitting during a request) and, on 2026-11-11, with the
+real installed **Claude Code 2.1.322** (logged in via claude.ai, Pro) and **Codex CLI 0.163.0** (logged
+in via ChatGPT) through the IDE: status detection, an attached file, a short streamed answer from each,
+and `/cancel` of a running Codex request. These real requests used the user's subscription (a few
+short prompts).

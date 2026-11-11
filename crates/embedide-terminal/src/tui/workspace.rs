@@ -716,6 +716,8 @@ impl Workspace {
         }
         doc.session.editor.replace(0..len, &proposal.proposed)?;
         self.active = index;
+        self.assistant
+            .info("Applied to the editor buffer (undo with u; nothing is written until :w)");
         self.notification = "AI edit applied to the buffer; u undoes, :w saves".into();
         Ok(())
     }
@@ -3616,7 +3618,7 @@ pub fn run_with(
     app.serial = None;
     app.debug = None;
     app.terminal = None;
-    app.assistant.cancel();
+    app.assistant.shutdown();
     Ok(())
 }
 

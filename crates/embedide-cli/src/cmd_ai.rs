@@ -18,9 +18,10 @@ use std::{
 /// Provider/model/auth selection shared by AI commands.
 #[derive(Args, Clone)]
 pub struct Pick {
-    /// anthropic, openai, moonshot or xai (default: ai.provider or the task's model setting).
+    /// anthropic, openai, moonshot, xai, or claude-code / codex-cli (the
+    /// installed official CLI with its own login; default: ai.provider).
     #[arg(long)]
-    provider: Option<ProviderId>,
+    provider: Option<String>,
     /// Model id exactly as the provider names it (see `embed ai models`).
     #[arg(long)]
     model: Option<String>,
@@ -108,6 +109,15 @@ struct Chosen {
     max_tokens: u32,
 }
 
+/// A provider id, or `claude-code` / `codex-cli`, which select the provider
+/// whose official CLI it is together with subscription authentication.
+fn backend_id(s: &str) -> CliResult<(ProviderId, Option<AuthMode>)> {
+    match embedide_ai::cli::CliKind::parse(s) {
+        Some(kind) => Ok((kind.provider(), Some(AuthMode::Subscription))),
+        None => Ok((s.parse::<ProviderId>().map_err(fail)?, None)),
+    }
+}
+
 fn choose(cfg: &UserConfig, task: &str, pick: &Pick) -> CliResult<Chosen> {
     let spec = cfg.ai.models.get(task).cloned();
     let (spec_provider, spec_model) = match spec.as_deref().and_then(|s| s.split_once(':')) {
@@ -117,18 +127,19 @@ fn choose(cfg: &UserConfig, task: &str, pick: &Pick) -> CliResult<Chosen> {
         ),
         None => (None, spec.clone()),
     };
-    let provider = pick
-        .provider
-        .or(spec_provider)
-        .or(cfg.ai.provider.as_deref().map(str::parse).transpose().map_err(fail)?)
-        .ok_or_else(|| fail("Choose a provider with --provider, or `embed config set ai.provider anthropic|openai|moonshot|xai`".into()))?;
+    let picked = pick.provider.as_deref().map(backend_id).transpose()?;
+    let configured = cfg.ai.provider.as_deref().map(backend_id).transpose()?;
+    let (provider, implied_auth) = picked
+        .or(spec_provider.map(|p| (p, None)))
+        .or(configured)
+        .ok_or_else(|| fail("Choose a provider with --provider, or `embed config set ai.provider anthropic|openai|moonshot|xai|claude-code|codex-cli`".into()))?;
     let pc = cfg
         .ai
         .providers
         .get(provider.id())
         .cloned()
         .unwrap_or_default();
-    let auth = match pick.auth {
+    let auth = match pick.auth.or(implied_auth) {
         Some(a) => a,
         None => pc
             .auth
@@ -318,7 +329,12 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
         }
         AiCmd::Models { provider } => {
             let p = provider
-                .or(cfg.ai.provider.as_deref().and_then(|s| s.parse().ok()))
+                .or(cfg
+                    .ai
+                    .provider
+                    .as_deref()
+                    .and_then(|s| backend_id(s).ok())
+                    .map(|(p, _)| p))
                 .ok_or_else(|| fail("--provider required".into()))?;
             out.err(&format!(
                 "→ {}: listing models (one request)",

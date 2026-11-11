@@ -2,7 +2,11 @@
 //! requests run on a worker thread and stream into the transcript. Nothing
 //! is sent until the user presses Enter on a message or command.
 use super::layout::{self, Row};
-use embedide_ai::{chat, complete, context, edit, AuthMode, Backend, Cancel, Message, ProviderId};
+use embedide_ai::{
+    chat,
+    cli::{self, CliKind},
+    complete, context, edit, AuthMode, Backend, Cancel, Message, ProviderId,
+};
 use embedide_workspace::config::AiConfig;
 use std::{
     path::PathBuf,
@@ -57,6 +61,8 @@ pub struct Suggestion {
 
 enum JobEvent {
     Delta(String),
+    /// A background check finished (backend status); one line per entry.
+    Info(Vec<String>),
     Chat(embedide_ai::Result<embedide_ai::Response>),
     Edit(PathBuf, embedide_ai::Result<edit::Proposal>),
     Complete(
@@ -70,6 +76,8 @@ struct Job {
     rx: mpsc::Receiver<JobEvent>,
     cancel: Cancel,
     streaming: bool,
+    /// The worker thread; joined on shutdown so a CLI child is always stopped.
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 /// The panel's state.
@@ -84,6 +92,8 @@ pub struct Assistant {
     pub input: String,
     attachments: Vec<(String, String)>,
     job: Option<Job>,
+    /// Backend status checks run beside requests (they never block chat).
+    checks: Option<Job>,
     proposal: Option<(PathBuf, edit::Proposal)>,
     /// Completion awaiting Tab (accept) or Esc (reject).
     pub suggestion: Option<Suggestion>,
@@ -91,20 +101,28 @@ pub struct Assistant {
     scroll: usize,
 }
 
-const HELP: &str = "Type a message and press Enter. Commands: /file attach current file · /sel attach selection · \
-/explain · /edit <instruction> · /apply · /reject · /complete · /provider <anthropic|openai|moonshot|xai> · \
-/model <id> · /auth <api-key|subscription> · /cancel · /clear · /status · /help. Nothing is sent until Enter.";
+const HELP: &str = "Type a message and press Enter. Commands: /providers · \
+/provider <claude-code|codex-cli|anthropic|openai|moonshot|xai> · /status · /file [path…] attach the current or named files · \
+/selection (/sel) · /explain · /edit <instruction> · /diff · /apply · /reject · /complete · /model <id> · \
+/auth <api-key|subscription> · /history · /cancel · /clear · /help. Nothing is sent until Enter. \
+claude-code and codex-cli use your installed, logged-in official CLI (your subscription); they get no file access.";
 
 impl Assistant {
     /// Panel state from the user configuration (no network).
     pub fn new(cfg: AiConfig) -> Self {
-        let provider = cfg.provider.as_deref().and_then(|p| p.parse().ok());
+        let cli_backend = cfg.provider.as_deref().and_then(CliKind::parse);
+        let provider = cli_backend
+            .map(CliKind::provider)
+            .or_else(|| cfg.provider.as_deref().and_then(|p| p.parse().ok()));
         let pc = provider.and_then(|p: ProviderId| cfg.providers.get(p.id()).cloned());
-        let auth = pc
-            .as_ref()
-            .and_then(|p| p.auth.as_deref())
-            .and_then(|a| a.parse().ok())
-            .unwrap_or(AuthMode::ApiKey);
+        let auth = if cli_backend.is_some() {
+            AuthMode::Subscription
+        } else {
+            pc.as_ref()
+                .and_then(|p| p.auth.as_deref())
+                .and_then(|a| a.parse().ok())
+                .unwrap_or(AuthMode::ApiKey)
+        };
         let model = cfg
             .models
             .get("chat")
@@ -124,6 +142,7 @@ impl Assistant {
             input: String::new(),
             attachments: Vec::new(),
             job: None,
+            checks: None,
             proposal: None,
             suggestion: None,
             engine: None,
@@ -146,29 +165,49 @@ impl Assistant {
 
     /// One-line state for headers and the status bar.
     pub fn status(&self) -> String {
+        let who = match (self.cli_backend(), &self.model) {
+            (Some(kind), Some(m)) => format!("{}/{m}", kind.id()),
+            (Some(kind), None) => kind.id().to_string(),
+            _ => self.provider_label(),
+        };
+        let state = self.state();
+        format!("{who} · {state}")
+    }
+
+    fn provider_label(&self) -> String {
         let who = match (&self.provider, &self.model) {
             (Some(p), Some(m)) => format!("{p}/{m}"),
             (Some(p), None) => format!("{p}/<no model>"),
             _ => "no provider".into(),
-        };
-        let state = match &self.job {
-            Some(j) if j.streaming => "streaming",
-            Some(_) => "waiting",
-            None if self.suggestion.is_some() => "suggestion ready",
-            None if self.proposal.is_some() => "edit proposed",
-            None => "idle",
         };
         let auth = if self.auth == AuthMode::Subscription {
             " (subscription)"
         } else {
             ""
         };
-        format!("{who}{auth} · {state}")
+        format!("{who}{auth}")
+    }
+
+    /// The official CLI in use, when the backend is `claude-code` or `codex-cli`.
+    fn cli_backend(&self) -> Option<CliKind> {
+        (self.auth == AuthMode::Subscription)
+            .then_some(self.provider?)
+            .and_then(CliKind::for_provider)
+    }
+
+    fn state(&self) -> &'static str {
+        match &self.job {
+            Some(j) if j.streaming => "streaming",
+            Some(_) => "waiting",
+            None if self.suggestion.is_some() => "suggestion ready",
+            None if self.proposal.is_some() => "edit proposed",
+            None => "idle",
+        }
     }
 
     /// Whether a request is running (for the event-loop interval).
     pub fn busy(&self) -> bool {
-        self.job.is_some() || self.engine.is_some()
+        self.job.is_some() || self.checks.is_some() || self.engine.is_some()
     }
 
     fn backend(&self) -> Result<(Box<dyn Backend>, String), String> {
@@ -231,6 +270,136 @@ impl Assistant {
             "/status" => {
                 let s = self.status();
                 self.note(Kind::Info, s);
+                if let Some(kind) = self.cli_backend() {
+                    self.check_backends(vec![kind]);
+                }
+            }
+            "/providers" | "/backends" => {
+                let mut lines = vec!["AI backends (select with /provider <id>):".to_string()];
+                for p in ProviderId::ALL {
+                    let key = match embedide_ai::auth::key_source(p) {
+                        embedide_ai::auth::KeySource::Missing => "no API key",
+                        _ => "API key available",
+                    };
+                    lines.push(format!(
+                        "  {:<11} {} API ({}), billed per request — {key}",
+                        p.id(),
+                        p.info().name,
+                        p.info().models_family
+                    ));
+                }
+                for kind in CliKind::ALL {
+                    lines.push(format!(
+                        "  {:<11} official {} CLI with its own login (subscription) — checking…",
+                        kind.id(),
+                        kind.name()
+                    ));
+                }
+                for line in lines {
+                    self.note(Kind::Info, line);
+                }
+                self.check_backends(CliKind::ALL.to_vec());
+            }
+            "/provider" if CliKind::parse(arg).is_some() => {
+                let kind = CliKind::parse(arg).expect("checked");
+                self.provider = Some(kind.provider());
+                self.auth = AuthMode::Subscription;
+                self.model = self
+                    .cfg
+                    .providers
+                    .get(kind.id())
+                    .and_then(|c| c.model.clone());
+                self.note(
+                    Kind::Info,
+                    format!(
+                        "Backend {} ({}): requests go to your installed official CLI and use its login; no API key is used. Checking…",
+                        kind.id(),
+                        kind.name()
+                    ),
+                );
+                self.check_backends(vec![kind]);
+            }
+            "/selection" => {
+                self.input = "/sel".into();
+                self.submit(ctx);
+            }
+            "/file" if !arg.is_empty() => {
+                let paths: Vec<PathBuf> =
+                    arg.split_whitespace().map(|p| ctx.root.join(p)).collect();
+                match context::gather(
+                    Some(&ctx.root),
+                    &paths,
+                    &ctx.exclude,
+                    self.cfg.max_context_bytes,
+                ) {
+                    Ok(c) => {
+                        for r in &c.refused {
+                            self.note(Kind::Error, format!("{} is not sent: {}", r.path, r.reason));
+                        }
+                        if !c.files.is_empty() {
+                            let label = c
+                                .files
+                                .iter()
+                                .map(|f| {
+                                    format!(
+                                        "{}{}",
+                                        f.path,
+                                        if f.truncated { " (truncated)" } else { "" }
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.note(Kind::Info, format!("Attached {label} for the next message"));
+                            self.attachments.push((label, c.text));
+                        }
+                    }
+                    Err(e) => self.note(Kind::Error, e.to_string()),
+                }
+            }
+            "/diff" => match &self.proposal {
+                Some((_, p)) => {
+                    let diff = p.diff.clone();
+                    self.note(Kind::Diff, diff);
+                    self.note(
+                        Kind::Info,
+                        "/apply puts it into the editor buffer (undoable), /reject discards it",
+                    );
+                }
+                None => self.note(
+                    Kind::Error,
+                    "No proposed edit (/edit <instruction> asks for one)",
+                ),
+            },
+            "/history" => {
+                if self.history.is_empty() {
+                    self.note(Kind::Info, "No conversation yet");
+                }
+                let recent: Vec<String> = self
+                    .history
+                    .iter()
+                    .rev()
+                    .take(10)
+                    .rev()
+                    .map(|m| {
+                        let who = if m.role == embedide_ai::Role::User {
+                            "you"
+                        } else {
+                            "ai"
+                        };
+                        let first: String = m
+                            .content
+                            .lines()
+                            .last()
+                            .unwrap_or("")
+                            .chars()
+                            .take(160)
+                            .collect();
+                        format!("{who}: {first} ({} bytes)", m.content.len())
+                    })
+                    .collect();
+                for line in recent {
+                    self.note(Kind::Info, line);
+                }
             }
             "/clear" => {
                 self.transcript.clear();
@@ -242,7 +411,13 @@ impl Assistant {
             "/provider" => match arg.parse::<ProviderId>() {
                 Ok(p) => {
                     self.provider = Some(p);
-                    self.model = self.cfg.providers.get(p.id()).and_then(|c| c.model.clone());
+                    let pc = self.cfg.providers.get(p.id());
+                    self.model = pc.and_then(|c| c.model.clone());
+                    // An API provider means API-key access unless configured otherwise.
+                    self.auth = pc
+                        .and_then(|c| c.auth.as_deref())
+                        .and_then(|a| a.parse().ok())
+                        .unwrap_or(AuthMode::ApiKey);
                     self.note(
                         Kind::Info,
                         format!(
@@ -370,7 +545,7 @@ impl Assistant {
         let cancel = Cancel::default();
         let c2 = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let tx2 = tx.clone();
             let r = backend.send(&req, &c2, &mut |d| {
                 let _ = tx2.send(JobEvent::Delta(d.to_string()));
@@ -381,6 +556,7 @@ impl Assistant {
             rx,
             cancel,
             streaming: false,
+            handle: Some(handle),
         });
     }
 
@@ -417,7 +593,7 @@ impl Assistant {
         let cancel = Cancel::default();
         let c2 = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let r = edit::propose(backend.as_ref(), &shown, &text, &instr, &model, max, &c2);
             let _ = tx.send(JobEvent::Edit(path, r));
         });
@@ -425,6 +601,7 @@ impl Assistant {
             rx,
             cancel,
             streaming: false,
+            handle: Some(handle),
         });
     }
 
@@ -456,7 +633,7 @@ impl Assistant {
         let cancel = Cancel::default();
         let c2 = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let r = complete::complete(backend.as_ref(), &req, &model, &c2);
             let _ = tx.send(JobEvent::Complete(path, offset, r));
         });
@@ -464,6 +641,7 @@ impl Assistant {
             rx,
             cancel,
             streaming: false,
+            handle: Some(handle),
         });
     }
 
@@ -527,6 +705,67 @@ impl Assistant {
         }
     }
 
+    /// Inspect the official CLIs in the background (it runs `--version`,
+    /// `--help` and their login-status commands, which take a moment).
+    fn check_backends(&mut self, kinds: Vec<CliKind>) {
+        if self.checks.is_some() {
+            return;
+        }
+        let cfg = self.cfg.clone();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let lines = kinds
+                .into_iter()
+                .map(|kind| {
+                    let configured = cfg
+                        .providers
+                        .get(kind.id())
+                        .or_else(|| cfg.providers.get(kind.provider().id()))
+                        .and_then(|c| c.cli.clone());
+                    match cli::locate(kind, configured.as_deref()) {
+                        Ok(program) => format!(
+                            "  {:<11} {}",
+                            kind.id(),
+                            cli::inspect(kind, &program, &cfg.cli).summary()
+                        ),
+                        Err(e) => format!("  {:<11} {e}", kind.id()),
+                    }
+                })
+                .collect();
+            let _ = tx.send(JobEvent::Info(lines));
+        });
+        self.checks = Some(Job {
+            rx,
+            cancel: Cancel::default(),
+            streaming: false,
+            handle: Some(handle),
+        });
+    }
+
+    /// Stop any running request and wait (bounded) until its worker has
+    /// stopped the CLI child, so no process outlives the IDE.
+    pub fn shutdown(&mut self) {
+        self.dismiss();
+        self.checks = None; // probes end on their own time limit
+        if let Some(mut job) = self.job.take() {
+            job.cancel.cancel();
+            if let Some(handle) = job.handle.take() {
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                while !handle.is_finished() && std::time::Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if handle.is_finished() {
+                    let _ = handle.join();
+                }
+            }
+        }
+    }
+
+    /// A message for the transcript from the host.
+    pub fn info(&mut self, text: impl Into<String>) {
+        self.note(Kind::Info, text);
+    }
+
     /// Cancel the running request.
     pub fn cancel(&mut self) {
         if let Some(job) = self.job.take() {
@@ -540,10 +779,7 @@ impl Assistant {
     pub fn take_proposal_if(&mut self, apply: bool) -> Option<(PathBuf, edit::Proposal)> {
         let p = self.proposal.take();
         match (&p, apply) {
-            (Some(_), true) => self.note(
-                Kind::Info,
-                "Applied to the editor buffer (undo with u; save with :w)",
-            ),
+            (Some(_), true) => {}
             (Some(_), false) => self.note(Kind::Info, "Proposal rejected"),
             (None, _) => self.note(Kind::Error, "No proposed edit"),
         }
@@ -567,6 +803,19 @@ impl Assistant {
     /// Poll worker results. Returns whether the panel changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        if let Some(checks) = &self.checks {
+            match checks.rx.try_recv() {
+                Ok(JobEvent::Info(lines)) => {
+                    self.checks = None;
+                    for line in lines {
+                        self.note(Kind::Info, line);
+                    }
+                    changed = true;
+                }
+                Ok(_) | Err(mpsc::TryRecvError::Disconnected) => self.checks = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some((engine, path, offset)) = &self.engine {
             if let Some((_, r)) = engine.poll() {
                 if let Ok(c) = r {
@@ -656,6 +905,11 @@ impl Assistant {
                     }
                 }
                 JobEvent::Complete(_, _, Err(e)) => self.note(Kind::Error, e.to_string()),
+                JobEvent::Info(lines) => {
+                    for line in lines {
+                        self.note(Kind::Info, line);
+                    }
+                }
                 JobEvent::Delta(_) => {}
             }
         }
