@@ -146,6 +146,10 @@ If `claude` (Claude Code) or `codex` (Codex CLI) is installed and logged in, not
    `Claude Code 2.1.322 … ready, logged in via claude.ai (pro)`.
 3. `/file` attaches the current file; type a question and press Enter. `/cancel` stops a request.
 4. `/edit <instruction>` shows a diff; `/apply` puts it into the buffer (undo with `u`; `:w` saves).
+5. `/agent <task>` lets the CLI work in the project itself — edit files, build, run tests, fix
+   errors — under the `workspace-write` policy: risky actions ask first (`y` / `a` / `n`), `/review`
+   shows what changed, `/revert all` undoes it. See [agent mode](agents.md).
+6. In Insert mode `Alt+\` asks for an inline suggestion; Tab accepts it, Esc dismisses it.
 
 Requests count against that CLI's plan and limits, not an API key. Not logged in? Run `claude` or
 `codex login` in a normal terminal once. To make it the default: `ai.provider = "claude-code"` in

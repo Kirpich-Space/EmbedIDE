@@ -1,4 +1,4 @@
-# CLI status — verified vs. unverified (2026-11-11, `embed` 0.2.0-dev)
+# CLI status — verified vs. unverified (2026-11-12, `embed` 0.2.0-dev)
 
 Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test --workspace`,
 `crates/embedide-cli/tests/workflows.rs` (real compilers), `crates/embedide-cli/tests/ai.rs` and
@@ -30,6 +30,8 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | Automatic indentation: Enter/`o`/`O` per language (Rust, C, C++, Zig, shell, Python, assembly, plain), Enter between braces, closers aligned with their opener, strings/comments ignored, Tab/Shift+Tab in Insert/Normal/Visual, width/tabs/detect configuration, undo/redo, literal paste | engine tests; typed in the real binary through a PTY |
 | Completion popup with real language servers in the real binary through a PTY: `values.le` → `len` from rust-analyzer 1.99.1, `strle` → `strlen` from clangd 23.1.3, `std.me` → `mem` from zls 0.17.0; accepted with Down+Tab and saved | rust-analyzer, clangd, zls installed on this machine |
 | Claude Code / Codex CLI backends with the **real installed CLIs** through the release binary in a PTY: login state (`claude.ai (pro)`, `ChatGPT`), attached file, a real answer from each, `/cancel` of a running Codex request (launcher and native process gone in ~0.3 s, twice) | Claude Code 2.1.322, Codex CLI 0.163.0 (a few short prompts on the user's subscription) |
+| Agent mode with the **real CLIs** (`embed ai agent`, disposable projects in `/tmp`): Codex created `add.c`, built it with `gcc -Wall` and ran it (workspace-write sandbox); Claude Code edited `util.h`, `util.c`, `main.c`, built with `gcc -Wall -Werror`, ran the program, and its `rm app` was asked about and refused; a project skill reached Claude Code under `read-only`. The `can_use_tool` host protocol and Codex's `--json` item events were inspected first with one minimal probe each | Claude Code 2.1.322, Codex CLI 0.163.0, gcc 16.2.1 (a handful of short tasks on the user's subscriptions) |
+| Inline AI suggestion latency through the real CLIs (`embed ai complete`, 2 runs each): Codex 9.3–10.8 s, Claude Code 6.8–10.7 s; both returned `return a + b;` | same |
 | CLI backends with a mock CLI: streaming, plain-text fallback, login/limit/crash errors, broken pipe, oversized output, timeout, cancellation of the whole process group, concurrency, no API keys or parent-session variables passed, edit → diff → reject/apply, quitting during a request | scripted mock CLI; PTY test of the panel |
 | Assembly: dialect detection (incl. the example files), per-dialect comments/registers, branch highlighting, labels, `:label`, completion of labels/mnemonics, NASM and GNU as errors in PROBLEMS with jump, F5 build of `examples/asm` and running the program; AT&T/Intel programs built and run; AArch64/RISC-V assembled to objects | nasm 3.02, GNU as/ld 2.47, llvm-mc |
 | Binary files: paged HEX view, goto/search, edit mode with byte undo/redo, confirmed byte-exact save, refusal when changed on disk, permissions kept; ELF64 from GCC, ELF32 and big-endian (PowerPC64) objects, truncated/garbage files without panics; objdump listing agreeing with the ELF reader; GCC build → HEX → ELF → `main` → disassembly → address → bytes, file unchanged | gcc 16.2.1, objdump 2.47, llvm-objdump |
@@ -41,21 +43,25 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 |---|---|
 | Anthropic Messages API and OpenAI-style Chat Completions (OpenAI, Moonshot, xAI): request format, headers, streaming, usage, model listing, 401/429/5xx mapping, key redaction | local HTTP mock server |
 | `ai chat`, `ai complete`, `ai edit` (diff, `--apply`), `ai login/logout`, offline guard, dry run | CLI against the mock server |
-| Subscription mode (Claude Code print mode) | fake `claude` script; Codex path not exercised |
+| Subscription mode (Claude Code print mode, Codex exec) | fake `claude` and `codex` scripts |
 | Completion engine debounce/supersede/cancel | in-process fake backend |
 | AI panel in `embed`: provider/model from `config.toml`, nothing sent before Enter, `/file` attachment, streamed chat, `/edit` diff review and `/apply` into the buffer, `:complete` ghost text accepted with Tab and rejected with Esc, offline mode | local OpenAI-style mock HTTP server |
+| Inline AI suggestions in the real binary through a PTY: manual mode sends nothing while typing; `Alt+\` (kitty encoding) shows a two-line suggestion with a virtual row; typing its start keeps it without a request; Tab inserts; `u` / `Ctrl+R`; Tab still indents without a suggestion; auto mode sends one debounced request for five keystrokes and none mid-line. Engine cache, timeout, reindent and symbol extraction in unit tests | local mock HTTP server; in-process fake backend |
+| Agent runtime: Claude Code host protocol (initialize, `can_use_tool`, allow/deny), all three policies for both CLIs, Codex plan → approval → `exec resume` with `workspace-write`, session ids and `--resume`, API-key source refusal, cancellation of the CLI and a grandchild, `/fix` loop for both CLIs, snapshot diff/revert, command classifier (allowed vs. asked commands, quoting, redirections, loops, symlinks out of the workspace) | `tests/fixtures/mock_agent.py`, `crates/embedide-ai/tests/agent.rs`, unit tests |
+| Agent mode in the real binary through a PTY: `/agent` with one-key approvals, step display, buffer reload, `/review`, `/revert all`, Codex `approval-required` plan approval, `/cancel` leaving no processes; skills listed, a broken skill reported, a skill activated and quoted as untrusted text | same mock CLIs |
 
 ## Not verified
 
-- **Any real AI provider request or real subscription CLI** (not authorized: would cost money).
+- **Any request to a paid API** (`anthropic`, `openai`, `moonshot`, `xai` with an API key): not
+  authorized, would cost money; mock servers only.
+- With the real CLIs: agent `approval-required`, `/fix`, session resume across tasks and agent runs
+  inside the TUI (all exercised with mock CLIs only; the real agent runs used `embed ai agent`).
 - **Fortran builds**: no gfortran, flang or lfortran is installed on the verification machine.
 - **Windows and macOS runtime.** Windows: `cargo clippy -D warnings` passes for
   `x86_64-pc-windows-gnu` on every crate except those depending on `ureq` (its `ring` dependency needs a
   MinGW C compiler that is not installed) — this now includes `embedide-terminal`/`embed`, so the
   Windows build of the TUI (ConPTY terminal via `portable-pty`) is unverified; nothing was executed on
   Windows. macOS: not built.
-- Automatic inline suggestions while typing (`ai.inline = true`) in the TUI; only the explicit
-  `:complete` path was exercised end to end.
 - **Hardware**: no flashing, debugging or physical serial device. The GDB/MI, probe-rs and serial
   services in `embedide-core` are unchanged and not exposed as automatic CLI actions.
 - LFortran and Flang command lines (implemented from their documented flags, not run).
@@ -84,5 +90,10 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
   Shift+drag. No drag selection inside the editor.
 - Real terminal emulators (kitty, foot, xterm, VTE, tmux) were not driven by hand in this session; the
   PTY driver sends their documented byte sequences.
-- Ghost text shows the first line of a multi-line suggestion plus a line count; Tab inserts all of it.
+- Inline suggestions through the subscription CLIs take several seconds each (see above); no warm
+  completion session is kept. Virtual rows show at most 16 lines of a suggestion (`… (+N lines)`).
+- Agent mode: Codex `exec` has no per-command approval (sandbox instead; `approval-required` is plan
+  approval); the command classifier is a heuristic that asks when unsure; one agent task at a time;
+  the review snapshot skips generated directories and is limited in size. See
+  [agents.md](agents.md#limitations).
 - Builds use files on disk: modified buffers must be saved before F5.

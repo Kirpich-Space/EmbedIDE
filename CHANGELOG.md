@@ -3,6 +3,23 @@
 ## `embed` 0.2.0 — in development (`0.2.0-dev`, not released)
 
 ### Added
+- Agent mode (`/agent`, `/mode agent`, `embed ai agent`): Claude Code (Agent SDK host protocol,
+  every unapproved tool call answered by EmbedIDE's rules or the user) and Codex CLI (`exec --json`
+  in its read-only/workspace-write sandbox) read, search, create, edit and delete files and run builds
+  and tests in the project. Policies `read-only`, `workspace-write` (default) and `approval-required`
+  (Codex: plan, approve, carry out); one-key approvals (`y`/`a`/`n`) shown in the panel and the status
+  bar; step display with commands, output tails, exit codes, file changes and refusals; summary line;
+  session continuation (`--resume`, `exec resume`), `/new`; `/changes`, `/review`, `/revert` from a
+  workspace snapshot; reload of unmodified open buffers; `/fix` build-and-fix loop without a shell;
+  `/cancel` stops the whole process group; `[ai.agent]` settings.
+- Inline AI suggestions: `ai.completion.mode` (`off`, `manual` default, `auto`), `Alt+\` (`ai_suggest`),
+  multi-line ghost text as virtual rows, re-indentation, type-through, cache, timeout, separate
+  backend/model (`ai.completion.provider`), project line and file declarations as context, error
+  back-off, `/inline`; `[ai.completion]` settings.
+- Skills: `SKILL.md` discovery in `.embedide/skills`, `ai.skills.dirs` and `~/.config/embedide/skills`
+  (in that precedence), frontmatter validation, on-demand loading, `/skills`, `/skill`, `embed ai
+  skills`, `--skill`; skill text is quoted as untrusted guidance; `examples/skills` (C firmware, Rust,
+  Zig, assembly, embedded bring-up).
 - AI backends `claude-code` and `codex-cli`: the installed official CLIs with their own login,
   streaming structured output, cancellation of the whole process group, time and output limits,
   login/limit/error classification, `/providers`, `/status`, `/file <paths>`, `/selection`, `/diff`,
@@ -18,6 +35,9 @@
   bright inverse video (`mono` keeps inverse video; terminals without 256 colours fall back to it).
 
 ### Fixed
+- `unified_diff` no longer builds a quadratic table for large files (common head/tail are skipped; very
+  large differing regions get a non-minimal diff).
+- The inline suggestion engine kept its first backend after `/provider` switched to another one.
 - NASM and GNU as error messages (no column) now reach PROBLEMS.
 - GNU as `;` (statement separator) and `@function` were highlighted as comments.
 - A failed CLI capability probe was cached until restart; the IDE could exit before stopping a running

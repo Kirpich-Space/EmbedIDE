@@ -49,6 +49,18 @@ file). See [the TUI guide](docs/cli/tui.md).
   AI panel uses your installed, already logged-in official CLI (your subscription, no API key, no second
   login), streams the answer, and gives the model no file access (Claude Code) or a read-only sandbox
   (Codex). See [AI](docs/cli/ai.md#claude-code-and-codex-cli-backends-claude-code-codex-cli).
+- **Agent mode** — `/agent <task>` lets Claude Code or Codex CLI work in the project: read, search,
+  create, edit and delete files, run builds and tests and fix the errors, under a policy you choose
+  (`read-only`, `workspace-write`, `approval-required`). Every command, file change and refusal is
+  shown; destructive, privileged, network, hardware and out-of-workspace actions ask first (`y` / `a`
+  / `n`); `/review` and `/revert` work on what really changed; `/cancel` stops every process. See
+  [agent mode](docs/cli/agents.md).
+- **Inline AI suggestions** — `Alt+\` shows a (multi-line) suggestion as ghost text, Tab accepts,
+  Esc dismisses; optional automatic mode; any backend, including `codex-cli` without an API key. See
+  [inline suggestions](docs/cli/ai.md#inline-suggestions).
+- **Skills** — `SKILL.md` instructions per project (`.embedide/skills`) or globally
+  (`~/.config/embedide/skills`), activated with `/skill <name>`; examples for C firmware, Rust, Zig,
+  assembly and board bring-up in [examples/skills](examples/skills). See [skills](docs/cli/skills.md).
 - **Assembly** — NASM, GNU as AT&T/Intel, ARM, AArch64 and RISC-V dialects detected per file; branch
   highlighting, labels (`:label`), completion of labels/instructions/registers, assembler errors in
   PROBLEMS; [examples/asm](examples/asm).
@@ -79,13 +91,15 @@ embed build fw                                   # arm-none-eabi-gcc → fw/buil
 
 embed ai providers                               # Anthropic, OpenAI, Moonshot (Kimi), xAI (Grok)
 embed ai chat "Why does this hard-fault?" --file src/main.c --provider anthropic --model <id> --dry-run
+embed ai agent --provider codex-cli "make the unit tests pass"   # agent task in the project
+embed ai skills                                  # project, extra and global skills
 ```
 
 - [Getting started: install, first project, embedded workflow](docs/cli/getting-started.md)
 - [TUI guide: panels, keys, configuration](docs/cli/tui.md)
 - [Command reference](docs/cli/commands.md)
 - [`embedide.toml` reference](docs/cli/embedide-toml.md)
-- [AI subsystem](docs/cli/ai.md)
+- [AI subsystem](docs/cli/ai.md) · [agent mode](docs/cli/agents.md) · [skills](docs/cli/skills.md)
 - [Verified and unverified functionality](docs/cli/status.md)
 
 No Electron, Node.js or graphical session is needed. The binary links only against the C runtime.

@@ -43,6 +43,7 @@ Global (work in every panel except where noted):
 | **Alt+3** | Terminal — press again to return to the editor |
 | **Alt+1/2/3 + Delete** | Hold Alt and the digit, press Delete: hide that panel (its state and shell are kept; kitty keyboard protocol) |
 | Ctrl+Alt+1/2/3 | Same as Alt+1/2/3 |
+| `Alt+\` | AI inline suggestion at the cursor (Insert mode; Tab accepts, Esc dismisses) |
 | Ctrl+K | Command palette (every command below, plus targets, profiles, tasks and files) |
 | Ctrl+P | Find a file among loaded explorer entries |
 | Ctrl+S | Save the active document |
@@ -397,17 +398,49 @@ The empty input line shows what to type next.
 | `/edit <instruction>` | Propose a new version of the current file; the unified diff is shown |
 | `/apply` / `/reject` | Put the proposal into the editor buffer (undo with `u`, save with `:w`) / discard it |
 | `/complete` | Completion at the editor cursor |
+| `/agent <task>`; `/mode agent\|chat` | Run an **agent task** in the project with Claude Code or Codex CLI ([agent mode](agents.md)) |
+| `y` / `a` / `n` | Answer an agent approval (allow once / allow similar / deny) |
+| `/policy`, `/changes`, `/review [file]`, `/revert <file>\|all`, `/fix [command]`, `/new` | Agent policy, review and undo of its changes, build-and-fix loop, fresh session |
+| `/skills`, `/skill <name>`, `/skill off <name>` | [Skills](skills.md) for agent tasks |
+| `/inline [off\|manual\|auto]` | Show / switch inline AI suggestions |
 | `/providers`; `/provider claude-code`, `codex-cli`, `anthropic`, …; `/model name`; `/auth api-key\|subscription` | List and switch backends for this session |
 | `/diff`, `/history` | Show the pending diff again; recent conversation |
 | `/cancel`, `/clear`, `/status`, `/help` | |
 | Up/Down, PgUp/PgDn | Scroll the transcript |
 | Esc | Back to the editor |
 
-**Inline completion:** `:complete` (or `/complete`) requests one suggestion at the cursor. It is
-shown in inverse video in the editor without changing the buffer: **Tab** inserts it, **Esc**
-rejects it, moving the cursor or editing discards it. Automatic suggestions while typing are off;
-`ai.inline = true` in `config.toml` enables them (debounced by `ai.completion_debounce_ms`; each
-suggestion is a provider request).
+**Agent tasks** are shown separately from chat: a `▍Agent · Codex CLI · workspace-write` header,
+then each step — `$ make` with a spinner while it runs, the last lines of its output, `✓ ok` / `✗ exit
+2`, `Read src/uart.c`, `✎ src/uart.c (edit)`, `⊘` refusals and `⚠ Approval needed` boxes — then the
+agent's summary and a line such as `■ done · 3 file(s) changed · 4 command(s) (1 failed) · 1
+approval(s) · 52.3 s`. The title shows `⠋ agent 12s · step 5 · workspace-write`. Approvals also appear
+in the status bar and open the panel if it was hidden. Open buffers the agent changed are reloaded
+unless they have unsaved edits. Details: [agents.md](agents.md).
+
+**Inline AI suggestions:** `Alt+\` (or `:complete`, `/complete`) asks for a suggestion at the cursor.
+It is shown in inverse video without changing the buffer — further lines of a multi-line suggestion as
+virtual rows under the cursor line, the code below moving down. **Tab** inserts it (one undo step),
+**Esc** dismisses it or cancels the request, typing its first characters keeps the rest, anything else
+discards it. Without a suggestion, Tab and Shift+Tab indent as usual and Ctrl+Space opens the LSP
+popup. `ai.completion.mode = "auto"` (or `/inline auto`) asks automatically after typing pauses at the
+end of a line; the default is `manual`. Settings, context and measured latency (several seconds with
+the subscription CLIs): [AI subsystem](ai.md#inline-suggestions).
+
+*Example 3 — accepting a multi-line suggestion.* In `sum.c`, on the empty line inside
+`int sum(int a, int b) { }`, press `A` (Insert at line end), then `Alt+\`:
+
+```text
+ 2 int sum(int a, int b) {
+ 3     int total = a + b;          ← ghost text (inverse video), not in the buffer yet
+       return total;               ← virtual row
+ 4 }
+```
+
+The status bar says `AI suggestion (2 lines): Tab accepts · Esc dismisses`. Typing `int` keeps the
+rest (` total = a + b; …`) without a new request; **Tab** inserts both lines; `Esc`, `u` removes them
+again and `Ctrl+R` restores them; `:w` saves. (This sequence is the PTY test
+`test_inline_ai_suggestion_alt_backslash_multiline_type_through_tab_and_undo`, run against a local
+mock provider.)
 
 ## For the Qt frontend
 
