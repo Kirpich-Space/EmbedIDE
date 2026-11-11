@@ -79,6 +79,111 @@ impl Default for CliConfig {
     }
 }
 
+/// `[ai.agent]`: autonomous agent runs through the official CLIs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgentConfig {
+    /// `read-only`, `workspace-write` (default) or `approval-required`.
+    pub policy: String,
+    /// What plain text typed in the AI panel does: `chat` (default) or `agent`.
+    pub mode: String,
+    /// Longest one agent turn may run, in seconds.
+    pub timeout_secs: u64,
+    /// Bytes of workspace text files snapshotted before a turn (for review
+    /// and `/revert`); larger workspaces are not snapshotted.
+    pub snapshot_max_bytes: u64,
+    /// Files snapshotted before a turn.
+    pub snapshot_max_files: usize,
+    /// Rounds of `/fix` (build, send errors, rebuild) before giving up.
+    pub max_fix_iterations: u32,
+    /// Command `/fix` runs when none is given (default: the project build).
+    pub fix_command: Option<String>,
+    /// Extra command names allowed without confirmation under
+    /// `workspace-write` (Claude Code; added to the built-in development list).
+    pub allow_commands: Vec<String>,
+    /// Keep CLI sessions so a task can continue (`claude --resume`,
+    /// `codex exec resume`). Off: every turn starts fresh.
+    pub persist_sessions: bool,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            policy: "workspace-write".into(),
+            mode: "chat".into(),
+            timeout_secs: 1800,
+            snapshot_max_bytes: 64 * 1024 * 1024,
+            snapshot_max_files: 20_000,
+            max_fix_iterations: 3,
+            fix_command: None,
+            allow_commands: Vec::new(),
+            persist_sessions: true,
+        }
+    }
+}
+
+/// `[ai.completion]`: inline AI suggestions in the editor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct CompletionConfig {
+    /// `off`, `manual` (default: only on Alt+\ or :complete) or `auto`
+    /// (debounced while typing). `ai.inline = true` means `auto`.
+    pub mode: Option<String>,
+    /// Backend for suggestions when it should differ from the chat backend
+    /// (`codex-cli`, `claude-code`, `anthropic`, …).
+    pub provider: Option<String>,
+    /// Model for suggestions.
+    pub model: Option<String>,
+    /// Longest one suggestion request may take, in seconds.
+    pub timeout_secs: u64,
+    /// Characters before the cursor sent.
+    pub prefix_chars: usize,
+    /// Characters after the cursor sent.
+    pub suffix_chars: usize,
+    /// Suggestions remembered (same context → no new request).
+    pub cache_entries: usize,
+    /// Longest suggestion kept, in lines.
+    pub max_lines: usize,
+}
+
+impl Default for CompletionConfig {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            provider: None,
+            model: None,
+            timeout_secs: 60,
+            prefix_chars: 4000,
+            suffix_chars: 1500,
+            cache_entries: 64,
+            max_lines: 40,
+        }
+    }
+}
+
+/// `[ai.skills]`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct SkillsConfig {
+    /// Use skills at all.
+    pub enabled: bool,
+    /// Extra skill directories, searched between the project and the
+    /// global directory.
+    pub dirs: Vec<PathBuf>,
+    /// Largest SKILL.md loaded, in bytes.
+    pub max_bytes: usize,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dirs: Vec::new(),
+            max_bytes: 64 * 1024,
+        }
+    }
+}
+
 /// `[ai]`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -100,6 +205,23 @@ pub struct AiConfig {
     pub inline: bool,
     /// Official CLI backends (`claude-code`, `codex-cli`).
     pub cli: CliConfig,
+    /// Agent runs.
+    pub agent: AgentConfig,
+    /// Inline suggestions.
+    pub completion: CompletionConfig,
+    /// Skills.
+    pub skills: SkillsConfig,
+}
+
+impl AiConfig {
+    /// Effective inline suggestion mode: `off`, `manual` or `auto`.
+    pub fn completion_mode(&self) -> &str {
+        match self.completion.mode.as_deref() {
+            Some(m) => m,
+            None if self.inline => "auto",
+            None => "manual",
+        }
+    }
 }
 
 impl Default for AiConfig {
@@ -113,6 +235,9 @@ impl Default for AiConfig {
             completion_debounce_ms: 250,
             inline: false,
             cli: CliConfig::default(),
+            agent: AgentConfig::default(),
+            completion: CompletionConfig::default(),
+            skills: SkillsConfig::default(),
         }
     }
 }
@@ -161,6 +286,31 @@ impl UserConfig {
         }
         if c.ai.max_tokens == 0 || c.ai.max_tokens > 64_000 {
             return Err(Error("ai.max_tokens must be 1..64000".into()));
+        }
+        if !["read-only", "workspace-write", "approval-required"]
+            .contains(&c.ai.agent.policy.as_str())
+        {
+            return Err(Error(format!(
+                "ai.agent.policy '{}': use read-only, workspace-write or approval-required",
+                c.ai.agent.policy
+            )));
+        }
+        if !["chat", "agent"].contains(&c.ai.agent.mode.as_str()) {
+            return Err(Error(format!(
+                "ai.agent.mode '{}': use chat or agent",
+                c.ai.agent.mode
+            )));
+        }
+        if !["off", "manual", "auto"].contains(&c.ai.completion_mode()) {
+            return Err(Error(format!(
+                "ai.completion.mode '{}': use off, manual or auto",
+                c.ai.completion_mode()
+            )));
+        }
+        if c.ai.agent.timeout_secs == 0 || c.ai.completion.timeout_secs == 0 {
+            return Err(Error(
+                "ai.agent.timeout_secs and ai.completion.timeout_secs must be positive".into(),
+            ));
         }
         Ok(c)
     }
@@ -368,5 +518,29 @@ mod tests {
         assert!(f.save(|t| UserConfig::parse(t).map(|_| ())).is_err());
         assert!(!p.exists(), "invalid configuration is not written");
         assert!(f.set("a..b", "1").is_err());
+    }
+
+    #[test]
+    fn agent_completion_and_skill_settings_parse_with_defaults() {
+        let c = UserConfig::parse("").unwrap();
+        assert_eq!(c.ai.agent.policy, "workspace-write");
+        assert_eq!(c.ai.completion_mode(), "manual");
+        assert!(c.ai.skills.enabled);
+        let c = UserConfig::parse("[ai]\ninline = true\n").unwrap();
+        assert_eq!(c.ai.completion_mode(), "auto", "the old switch still works");
+        let c = UserConfig::parse(
+            "[ai.agent]\npolicy = \"approval-required\"\nallow_commands = [\"just\"]\n\
+             [ai.completion]\nmode = \"off\"\nprovider = \"codex-cli\"\n\
+             [ai.skills]\ndirs = [\"/opt/skills\"]\n",
+        )
+        .unwrap();
+        assert_eq!(c.ai.agent.policy, "approval-required");
+        assert_eq!(c.ai.agent.allow_commands, ["just"]);
+        assert_eq!(c.ai.completion_mode(), "off");
+        assert_eq!(c.ai.completion.provider.as_deref(), Some("codex-cli"));
+        assert_eq!(c.ai.skills.dirs, [PathBuf::from("/opt/skills")]);
+        assert!(UserConfig::parse("[ai.agent]\npolicy = \"yolo\"\n").is_err());
+        assert!(UserConfig::parse("[ai.completion]\nmode = \"always\"\n").is_err());
+        assert!(UserConfig::parse("[ai.agent]\nunknown = 1\n").is_err());
     }
 }

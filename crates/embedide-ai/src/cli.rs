@@ -286,7 +286,7 @@ pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// The child environment: no parent-session binding, no API keys unless allowed.
-fn command(kind: CliKind, program: &Path, settings: &CliConfig) -> Command {
+pub(crate) fn command(kind: CliKind, program: &Path, settings: &CliConfig) -> Command {
     let mut cmd = Command::new(program);
     for var in PARENT_SESSION_VARS {
         cmd.env_remove(var);
@@ -306,7 +306,7 @@ fn command(kind: CliKind, program: &Path, settings: &CliConfig) -> Command {
 }
 
 /// Stop the child's whole process group and reap it.
-fn stop(child: &mut Child) {
+pub(crate) fn stop(child: &mut Child) {
     #[cfg(unix)]
     {
         use nix::{
@@ -331,7 +331,10 @@ fn stop(child: &mut Child) {
 }
 
 /// Read up to `limit` bytes on a thread; the rest is drained and dropped.
-fn collect(mut reader: impl Read + Send + 'static, limit: usize) -> thread::JoinHandle<Vec<u8>> {
+pub(crate) fn collect(
+    mut reader: impl Read + Send + 'static,
+    limit: usize,
+) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut kept = Vec::new();
         let mut buf = [0u8; 8192];
@@ -347,7 +350,7 @@ fn collect(mut reader: impl Read + Send + 'static, limit: usize) -> thread::Join
 }
 
 /// Run a short probe command with a time limit.
-fn probe_output(
+pub(crate) fn probe_output(
     kind: CliKind,
     program: &Path,
     args: &[&str],
@@ -408,7 +411,7 @@ pub fn caps(kind: CliKind, program: &Path, settings: &CliConfig) -> Caps {
 
 /// Spawn, retrying briefly when the executable was just written
 /// (ETXTBSY: another thread's fork still held it open for writing).
-fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
+pub(crate) fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
     let mut attempts = 0;
     loop {
         match cmd.spawn() {

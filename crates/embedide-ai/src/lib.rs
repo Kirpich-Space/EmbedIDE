@@ -12,6 +12,7 @@
 //! Network requests happen only when a caller invokes a feature explicitly.
 //! `EMBEDIDE_AI_OFFLINE=1` refuses every request (used by tests).
 
+pub mod agent;
 pub mod auth;
 pub mod chat;
 pub mod cli;
@@ -19,6 +20,7 @@ pub mod complete;
 pub mod context;
 pub mod edit;
 pub mod providers;
+pub mod skills;
 mod wire;
 
 use serde::Serialize;

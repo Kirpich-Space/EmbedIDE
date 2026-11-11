@@ -120,32 +120,59 @@ pub fn unified_diff(path: &str, a: &str, b: &str) -> String {
         return String::new();
     }
     let (n, m) = (x.len(), y.len());
-    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if x[i] == y[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
+    // Common head and tail need no LCS table (keeps big files cheap).
+    let head = x.iter().zip(&y).take_while(|(a, b)| a == b).count();
+    let tail = x[head..]
+        .iter()
+        .rev()
+        .zip(y[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (xn, ym) = (n - head - tail, m - head - tail);
     // ops: (' ' | '-' | '+', a_index, b_index, text)
     let mut ops = Vec::new();
-    let (mut i, mut j) = (0, 0);
-    while i < n || j < m {
-        if i < n && j < m && x[i] == y[j] {
-            ops.push((' ', i, j, x[i]));
-            i += 1;
-            j += 1;
-        } else if i < n && (j == m || lcs[i + 1][j] >= lcs[i][j + 1]) {
-            // deletions before insertions, as diff(1) prints them
-            ops.push(('-', i, j, x[i]));
-            i += 1;
-        } else {
-            ops.push(('+', i, j, y[j]));
-            j += 1;
+    for (k, line) in x.iter().enumerate().take(head) {
+        ops.push((' ', k, k, *line));
+    }
+    if xn.saturating_mul(ym) > 4_000_000 {
+        // Too large for an exact LCS: everything in between is replaced.
+        for (k, line) in x.iter().enumerate().skip(head).take(xn) {
+            ops.push(('-', k, head, *line));
         }
+        for (k, line) in y.iter().enumerate().skip(head).take(ym) {
+            ops.push(('+', head + xn, k, *line));
+        }
+    } else {
+        let xs = &x[head..head + xn];
+        let ys = &y[head..head + ym];
+        let mut lcs = vec![vec![0u32; ym + 1]; xn + 1];
+        for i in (0..xn).rev() {
+            for j in (0..ym).rev() {
+                lcs[i][j] = if xs[i] == ys[j] {
+                    lcs[i + 1][j + 1] + 1
+                } else {
+                    lcs[i + 1][j].max(lcs[i][j + 1])
+                };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < xn || j < ym {
+            if i < xn && j < ym && xs[i] == ys[j] {
+                ops.push((' ', head + i, head + j, xs[i]));
+                i += 1;
+                j += 1;
+            } else if i < xn && (j == ym || lcs[i + 1][j] >= lcs[i][j + 1]) {
+                // deletions before insertions, as diff(1) prints them
+                ops.push(('-', head + i, head + j, xs[i]));
+                i += 1;
+            } else {
+                ops.push(('+', head + i, head + j, ys[j]));
+                j += 1;
+            }
+        }
+    }
+    for k in 0..tail {
+        ops.push((' ', n - tail + k, m - tail + k, x[n - tail + k]));
     }
     let mut out = format!("--- a/{path}\n+++ b/{path}\n");
     let changed: Vec<usize> = ops
@@ -198,6 +225,25 @@ mod tests {
         assert!(d.contains("-d\n+D\n"));
         assert!(d.contains("@@ -1,7 +1,7 @@"), "{d}");
         assert_eq!(unified_diff("x", a, a), "");
+    }
+
+    #[test]
+    fn large_files_diff_without_a_quadratic_table() {
+        let a: String = (0..30_000).map(|i| format!("line {i}\n")).collect();
+        let b = a.replace("line 15000\n", "changed\n");
+        let d = unified_diff("big.c", &a, &b);
+        assert!(d.contains("-line 15000\n+changed\n"), "{d}");
+        assert!(d.contains("@@ -14998,7 +14998,7 @@"), "{d}");
+        // Completely different big files still produce a (non-minimal) diff
+        let c: String = (0..3000).map(|i| format!("other {i}\n")).collect();
+        let e: String = (0..3000).map(|i| format!("new {i}\n")).collect();
+        let d = unified_diff("x", &c, &e);
+        assert_eq!(
+            d.lines()
+                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+                .count(),
+            3000
+        );
     }
 
     #[test]

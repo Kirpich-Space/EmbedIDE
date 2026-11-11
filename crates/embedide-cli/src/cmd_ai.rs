@@ -3,10 +3,11 @@
 use crate::{fail, CliResult, Out};
 use clap::{Args, Subcommand};
 use embedide_ai::{
+    agent,
     auth::{self, KeySource},
     chat, complete, context, edit,
     providers::Subscription,
-    AuthMode, Cancel, Message, ProviderId, Secret,
+    skills, AuthMode, Cancel, Message, ProviderId, Secret,
 };
 use embedide_workspace::{Manifest, UserConfig};
 use serde_json::{json, Value};
@@ -80,6 +81,41 @@ pub enum AiCmd {
         language: Option<String>,
         #[command(flatten)]
         pick: Pick,
+    },
+    /// Run an agent task with Claude Code or Codex CLI in the project: it may
+    /// read, search, create, edit and delete files and run builds and tests
+    /// under the chosen policy. Approvals are asked on the terminal; without
+    /// a terminal every request that needs approval is refused.
+    Agent {
+        /// What to do.
+        task: String,
+        /// claude-code or codex-cli (default: ai.provider).
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model for the CLI (default: the CLI's own default).
+        #[arg(long)]
+        model: Option<String>,
+        /// read-only, workspace-write or approval-required (default: ai.agent.policy).
+        #[arg(long)]
+        policy: Option<String>,
+        /// Workspace (default: the project containing the current directory, else the current directory).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Activate a skill for this task (repeatable; see `embed ai skills`).
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Build/test command for a fix loop: run it, give failures to the agent, repeat
+        /// (up to ai.agent.max_fix_iterations rounds). No shell is used.
+        #[arg(long)]
+        fix: Option<String>,
+        /// Continue an earlier CLI session id.
+        #[arg(long)]
+        resume: Option<String>,
+    },
+    /// List skills (project .embedide/skills, ai.skills.dirs, global) or show one.
+    Skills {
+        /// Show this skill's instructions.
+        name: Option<String>,
     },
     /// Propose an edit of one file as a unified diff. Nothing is written without --apply.
     Edit {
@@ -548,6 +584,31 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
                 0,
             ))
         }
+        AiCmd::Agent {
+            task,
+            provider,
+            model,
+            policy,
+            workspace,
+            skills,
+            fix,
+            resume,
+        } => agent_task(
+            &cfg,
+            out,
+            &cancel,
+            AgentArgs {
+                task,
+                provider,
+                model,
+                policy,
+                workspace,
+                skills,
+                fix,
+                resume,
+            },
+        ),
+        AiCmd::Skills { name } => skills_cmd(&cfg, out, name),
         AiCmd::Edit {
             file,
             instruction,
@@ -624,4 +685,336 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
             Ok((json!({"proposal": p, "applied": applied}), 0))
         }
     }
+}
+
+struct AgentArgs {
+    task: String,
+    provider: Option<String>,
+    model: Option<String>,
+    policy: Option<String>,
+    workspace: Option<PathBuf>,
+    skills: Vec<String>,
+    fix: Option<String>,
+    resume: Option<String>,
+}
+
+fn project_root() -> Option<PathBuf> {
+    project_excludes(Path::new(".")).0
+}
+
+/// Terminal host: progress on stderr, approvals asked on the terminal.
+struct TermHost {
+    interactive: bool,
+    text_open: bool,
+    /// Last whole message printed (the final summary is not repeated).
+    last: String,
+}
+
+impl TermHost {
+    fn close_text(&mut self) {
+        if self.text_open {
+            eprintln!();
+            self.text_open = false;
+        }
+    }
+}
+
+impl agent::Host for TermHost {
+    fn event(&mut self, event: agent::Event) {
+        use agent::Event as E;
+        if !matches!(event, E::Text(_)) {
+            self.close_text();
+        }
+        match event {
+            E::Started { session, model } => eprintln!(
+                "· started{}{}",
+                model.map(|m| format!(" · {m}")).unwrap_or_default(),
+                session
+                    .map(|s| format!(" · session {s}"))
+                    .unwrap_or_default()
+            ),
+            E::Text(t) => {
+                eprint!("{t}");
+                if !self.text_open {
+                    self.last.clear();
+                }
+                self.last.push_str(&t);
+                self.text_open = true;
+            }
+            E::Message(t) => {
+                eprintln!("{t}");
+                self.last = t;
+            }
+            E::Thinking => {}
+            E::Tool { name, detail } => eprintln!("· {name} {detail}"),
+            E::Command { command, .. } => eprintln!("$ {command}"),
+            E::CommandDone { exit, output, .. } => {
+                let last: Vec<&str> = output.lines().rev().take(6).collect();
+                for l in last.iter().rev() {
+                    eprintln!("  │ {l}");
+                }
+                eprintln!(
+                    "  └ {}",
+                    match exit {
+                        Some(0) => "ok".to_string(),
+                        Some(c) => format!("exit {c}"),
+                        None => "not run".to_string(),
+                    }
+                );
+            }
+            E::FileChanged { path, kind } => eprintln!("✎ {path} ({kind})"),
+            E::Denied { what, reason } => eprintln!("⊘ {what}: {reason}"),
+            E::Note(n) => eprintln!("· {n}"),
+            E::Check {
+                command,
+                ok,
+                output,
+            } => {
+                for l in output
+                    .lines()
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .rev()
+                {
+                    eprintln!("  │ {l}");
+                }
+                eprintln!("{} check: {command}", if ok { "✓" } else { "✗" });
+            }
+        }
+    }
+    fn approve(&mut self, req: &agent::Approval, cancel: &Cancel) -> agent::Decision {
+        self.close_text();
+        eprintln!("⚠ Approval needed: {}\n  why: {}", req.summary, req.reason);
+        if !self.interactive {
+            eprintln!("  refused (no terminal to ask on)");
+            return agent::Decision::Deny("No terminal to ask the user; refused".into());
+        }
+        if cancel.is_cancelled() {
+            return agent::Decision::Cancel;
+        }
+        eprint!("  [y] allow once  [a] allow similar  [n] deny  [s] stop > ");
+        let _ = std::io::stderr().flush();
+        let mut a = String::new();
+        if std::io::stdin().lock().read_line(&mut a).is_err() {
+            return agent::Decision::Cancel;
+        }
+        match a.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => agent::Decision::Allow,
+            "a" | "always" => agent::Decision::AllowSimilar,
+            "s" | "stop" => agent::Decision::Cancel,
+            "" | "n" | "no" => agent::Decision::Deny(String::new()),
+            other => agent::Decision::Deny(other.to_string()),
+        }
+    }
+}
+
+fn agent_task(
+    cfg: &UserConfig,
+    out: &Out,
+    cancel: &Cancel,
+    a: AgentArgs,
+) -> CliResult<(Value, u8)> {
+    let id = a
+        .provider
+        .clone()
+        .or(cfg.ai.provider.clone())
+        .ok_or_else(|| fail("Choose --provider claude-code or --provider codex-cli".into()))?;
+    let kind = embedide_ai::cli::CliKind::parse(&id).ok_or_else(|| {
+        fail(format!(
+            "Agent mode runs through an official CLI: --provider claude-code or codex-cli (not '{id}')"
+        ))
+    })?;
+    let policy: agent::Policy = a
+        .policy
+        .as_deref()
+        .unwrap_or(&cfg.ai.agent.policy)
+        .parse()
+        .map_err(fail)?;
+    let workspace = match a.workspace {
+        Some(w) => w,
+        None => project_root()
+            .or_else(|| std::env::current_dir().ok())
+            .ok_or_else(|| fail("No workspace".into()))?,
+    };
+    if !workspace.is_dir() {
+        return Err(fail(format!("{} is not a directory", workspace.display())));
+    }
+    let configured = cfg
+        .ai
+        .providers
+        .get(kind.id())
+        .or_else(|| cfg.ai.providers.get(kind.provider().id()))
+        .and_then(|c| c.cli.clone());
+    let program =
+        embedide_ai::cli::locate(kind, configured.as_deref()).map_err(|e| fail(e.to_string()))?;
+    let model = a.model.or_else(|| {
+        cfg.ai
+            .providers
+            .get(kind.id())
+            .and_then(|c| c.model.clone())
+    });
+    let catalog = skills::discover(Some(&workspace), &cfg.ai.skills);
+    let mut active = Vec::new();
+    for name in &a.skills {
+        let info = catalog.get(name).map_err(fail)?;
+        active.push(skills::load(info, cfg.ai.skills.max_bytes).map_err(fail)?);
+    }
+    let mut session = agent::Session::new(kind, program, &workspace, policy, &cfg.ai, model);
+    if let Some(id) = &a.resume {
+        session.resume(id).map_err(|e| fail(e.to_string()))?;
+    }
+    out.err(&format!(
+        "Agent: {} · policy {policy} · workspace {}{}",
+        kind.name(),
+        session.workspace().display(),
+        if active.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · skills {}",
+                active
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    ));
+    let mut host = TermHost {
+        interactive: std::io::stdin().is_terminal(),
+        text_open: false,
+        last: String::new(),
+    };
+    let task = agent::Task {
+        prompt: a.task,
+        skills: active,
+    };
+    let (outcomes, check) = match &a.fix {
+        Some(command) => {
+            let argv = agent::check_argv(command).map_err(fail)?;
+            let (check, outcomes) = agent::fix(
+                &mut session,
+                &argv,
+                &task,
+                cfg.ai.agent.max_fix_iterations,
+                &mut host,
+                cancel,
+            )
+            .map_err(|e| fail(e.to_string()))?;
+            (outcomes, Some(check))
+        }
+        None => (
+            vec![session
+                .run(&task, &mut host, cancel)
+                .map_err(|e| fail(e.to_string()))?],
+            None,
+        ),
+    };
+    host.close_text();
+    let mut ok = check.as_ref().is_none_or(|c| c.ok);
+    let mut files = Vec::new();
+    for o in &outcomes {
+        ok &= o.ok;
+        if let Some(e) = &o.error {
+            out.err(&format!("✗ {e}"));
+        }
+        for c in &o.changes {
+            files.push(json!({"path": c.path, "change": c.kind.label()}));
+        }
+    }
+    if let Some(last) = outcomes.last() {
+        // Shown once: on a terminal the streamed answer already was the summary.
+        let shown = std::io::stdout().is_terminal()
+            && std::io::stderr().is_terminal()
+            && last.summary.trim() == host.last.trim();
+        if !last.summary.is_empty() && !shown {
+            out.line(&last.summary);
+        }
+    }
+    for f in &files {
+        out.line(&format!(
+            "{} {}",
+            f["change"].as_str().unwrap_or(""),
+            f["path"].as_str().unwrap_or("")
+        ));
+    }
+    let data = json!({
+        "provider": kind.id(),
+        "policy": policy.id(),
+        "workspace": session.workspace(),
+        "session": session.id(),
+        "ok": ok,
+        "summary": outcomes.last().map(|o| o.summary.clone()).unwrap_or_default(),
+        "changes": files,
+        "commands": outcomes.iter().map(|o| o.commands).sum::<usize>(),
+        "failed_commands": outcomes.iter().map(|o| o.failed_commands).sum::<usize>(),
+        "denied": outcomes.iter().map(|o| o.denied).sum::<usize>(),
+        "check": check.as_ref().map(|c| json!({"ok": c.ok, "code": c.code})),
+        "errors": outcomes.iter().filter_map(|o| o.error.as_ref().map(|e| e.to_string())).collect::<Vec<_>>(),
+    });
+    if let Some(id) = session.id() {
+        out.err(&format!("Session {id} (continue with --resume {id})"));
+    }
+    Ok((data, if ok { 0 } else { 1 }))
+}
+
+fn skills_cmd(cfg: &UserConfig, out: &Out, name: Option<String>) -> CliResult<(Value, u8)> {
+    let project = project_root().or_else(|| std::env::current_dir().ok());
+    let cat = skills::discover(project.as_deref(), &cfg.ai.skills);
+    if let Some(name) = name {
+        let info = cat.get(&name).map_err(fail)?;
+        let text = skills::load(info, cfg.ai.skills.max_bytes).map_err(fail)?;
+        out.line(&format!(
+            "{} ({})\n{}\n\n{}",
+            info.name, text.source, info.description, text.body
+        ));
+        return Ok((
+            json!({"name": info.name, "source": text.source, "body": text.body}),
+            0,
+        ));
+    }
+    if !cfg.ai.skills.enabled {
+        out.line("Skills are disabled (ai.skills.enabled = false)");
+    }
+    for s in &cat.skills {
+        out.line(&format!("{:<20} {:<8} {}", s.name, s.scope, s.description));
+        for w in &s.warnings {
+            out.line(&format!("{:<20} note: {w}", ""));
+        }
+    }
+    for s in &cat.shadowed {
+        out.line(&format!(
+            "{:<20} {:<8} (shadowed by a skill with the same name) {}",
+            s.name,
+            s.scope,
+            s.dir.display()
+        ));
+    }
+    for b in &cat.broken {
+        out.line(&format!("broken: {}: {}", b.path.display(), b.error));
+    }
+    if cat.skills.is_empty() {
+        out.line("No skills found. Searched:");
+    } else {
+        out.line("Searched:");
+    }
+    for (scope, d) in &cat.searched {
+        out.line(&format!("  {scope:<8} {}", d.display()));
+    }
+    let list: Vec<Value> = cat
+        .skills
+        .iter()
+        .map(|s| json!({"name": s.name, "description": s.description, "scope": s.scope.to_string(), "dir": s.dir, "warnings": s.warnings}))
+        .collect();
+    let broken: Vec<Value> = cat
+        .broken
+        .iter()
+        .map(|b| json!({"path": b.path, "error": b.error}))
+        .collect();
+    Ok((
+        json!({"skills": list, "broken": broken, "searched": cat.searched.iter().map(|(s, d)| json!({"scope": s.to_string(), "dir": d})).collect::<Vec<_>>()}),
+        0,
+    ))
 }
