@@ -172,6 +172,12 @@ pub struct SkillsConfig {
     pub dirs: Vec<PathBuf>,
     /// Largest SKILL.md loaded, in bytes.
     pub max_bytes: usize,
+    /// Give agents EmbedIDE's built-in working instructions and the skills
+    /// that match the project (C/C++, Rust, Zig, assembly, embedded)
+    /// without `/skill`.
+    pub auto: bool,
+    /// Skills never activated automatically.
+    pub exclude: Vec<String>,
 }
 
 impl Default for SkillsConfig {
@@ -180,6 +186,8 @@ impl Default for SkillsConfig {
             enabled: true,
             dirs: Vec::new(),
             max_bytes: 64 * 1024,
+            auto: true,
+            exclude: Vec::new(),
         }
     }
 }

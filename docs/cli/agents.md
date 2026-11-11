@@ -12,6 +12,13 @@ separate and explicit: `/agent <task>`, or `/mode agent` so that plain text star
 No API key is needed: the CLI uses its own login and plan. See [AI subsystem](ai.md) for backends,
 billing and authentication rules, which apply unchanged.
 
+Every agent task comes with EmbedIDE's built-in working instructions (`embedide-agent`: use your
+tools, find the build, build → fix → rebuild, run programs with `timeout`, respect refusals, report)
+and the built-in skills that match the project (C/C++, firmware, Rust, Zig, assembly) — see
+[skills](skills.md#built-in-skills-given-automatically). In chat mode the model knows it cannot touch
+files and points to `/agent`; `/agent task` (a placeholder copied from a usage line) is refused with
+an example instead of being run.
+
 ## Quick start
 
 ```text
@@ -261,6 +268,10 @@ recognised.)
 - Real CLIs (2026-11-12, the user's subscriptions, a handful of short tasks): examples 1 and 2 above;
   Claude Code with a custom skill under `read-only`; the Claude Code `can_use_tool` protocol and the
   Codex `--json` event format were first inspected with a minimal probe in a disposable directory.
+- Real Codex run (2026-11-12) of a terse task in Russian on a project like the one in the user's
+  screenshot (`main.c` looping to 10¹⁶, a Makefile): with the built-in instructions it read the files,
+  looked for project instructions, edited `main.c`, built with `make` and ran `timeout 10 ./app`.
+  In chat mode Codex answered that it cannot change files there and suggested the `/agent …` command.
 - Not verified with real CLIs: `approval-required` (mock only), `/fix` and session resume (mock only),
   Windows and macOS.
 

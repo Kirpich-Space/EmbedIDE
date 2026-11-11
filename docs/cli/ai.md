@@ -217,6 +217,8 @@ All AI settings live in `config.toml` (`embed config set ai.… …`); keys are 
 | `ai.skills.enabled` | true | use skills |
 | `ai.skills.dirs` | [] | extra skill directories |
 | `ai.skills.max_bytes` | 65536 | largest SKILL.md |
+| `ai.skills.auto` | true | give agents the built-in instructions and the skills detected for the project |
+| `ai.skills.exclude` | [] | skills never given automatically |
 
 Unknown keys and invalid values (`policy = "yolo"`, `mode = "always"`) are rejected when the file is
 loaded or saved with `embed config set`.

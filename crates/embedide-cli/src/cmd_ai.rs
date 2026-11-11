@@ -111,6 +111,10 @@ pub enum AiCmd {
         /// Continue an earlier CLI session id.
         #[arg(long)]
         resume: Option<String>,
+        /// Do not add EmbedIDE's built-in instructions and the skills detected
+        /// for the project (ai.skills.auto).
+        #[arg(long)]
+        no_auto_skills: bool,
     },
     /// List skills (project .embedide/skills, ai.skills.dirs, global) or show one.
     Skills {
@@ -594,6 +598,7 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
             skills,
             fix,
             resume,
+            no_auto_skills,
         } => agent_task(
             &cfg,
             out,
@@ -607,6 +612,7 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
                 skills,
                 fix,
                 resume,
+                no_auto_skills,
             },
         ),
         AiCmd::Skills { name } => skills_cmd(&cfg, out, name),
@@ -697,6 +703,7 @@ struct AgentArgs {
     skills: Vec<String>,
     fix: Option<String>,
     resume: Option<String>,
+    no_auto_skills: bool,
 }
 
 fn project_root() -> Option<PathBuf> {
@@ -857,10 +864,16 @@ fn agent_task(
             .and_then(|c| c.model.clone())
     });
     let catalog = skills::discover(Some(&workspace), &cfg.ai.skills);
-    let mut active = Vec::new();
+    let mut chosen = Vec::new();
     for name in &a.skills {
         let info = catalog.get(name).map_err(fail)?;
-        active.push(skills::load(info, cfg.ai.skills.max_bytes).map_err(fail)?);
+        chosen.push(skills::load(info, cfg.ai.skills.max_bytes).map_err(fail)?);
+    }
+    let mut skill_cfg = cfg.ai.skills.clone();
+    skill_cfg.auto &= !a.no_auto_skills;
+    let (active, problems) = skills::for_task(&workspace, &skill_cfg, &chosen, &[]);
+    for p in problems {
+        out.err(&format!("✗ {p}"));
     }
     let mut session = agent::Session::new(kind, program, &workspace, policy, &cfg.ai, model);
     if let Some(id) = &a.resume {
@@ -979,8 +992,23 @@ fn skills_cmd(cfg: &UserConfig, out: &Out, name: Option<String>) -> CliResult<(V
     if !cfg.ai.skills.enabled {
         out.line("Skills are disabled (ai.skills.enabled = false)");
     }
+    let auto: Vec<&str> = match (&project, cfg.ai.skills.auto) {
+        (Some(p), true) => skills::detect(p)
+            .into_iter()
+            .filter(|n| !cfg.ai.skills.exclude.iter().any(|e| e == n))
+            .collect(),
+        _ => Vec::new(),
+    };
     for s in &cat.skills {
-        out.line(&format!("{:<20} {:<8} {}", s.name, s.scope, s.description));
+        let mark = if auto.contains(&s.name.as_str()) {
+            "auto"
+        } else {
+            ""
+        };
+        out.line(&format!(
+            "{:<20} {:<8} {:<4} {}",
+            s.name, s.scope, mark, s.description
+        ));
         for w in &s.warnings {
             out.line(&format!("{:<20} note: {w}", ""));
         }
@@ -1007,7 +1035,7 @@ fn skills_cmd(cfg: &UserConfig, out: &Out, name: Option<String>) -> CliResult<(V
     let list: Vec<Value> = cat
         .skills
         .iter()
-        .map(|s| json!({"name": s.name, "description": s.description, "scope": s.scope.to_string(), "dir": s.dir, "warnings": s.warnings}))
+        .map(|s| json!({"name": s.name, "description": s.description, "scope": s.scope.to_string(), "dir": s.dir, "warnings": s.warnings, "auto": auto.contains(&s.name.as_str())}))
         .collect();
     let broken: Vec<Value> = cat
         .broken

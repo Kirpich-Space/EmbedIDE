@@ -58,9 +58,10 @@ file). See [the TUI guide](docs/cli/tui.md).
 - **Inline AI suggestions** — `Alt+\` shows a (multi-line) suggestion as ghost text, Tab accepts,
   Esc dismisses; optional automatic mode; any backend, including `codex-cli` without an API key. See
   [inline suggestions](docs/cli/ai.md#inline-suggestions).
-- **Skills** — `SKILL.md` instructions per project (`.embedide/skills`) or globally
-  (`~/.config/embedide/skills`), activated with `/skill <name>`; examples for C firmware, Rust, Zig,
-  assembly and board bring-up in [examples/skills](examples/skills). See [skills](docs/cli/skills.md).
+- **Skills** — agents get EmbedIDE's built-in working instructions and the skills that fit the
+  project (C/C++, firmware, board bring-up, Rust, Zig, assembly) automatically; your own `SKILL.md`
+  files per project (`.embedide/skills`) or globally (`~/.config/embedide/skills`) replace or extend
+  them (`/skill <name>`). See [skills](docs/cli/skills.md).
 - **Assembly** — NASM, GNU as AT&T/Intel, ARM, AArch64 and RISC-V dialects detected per file; branch
   highlighting, labels (`:label`), completion of labels/instructions/registers, assembler errors in
   PROBLEMS; [examples/asm](examples/asm).

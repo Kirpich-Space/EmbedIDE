@@ -269,7 +269,7 @@ impl Assistant {
                 }
                 "chat" => {
                     self.agent_mode = false;
-                    self.note(Kind::Info, "Chat mode: plain text is a chat message (/agent task still runs the agent)");
+                    self.note(Kind::Info, "Chat mode: plain text is a chat message (/agent <what to do> still runs the agent)");
                 }
                 "" => self.note(
                     Kind::Info,
@@ -385,6 +385,16 @@ impl Assistant {
         if self.run.is_some() {
             return self.note(Kind::Error, "An agent task is already running (/cancel)");
         }
+        // `/agent task` copied from a usage line is not a task.
+        let placeholder = prompt.trim().trim_matches(['<', '>']).to_lowercase();
+        if fix.is_none()
+            && ["task", "what to do", "задача", "задание", "..."].contains(&placeholder.as_str())
+        {
+            return self.note(
+                Kind::Error,
+                "Describe the task after /agent, for example: /agent fix the warnings in main.c and run it",
+            );
+        }
         let Some(kind) = self.cli_backend() else {
             return self.note(
                 Kind::Error,
@@ -434,9 +444,26 @@ impl Assistant {
                 self.attachments.clear();
             }
         }
+        let (skills, problems) =
+            skills::for_task(&root, &self.cfg.skills, &self.skills, &self.skills_off);
+        for p in problems {
+            self.note(Kind::Error, p);
+        }
+        let already = session.skills_sent();
+        let new: Vec<String> = skills
+            .iter()
+            .filter(|s| !already.contains(&s.name))
+            .map(|s| {
+                if s.trusted {
+                    format!("{} (built-in)", s.name)
+                } else {
+                    s.name.clone()
+                }
+            })
+            .collect();
         let task = Task {
             prompt: text,
-            skills: self.skills.clone(),
+            skills,
         };
         self.note(Kind::Header, "You");
         match &fix {
@@ -456,6 +483,9 @@ impl Assistant {
                     session.turns + 1
                 ),
             );
+        }
+        if !new.is_empty() {
+            self.note(Kind::Meta, format!("skills: {}", new.join(", ")));
         }
         let cancel = Cancel::default();
         let c2 = cancel.clone();
@@ -940,6 +970,17 @@ impl Assistant {
 
     fn list_skills(&mut self, root: &Path) {
         let cat = skills::discover(Some(root), &self.cfg.skills);
+        let auto: Vec<&str> = if self.cfg.skills.auto {
+            skills::detect(root)
+                .into_iter()
+                .filter(|n| {
+                    !self.cfg.skills.exclude.iter().any(|e| e == n)
+                        && !self.skills_off.iter().any(|o| o == n)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         if !self.cfg.skills.enabled {
             return self.note(
                 Kind::Info,
@@ -948,14 +989,16 @@ impl Assistant {
         }
         let mut lines = Vec::new();
         for s in &cat.skills {
-            let active = self.skills.iter().any(|a| a.name == s.name);
+            let automatic = auto.contains(&s.name.as_str());
+            let active = automatic || self.skills.iter().any(|a| a.name == s.name);
             lines.push((
                 Kind::Info,
                 format!(
-                    "{} {} ({}) — {}",
+                    "{} {} ({}{}) — {}",
                     if active { "●" } else { "○" },
                     s.name,
                     s.scope,
+                    if automatic { ", auto" } else { "" },
                     s.description
                 ),
             ));
@@ -983,7 +1026,7 @@ impl Assistant {
         } else {
             lines.push((
                 Kind::Info,
-                "/skill <name> activates one for agent tasks. Searched, first wins:".into(),
+                "● = given to agent tasks (auto = chosen for this project). /skill <name> adds one, /skill off <name> removes one. Searched, first wins:".into(),
             ));
         }
         for (scope, d) in &cat.searched {
@@ -1008,13 +1051,21 @@ impl Assistant {
             ("off", n) if !n.is_empty() => {
                 let before = self.skills.len();
                 self.skills.retain(|s| s.name != n);
-                if self.skills.len() == before {
+                let automatic = self.cfg.skills.auto && skills::detect(root).contains(&n);
+                if automatic && !self.skills_off.iter().any(|o| o == n) {
+                    self.skills_off.push(n.to_string());
+                    self.note(Kind::Info, format!("Skill {n} off: no longer given automatically in this IDE session (ai.skills.exclude makes it permanent; a running CLI session keeps what it already received, /new starts without it)"));
+                } else if self.skills.len() == before {
                     self.note(Kind::Error, format!("Skill {n} is not active"));
                 } else {
                     self.note(Kind::Info, format!("Skill {n} off"));
                 }
             }
             (n, _) => {
+                if let Some(i) = self.skills_off.iter().position(|o| o == n) {
+                    self.skills_off.remove(i);
+                    return self.note(Kind::Info, format!("Skill {n} is given automatically again"));
+                }
                 if self.skills.iter().any(|s| s.name == n) {
                     return self.note(Kind::Info, format!("Skill {n} is already active"));
                 }
@@ -1024,14 +1075,16 @@ impl Assistant {
                         .map(|t| (t, info.warnings.clone()))
                 }) {
                     Ok((text, warnings)) => {
-                        self.note(
-                            Kind::Info,
+                        let note = if text.trusted {
+                            format!("Skill {n} active for agent tasks ({}, {} bytes)", text.source, text.body.len())
+                        } else {
                             format!(
                                 "Skill {n} active for agent tasks ({}, {} bytes). It is guidance only: it cannot change the policy or permissions.",
                                 text.source,
                                 text.body.len()
-                            ),
-                        );
+                            )
+                        };
+                        self.note(Kind::Info, note);
                         for w in warnings {
                             self.note(Kind::Meta, format!("  {w}"));
                         }

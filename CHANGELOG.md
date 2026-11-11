@@ -16,6 +16,13 @@
   multi-line ghost text as virtual rows, re-indentation, type-through, cache, timeout, separate
   backend/model (`ai.completion.provider`), project line and file declarations as context, error
   back-off, `/inline`; `[ai.completion]` settings.
+- Built-in skills given to every agent task without `/skill`: `embedide-agent` (detailed working
+  instructions: use the tools, build → diagnostics → fix → rebuild, bounded program runs, permissions,
+  report) plus `c-cpp`, `c-firmware`, `embedded-bringup`, `rust-crate`, `zig-build`, `asm-review`
+  chosen by what the project contains; sent once per CLI session; project/global skills of the same
+  name replace them; `ai.skills.auto`, `ai.skills.exclude`, `--no-auto-skills`, `/skill off`.
+- Chat mode tells the model it cannot change files and should point to `/agent`; `/agent task`
+  (a copied placeholder) is refused with an example.
 - Skills: `SKILL.md` discovery in `.embedide/skills`, `ai.skills.dirs` and `~/.config/embedide/skills`
   (in that precedence), frontmatter validation, on-demand loading, `/skills`, `/skill`, `embed ai
   skills`, `--skill`; skill text is quoted as untrusted guidance; `examples/skills` (C firmware, Rust,

@@ -153,6 +153,8 @@ pub struct Assistant {
     review: Option<agent::Review>,
     /// Skills activated for agent tasks.
     skills: Vec<embedide_ai::agent::SkillText>,
+    /// Automatic skills the user switched off for this IDE session.
+    skills_off: Vec<String>,
     /// Files the agent changed that the editor should reload.
     changed: Vec<PathBuf>,
     /// A message the host should show even when the panel is hidden.
@@ -163,7 +165,7 @@ const HELP: &str = "Type here (this panel) and press Enter. Start with: /provide
 (your installed, logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
 Chat: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
 /apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers. \
-Agent (claude-code / codex-cli works in the project): /agent task · /mode agent|chat · /policy read-only|workspace-write|approval-required \
+Agent (claude-code / codex-cli works in the project): /agent <what to do> · /mode agent|chat · /policy read-only|workspace-write|approval-required \
 · y / a / n answer approvals · /changes · /review [file] · /revert file|all · /fix [command] · /new · \
 /skills · /skill name · /skill off name. Nothing is sent until Enter.";
 
@@ -218,6 +220,7 @@ impl Assistant {
             policy: Default::default(),
             review: None,
             skills: Vec::new(),
+            skills_off: Vec::new(),
             changed: Vec::new(),
             attention: None,
         };
@@ -1074,7 +1077,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             } else if self.agent_mode {
                 format!("Task for the {who} agent · Enter runs · /mode chat · /help")
             } else {
-                format!("Message {who} · Enter sends · /agent task · /help")
+                format!("Message {who} · Enter sends · /agent <what to do> edits files · /help")
             };
             let hint: String = hint.chars().take(width.saturating_sub(2)).collect();
             input.push_styled(&hint, false, Some(Highlight::Comment));
@@ -1480,6 +1483,77 @@ mod usage_tests {
             !ctx.root.join("add.c").exists(),
             "read-only changed nothing"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    fn run_denying(a: &mut Assistant, ctx: &EditorContext, task: &str) {
+        a.input = task.into();
+        a.submit(ctx);
+        assert!(a.agent_running(), "{task}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while a.agent_running() {
+            a.tick();
+            if a.approval_pending() {
+                a.answer(embedide_ai::agent::Decision::Deny(String::new()));
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agents_get_built_in_instructions_and_project_skills_once_per_session() {
+        let (mut a, ctx, dir) = agent_fixture("builtin");
+        a.input = "/agent task".into();
+        a.submit(&ctx);
+        assert!(!a.agent_running(), "a placeholder is not a task");
+        assert!(a.transcript.last().unwrap().1.contains("Describe the task"));
+        a.input = "/skills".into();
+        a.submit(&ctx);
+        let listed: String = a.transcript.iter().map(|(_, t)| format!("{t}\n")).collect();
+        assert!(
+            listed.contains("● embedide-agent (built-in, auto)"),
+            "{listed}"
+        );
+        assert!(
+            listed.contains("● c-cpp (built-in, auto)"),
+            "main.c makes it a C project: {listed}"
+        );
+        assert!(listed.contains("○ rust-crate (built-in)"), "{listed}");
+        run_denying(&mut a, &ctx, "/agent implement add");
+        let shown: String = a.transcript.iter().map(|(_, t)| format!("{t}\n")).collect();
+        assert!(
+            shown.contains("skills: embedide-agent (built-in), c-cpp (built-in)"),
+            "{shown}"
+        );
+        run_denying(&mut a, &ctx, "/agent and now test it");
+        let prompts: Vec<String> = std::fs::read_to_string(dir.join("prompts"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0]
+            .contains("EmbedIDE working instructions (from EmbedIDE itself; follow them):"));
+        assert!(prompts[0].contains("<instructions name=\"embedide-agent\">"));
+        assert!(prompts[0].contains("timeout 10 ./app"));
+        assert!(prompts[0].contains("<instructions name=\"c-cpp\">"));
+        assert!(
+            !prompts[1].contains("<instructions"),
+            "a resumed session is not sent them again"
+        );
+        // Switched off: a new session starts without it.
+        a.input = "/skill off c-cpp".into();
+        a.submit(&ctx);
+        a.input = "/new".into();
+        a.submit(&ctx);
+        run_denying(&mut a, &ctx, "/agent third");
+        let third = std::fs::read_to_string(dir.join("prompts")).unwrap();
+        let third: String = serde_json::from_str(third.lines().nth(2).unwrap()).unwrap();
+        assert!(third.contains("<instructions name=\"embedide-agent\">"));
+        assert!(!third.contains("<instructions name=\"c-cpp\">"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

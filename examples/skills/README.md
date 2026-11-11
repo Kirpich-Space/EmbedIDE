@@ -1,28 +1,23 @@
-# Example skills
+# Skills
 
-Skills are reusable instructions for EmbedIDE's agent mode. Each one is a
-directory with a `SKILL.md` file (frontmatter with `name` and `description`,
-then the instructions), the same layout as Agent Skills.
+EmbedIDE's own skills are built into the binary and given to agent tasks automatically when they fit
+the project; their sources are in [`crates/embedide-ai/skills`](../../crates/embedide-ai/skills):
 
-| Skill | For |
+| Skill | Given when |
 |---|---|
-| `c-firmware` | bare-metal / RTOS C |
-| `rust-crate` | Rust crates and workspaces |
-| `zig-build` | Zig with build.zig |
-| `asm-review` | x86-64, AArch64 and RISC-V assembly |
-| `embedded-bringup` | clocks, pins, peripherals, flashing |
+| `embedide-agent` | always (how to work inside EmbedIDE) |
+| `c-cpp` | C/C++ sources |
+| `c-firmware` | C sources in a firmware project |
+| `embedded-bringup` | firmware markers (linker scripts, startup files, cross toolchains, board names) |
+| `rust-crate` | `Cargo.toml` |
+| `zig-build` | `build.zig` |
+| `asm-review` | assembly sources |
 
-Install one for every project (global) or for one project:
+To change one for a project, put a skill with the same name in `.embedide/skills/<name>/SKILL.md`
+(or `~/.config/embedide/skills/` for all projects); it replaces the built-in one. `embed ai skills`
+lists every skill, `embed ai skills <name>` prints one.
 
-```sh
-mkdir -p ~/.config/embedide/skills && cp -r examples/skills/c-firmware ~/.config/embedide/skills/
-mkdir -p .embedide/skills && cp -r examples/skills/c-firmware .embedide/skills/
-```
-
-Then, in the AI panel: `/skills` lists them, `/skill c-firmware` activates one
-for the next agent tasks, `/skill off c-firmware` removes it. From a shell:
-`embed ai skills` and `embed ai agent --skill c-firmware "…"`.
-
-Skill text is guidance only. It is quoted into the agent's task as untrusted
-content and cannot change the policy, permissions or configuration;
-`allowed-tools` in frontmatter is ignored. See `docs/cli/skills.md`.
+Your own skills use the same layout — a directory with `SKILL.md` (frontmatter with `name` and
+`description`, then the instructions) — and are activated with `/skill <name>` in the AI panel or
+`embed ai agent --skill <name>`. They are quoted to the agent as untrusted guidance and cannot change
+the policy or permissions. See [docs/cli/skills.md](../../docs/cli/skills.md).

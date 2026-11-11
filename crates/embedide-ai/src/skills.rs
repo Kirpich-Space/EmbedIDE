@@ -8,6 +8,13 @@
 //! 2. `ai.skills.dirs`, in the configured order
 //! 3. global: `<config dir>/skills/<name>/SKILL.md`
 //!    (`~/.config/embedide/skills` on Linux; `EMBEDIDE_CONFIG_DIR` overrides)
+//! 4. built in: EmbedIDE's own skills ([`BUILTIN`]), compiled into the binary
+//!
+//! With `ai.skills.auto` (default) agent tasks get `embedide-agent` (how to
+//! work inside EmbedIDE) and the skills [`detect`] finds for the project
+//! without `/skill`. Built-in skills are EmbedIDE's own instructions; a
+//! skill with the same name in a directory above replaces one and is then
+//! treated like any user skill.
 //!
 //! Skill text is untrusted: it is quoted into the agent's task as guidance
 //! and never changes EmbedIDE's permission rules, policy or configuration.
@@ -38,7 +45,26 @@ pub enum Scope {
     Extra,
     /// The user's global skills directory.
     Global,
+    /// Compiled into EmbedIDE.
+    Builtin,
 }
+
+/// Skills compiled into EmbedIDE: (name, SKILL.md).
+pub const BUILTIN: [(&str, &str); 7] = [
+    (
+        "embedide-agent",
+        include_str!("../skills/embedide-agent/SKILL.md"),
+    ),
+    ("c-cpp", include_str!("../skills/c-cpp/SKILL.md")),
+    ("c-firmware", include_str!("../skills/c-firmware/SKILL.md")),
+    ("rust-crate", include_str!("../skills/rust-crate/SKILL.md")),
+    ("zig-build", include_str!("../skills/zig-build/SKILL.md")),
+    ("asm-review", include_str!("../skills/asm-review/SKILL.md")),
+    (
+        "embedded-bringup",
+        include_str!("../skills/embedded-bringup/SKILL.md"),
+    ),
+];
 
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -46,6 +72,7 @@ impl fmt::Display for Scope {
             Self::Project => "project",
             Self::Extra => "extra",
             Self::Global => "global",
+            Self::Builtin => "built-in",
         })
     }
 }
@@ -80,6 +107,8 @@ pub struct SkillInfo {
     pub scope: Scope,
     /// Notes about the file (ignored fields, …).
     pub warnings: Vec<String>,
+    /// The SKILL.md text of a built-in skill.
+    pub builtin: Option<&'static str>,
 }
 
 /// A skill directory that could not be used.
@@ -382,6 +411,7 @@ pub fn discover(project: Option<&Path>, cfg: &SkillsConfig) -> Catalog {
                 dir: path,
                 scope,
                 warnings,
+                builtin: None,
             };
             if cat.skills.iter().any(|s| s.name == info.name) {
                 cat.shadowed.push(info);
@@ -390,7 +420,163 @@ pub fn discover(project: Option<&Path>, cfg: &SkillsConfig) -> Catalog {
             }
         }
     }
+    for (name, text) in BUILTIN {
+        let fm = parse(text).expect("built-in skills are valid");
+        let info = SkillInfo {
+            name: name.to_string(),
+            description: fm.description,
+            dir: PathBuf::from(format!("(built-in)/{name}")),
+            scope: Scope::Builtin,
+            warnings: Vec::new(),
+            builtin: Some(text),
+        };
+        if cat.skills.iter().any(|s| s.name == info.name) {
+            cat.shadowed.push(info);
+        } else {
+            cat.skills.push(info);
+        }
+    }
     cat
+}
+
+/// Skills that fit the project at `root`, in a stable order:
+/// `embedide-agent` always, then by what the workspace contains (C/C++
+/// sources, firmware markers, Cargo, Zig, assembly).
+pub fn detect(root: &Path) -> Vec<&'static str> {
+    #[derive(Default)]
+    struct Seen {
+        c: bool,
+        firmware: bool,
+        rust: bool,
+        zig: bool,
+        asm: bool,
+    }
+    let mut seen = Seen::default();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut budget = 3000usize;
+    let skip = [
+        ".git",
+        "target",
+        "node_modules",
+        ".zig-cache",
+        "zig-cache",
+        "zig-out",
+        "build",
+        ".venv",
+        "__pycache__",
+        ".embedide",
+    ];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let name = e.file_name().to_string_lossy().into_owned();
+            let path = e.path();
+            if path.is_dir() {
+                if depth < 3 && !skip.contains(&name.as_str()) && !name.starts_with('.') {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            let lower = name.to_ascii_lowercase();
+            let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+            match ext {
+                "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "ino" => seen.c = true,
+                "asm" | "s" | "nasm" => seen.asm = true,
+                "ld" | "ioc" | "svd" => seen.firmware = true,
+                _ => {}
+            }
+            match lower.as_str() {
+                "cargo.toml" => seen.rust = true,
+                "build.zig" | "build.zig.zon" => seen.zig = true,
+                "platformio.ini" | "sdkconfig" | "memory.x" | "openocd.cfg" => seen.firmware = true,
+                _ if lower.starts_with("startup_") => seen.firmware = true,
+                "embedide.toml" | "makefile" | "cmakelists.txt" | "gnumakefile" => {
+                    use std::io::Read;
+                    let mut head = String::new();
+                    if let Ok(f) = std::fs::File::open(&path) {
+                        let _ = f.take(64 * 1024).read_to_string(&mut head);
+                    }
+                    let head = head.to_ascii_lowercase();
+                    if [
+                        "arm-none-eabi",
+                        "cortex-m",
+                        "board",
+                        "riscv32",
+                        "avr-gcc",
+                        "xtensa",
+                        "-mcpu=",
+                        "stm32",
+                        "nrf5",
+                        "rp2040",
+                        "esp32",
+                    ]
+                    .iter()
+                    .any(|m| head.contains(m))
+                    {
+                        seen.firmware = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = vec!["embedide-agent"];
+    if seen.c {
+        out.push("c-cpp");
+    }
+    if seen.c && seen.firmware {
+        out.push("c-firmware");
+    }
+    if seen.rust {
+        out.push("rust-crate");
+    }
+    if seen.zig {
+        out.push("zig-build");
+    }
+    if seen.asm {
+        out.push("asm-review");
+    }
+    if seen.firmware {
+        out.push("embedded-bringup");
+    }
+    out
+}
+
+/// Skills for one agent task: the automatic ones (unless `ai.skills.auto`
+/// is off, or a name is in `ai.skills.exclude` or `off`), then `active`.
+/// Returns the skills and problems to report (a skill that failed to load).
+pub fn for_task(
+    root: &Path,
+    cfg: &SkillsConfig,
+    active: &[SkillText],
+    off: &[String],
+) -> (Vec<SkillText>, Vec<String>) {
+    let mut out: Vec<SkillText> = Vec::new();
+    let mut problems = Vec::new();
+    if cfg.enabled && cfg.auto {
+        let cat = discover(Some(root), cfg);
+        for name in detect(root) {
+            if cfg.exclude.iter().any(|e| e == name) || off.iter().any(|o| o == name) {
+                continue;
+            }
+            match cat.get(name).and_then(|info| load(info, cfg.max_bytes)) {
+                Ok(t) => out.push(t),
+                Err(e) => problems.push(e),
+            }
+        }
+    }
+    for s in active {
+        if !out.iter().any(|o| o.name == s.name) {
+            out.push(s.clone());
+        }
+    }
+    (out, problems)
 }
 
 impl Catalog {
@@ -427,6 +613,15 @@ impl Catalog {
 
 /// Load a skill's instructions (the body after the frontmatter).
 pub fn load(info: &SkillInfo, max_bytes: usize) -> Result<SkillText, String> {
+    if let Some(text) = info.builtin {
+        let fm = parse(text)?;
+        return Ok(SkillText {
+            name: info.name.clone(),
+            source: format!("built-in skill {}", info.name),
+            body: text[fm.body_start..].trim().to_string(),
+            trusted: true,
+        });
+    }
     let file = info.dir.join(FILE);
     let len = std::fs::metadata(&file)
         .map_err(|e| format!("cannot read {}: {e}", file.display()))?
@@ -454,6 +649,7 @@ pub fn load(info: &SkillInfo, max_bytes: usize) -> Result<SkillText, String> {
             "{body}\n\n(Skill directory: {}. Other files there are only read if needed, under the normal permission rules.)",
             info.dir.display()
         ),
+        trusted: false,
     })
 }
 
@@ -515,34 +711,119 @@ mod tests {
     }
 
     #[test]
-    fn the_example_skills_parse_and_load() {
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skills");
-        let cfg = SkillsConfig {
-            dirs: vec![examples],
-            ..Default::default()
-        };
-        let cat = discover(None, &cfg);
-        let mut names: Vec<&str> = cat
-            .skills
-            .iter()
-            .filter(|s| s.scope == Scope::Extra)
-            .map(|s| s.name.as_str())
-            .collect();
-        names.sort();
+    fn built_in_skills_parse_load_and_are_trusted() {
+        let cat = discover(None, &SkillsConfig::default());
+        for (name, _) in BUILTIN {
+            let info = cat
+                .skills
+                .iter()
+                .chain(&cat.shadowed)
+                .find(|s| s.name == name && s.scope == Scope::Builtin)
+                .unwrap_or_else(|| panic!("{name} missing"));
+            let text = load(info, 64 * 1024).unwrap();
+            assert!(text.trusted, "{name}");
+            assert!(text.body.len() > 500, "{name} is detailed");
+            assert!(
+                !text.body.starts_with("---"),
+                "{name}: frontmatter stripped"
+            );
+        }
+        let agent = load(cat.get("embedide-agent").unwrap(), 64 * 1024).unwrap();
+        assert!(
+            agent.body.contains("Never ask\nthe user to paste code")
+                || agent.body.contains("Use them.")
+        );
+        assert!(agent.body.contains("timeout 10 ./app"));
+    }
+
+    #[test]
+    fn skills_are_chosen_by_what_the_project_contains() {
+        let base = std::env::temp_dir().join(format!("embedide-detect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let host = base.join("host");
+        std::fs::create_dir_all(host.join("src")).unwrap();
+        std::fs::write(host.join("src/main.c"), "int main(void){return 0;}\n").unwrap();
+        std::fs::write(
+            host.join("Makefile"),
+            "app: src/main.c\n\tcc -o app src/main.c\n",
+        )
+        .unwrap();
+        assert_eq!(detect(&host), ["embedide-agent", "c-cpp"]);
+        let fw = base.join("fw");
+        std::fs::create_dir_all(&fw).unwrap();
+        std::fs::write(fw.join("main.c"), "").unwrap();
+        std::fs::write(fw.join("start.s"), "").unwrap();
+        std::fs::write(fw.join("Makefile"), "CC = arm-none-eabi-gcc\n").unwrap();
         assert_eq!(
-            names,
+            detect(&fw),
             [
-                "asm-review",
+                "embedide-agent",
+                "c-cpp",
                 "c-firmware",
-                "embedded-bringup",
-                "rust-crate",
-                "zig-build"
+                "asm-review",
+                "embedded-bringup"
             ]
         );
-        for s in cat.skills.iter().filter(|s| s.scope == Scope::Extra) {
-            assert!(s.warnings.is_empty(), "{}: {:?}", s.name, s.warnings);
-            assert!(load(s, 64 * 1024).unwrap().body.len() > 200, "{}", s.name);
-        }
+        let mixed = base.join("mixed");
+        std::fs::create_dir_all(mixed.join("target/debug")).unwrap();
+        std::fs::write(mixed.join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(mixed.join("build.zig"), "").unwrap();
+        std::fs::write(mixed.join("target/debug/junk.c"), "").unwrap();
+        assert_eq!(
+            detect(&mixed),
+            ["embedide-agent", "rust-crate", "zig-build"]
+        );
+        assert_eq!(detect(&base.join("empty-missing")), ["embedide-agent"]);
+        // for_task: automatic skills, exclusions, a project override, user skills appended
+        let override_dir = host.join(".embedide/skills/c-cpp");
+        std::fs::create_dir_all(&override_dir).unwrap();
+        std::fs::write(
+            override_dir.join(FILE),
+            "---\nname: c-cpp\ndescription: ours\n---\nTeam rules.\n",
+        )
+        .unwrap();
+        let user = SkillText {
+            name: "mine".into(),
+            source: "x".into(),
+            body: "b".into(),
+            trusted: false,
+        };
+        let (skills, problems) = for_task(
+            &host,
+            &SkillsConfig::default(),
+            std::slice::from_ref(&user),
+            &[],
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let names: Vec<(&str, bool)> = skills
+            .iter()
+            .map(|s| (s.name.as_str(), s.trusted))
+            .collect();
+        assert_eq!(
+            names,
+            [("embedide-agent", true), ("c-cpp", false), ("mine", false)]
+        );
+        assert!(
+            skills[1].body.starts_with("Team rules."),
+            "the project's c-cpp replaced the built-in one"
+        );
+        let cfg = SkillsConfig {
+            exclude: vec!["c-cpp".into()],
+            ..Default::default()
+        };
+        let (skills, _) = for_task(&host, &cfg, &[], &["embedide-agent".into()]);
+        assert!(skills.is_empty());
+        let (skills, _) = for_task(
+            &host,
+            &SkillsConfig {
+                auto: false,
+                ..Default::default()
+            },
+            &[user],
+            &[],
+        );
+        assert_eq!(skills.len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -570,7 +851,7 @@ mod tests {
         let names: Vec<(&str, Scope)> = cat
             .skills
             .iter()
-            .filter(|s| s.scope != Scope::Global)
+            .filter(|s| s.scope < Scope::Global)
             .map(|s| (s.name.as_str(), s.scope))
             .collect();
         assert_eq!(names, [("rust", Scope::Project), ("zig", Scope::Extra)]);
