@@ -103,11 +103,10 @@ pub struct Assistant {
     scroll: usize,
 }
 
-const HELP: &str = "Type a message and press Enter. Commands: /providers · \
-/provider <claude-code|codex-cli|anthropic|openai|moonshot|xai> · /status · /file [path…] attach the current or named files · \
-/selection (/sel) · /explain · /edit <instruction> · /diff · /apply · /reject · /complete · /model <id> · \
-/auth <api-key|subscription> · /history · /cancel · /clear · /help. Nothing is sent until Enter. \
-claude-code and codex-cli use your installed, logged-in official CLI (your subscription); they get no file access.";
+const HELP: &str = "Type here (this panel) and press Enter. Start with: /provider claude-code  or  /provider codex-cli \
+(your installed, logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
+Then: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
+/apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers · /help. Nothing is sent until Enter.";
 
 impl Assistant {
     /// Panel state from the user configuration (no network).
@@ -270,6 +269,12 @@ impl Assistant {
             .split_once(' ')
             .map(|(c, a)| (c, a.trim()))
             .unwrap_or((line.as_str(), ""));
+        // `/provider <codex-cli>` as copied from a usage line: drop the brackets.
+        let arg = arg
+            .strip_prefix('<')
+            .and_then(|a| a.strip_suffix('>'))
+            .unwrap_or(arg)
+            .trim();
         match cmd {
             "/help" => self.note(Kind::Info, HELP),
             "/status" => {
@@ -1031,4 +1036,34 @@ fn wrap(text: &str, width: usize, out: &mut Vec<String>) {
         w += cw;
     }
     out.push(line);
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use embedide_workspace::config::ProviderConfig;
+
+    #[test]
+    fn provider_names_copied_with_angle_brackets_still_work() {
+        let mut cfg = AiConfig::default();
+        // A CLI path that does not exist: the status check fails fast, no CLI runs.
+        cfg.providers.insert(
+            "codex-cli".into(),
+            ProviderConfig {
+                cli: Some("/nonexistent/codex".into()),
+                ..Default::default()
+            },
+        );
+        let mut a = Assistant::new(cfg);
+        a.input = "/provider <codex-cli>".into();
+        a.submit(&EditorContext::default());
+        assert!(a.status().starts_with("codex-cli"), "{}", a.status());
+        a.input = "/provider <anthropic>".into();
+        a.submit(&EditorContext::default());
+        assert!(a.status().starts_with("anthropic"), "{}", a.status());
+        assert!(
+            HELP.contains("/provider codex-cli"),
+            "the help shows a command that can be typed as is"
+        );
+    }
 }

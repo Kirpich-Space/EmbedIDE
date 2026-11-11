@@ -2332,6 +2332,42 @@ impl Workspace {
         }
         Ok(())
     }
+    /// `/provider codex-cli` typed in the editor is a Vim search, not an AI
+    /// command: say where AI commands go instead of only "not found".
+    fn hint_ai_command_typed_in_editor(&mut self) {
+        let key = self.panel_key('2');
+        let message = &self.documents[self.active].session.message;
+        let Some(pattern) = message
+            .strip_prefix("Error: literal search not found: ")
+            .map(str::to_string)
+        else {
+            return;
+        };
+        const AI: [&str; 16] = [
+            "provider",
+            "providers",
+            "status",
+            "file",
+            "sel",
+            "selection",
+            "explain",
+            "edit",
+            "diff",
+            "apply",
+            "reject",
+            "history",
+            "cancel",
+            "clear",
+            "model",
+            "auth",
+        ];
+        if AI.contains(&pattern.split_whitespace().next().unwrap_or("")) {
+            self.documents[self.active].session.message = format!(
+                "\"/{pattern}\" was a text search here. AI commands go in the AI panel: press {key}, then type /{pattern}"
+            );
+            self.notification = format!("AI panel: {key}; then type /{pattern} and Enter");
+        }
+    }
     /// Keys a visible completion popup takes: Down/Ctrl+N and Up/Ctrl+P
     /// select, Tab/Enter accept the selected item. Esc closes the popup and,
     /// as in Vim, still leaves Insert mode (so `Esc :w` always saves).
@@ -2806,6 +2842,7 @@ impl Workspace {
                         }
                         self.after_editor_input();
                         self.after_completion_key(key)?;
+                        self.hint_ai_command_typed_in_editor();
                         if let Some(action) = self.documents[self.active].take_ide_action() {
                             self.command(match action {
                                 IdeAction::ProjectExplorer => "explorer",
@@ -4806,6 +4843,34 @@ mod tests {
         ws.open_file(Path::new("blob.bin")).unwrap();
         type_keys(&mut ws, "i00");
         assert!(!ws.binary.as_ref().unwrap().file.is_modified());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ai_command_typed_in_the_editor_explains_where_it_belongs() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-aihint-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.open_file(Path::new("main.c")).unwrap();
+        type_keys(&mut ws, "/provider <codex-cli>\r");
+        let message = &ws.documents[ws.active].session.message;
+        assert!(
+            message.contains("AI panel") && message.contains("/provider <codex-cli>"),
+            "{message}"
+        );
+        assert!(
+            ws.notification().contains("AI panel"),
+            "{}",
+            ws.notification()
+        );
+        // An ordinary failed search keeps the ordinary message.
+        type_keys(&mut ws, "\x1b/nosuchword\r");
+        assert!(ws.documents[ws.active]
+            .session
+            .message
+            .contains("not found: nosuchword"));
         let _ = fs::remove_dir_all(&dir);
     }
 
