@@ -2,6 +2,7 @@
 pub mod assistant;
 mod guard;
 pub mod layout;
+pub mod popup;
 pub mod screen;
 pub mod term;
 pub mod workspace;
@@ -129,6 +130,7 @@ fn translate(event: KeyEvent) -> Option<Key> {
         KeyCode::Esc => Key::Escape,
         KeyCode::Enter => Key::Enter,
         KeyCode::Tab => Key::Tab,
+        KeyCode::BackTab => Key::BackTab,
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Delete => Key::Delete,
         KeyCode::Left => Key::Left,

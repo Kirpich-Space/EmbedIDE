@@ -11,9 +11,11 @@
 use std::{collections::VecDeque, fmt, io, ops::Range};
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
+pub mod completion;
 mod document;
 mod executor;
 pub mod file;
+pub mod indent;
 mod motion;
 mod search;
 mod session;

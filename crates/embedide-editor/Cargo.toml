@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 unicode-segmentation = "1.12"
+unicode-width = "0.2"
 
 [lints]
 workspace = true

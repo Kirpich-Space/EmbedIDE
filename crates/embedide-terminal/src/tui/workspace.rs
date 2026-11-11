@@ -1,4 +1,5 @@
 //! Project workspace adapter. Services and document mutations remain outside widgets.
+use super::popup::{self, Popup};
 use super::{
     assistant::{Assistant, EditorContext},
     guard,
@@ -15,6 +16,7 @@ use crossterm::{
     },
     terminal,
 };
+use embedide_core::lsp;
 use embedide_core::{
     self as core,
     config::NativeConfig,
@@ -25,6 +27,8 @@ use embedide_core::{
     process::{ProcessEvent, ProcessTask},
     BuildPlan, BuildSystem, ProcessSpec,
 };
+use embedide_editor::completion::{self, Candidate};
+use embedide_editor::indent::IndentStyle;
 use embedide_editor::{
     vim::{IdeAction, Keymap, Mode, SelectionKind},
     Editor,
@@ -62,6 +66,11 @@ const COMMANDS: &[(&str, &str)] = &[
         "AI: Suggest Completion at Cursor (Tab accepts, Esc rejects)",
     ),
     ("explain", "AI: Explain Current File or Selection"),
+    (
+        "suggest",
+        "Suggest Completions at the Cursor (Ctrl+Space, Insert mode)",
+    ),
+    ("lsp_restart", "Restart Language Servers (completion)"),
     ("build", "Build Project"),
     ("check", "Check Project (Cargo)"),
     ("clean", "Clean Project"),
@@ -117,6 +126,23 @@ const COMMANDS: &[(&str, &str)] = &[
     ("close", "Close Document"),
     ("quit", "Quit Workspace"),
 ];
+/// A language server process, or why it is not available this session.
+enum LspSlot {
+    Running(lsp::Client),
+    Failed,
+}
+
+/// Language-server language id of a document (`rust`, `c`, `cpp`, `zig`).
+fn lsp_language(path: Option<&Path>) -> Option<&'static str> {
+    match language_of(path) {
+        "rust" => Some("rust"),
+        "c" => Some("c"),
+        "cpp" => Some("cpp"),
+        "zig" => Some("zig"),
+        _ => None,
+    }
+}
+
 /// Screen rectangle of a panel in the last frame, for mouse hit tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Area {
@@ -344,6 +370,10 @@ pub struct Workspace {
     held_panel: Option<String>,
     /// Mouse capture requested (config `mouse` or `:mouse`).
     pub mouse: bool,
+    /// Open completion popup.
+    popup: Option<Popup>,
+    /// Language servers by command line (clangd serves C and C++).
+    lsp: BTreeMap<String, LspSlot>,
     hits: Hits,
     user: UserConfig,
     manifest: Option<Manifest>,
@@ -444,6 +474,8 @@ impl Workspace {
             keyboard_enhanced: false,
             held_panel: None,
             mouse,
+            popup: None,
+            lsp: BTreeMap::new(),
             hits: Hits::default(),
             user,
             manifest,
@@ -463,6 +495,7 @@ impl Workspace {
         let mut keymap = Keymap::default();
         keymap.set_host_commands(true);
         editor.set_keymap(keymap);
+        editor.set_indent(indent_style(&self.config, editor.state()));
         let mut doc = TuiEditor::new(editor, self.size.0, self.size.1);
         doc.viewport.set_tab_width(self.config.tab_width);
         doc
@@ -1035,6 +1068,14 @@ impl Workspace {
         })
     }
     fn close_document(&mut self) {
+        self.popup = None;
+        if let Some(path) = self.editor().state().path().map(Path::to_path_buf) {
+            for slot in self.lsp.values_mut() {
+                if let LspSlot::Running(client) = slot {
+                    client.close(&path);
+                }
+            }
+        }
         if self.documents.len() == 1 {
             self.closed = true;
         } else {
@@ -1136,6 +1177,15 @@ impl Workspace {
                 }
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
+            "suggest" => self.suggest(true, None)?,
+            "lsp_restart" => {
+                self.lsp.clear();
+                if let Some(popup) = &mut self.popup {
+                    popup.request = None;
+                }
+                self.notification =
+                    "Language servers stopped; they start again on the next completion".into();
+            }
             "mouse" => {
                 self.mouse = !self.mouse;
                 self.notification = if self.mouse {
@@ -1918,10 +1968,11 @@ impl Workspace {
         } else if key.modifiers.contains(KeyModifiers::CONTROL) {
             // Ctrl+Alt+<letter> stays Ctrl+<letter>: a legacy terminal turns Esc
             // followed quickly by Ctrl+S (one read, e.g. over SSH) into ESC ^S.
-            if let KeyCode::Char(ch) = key.code {
-                format!("ctrl+{}", ch.to_ascii_lowercase())
-            } else {
-                return None;
+            match key.code {
+                // Terminals send NUL for Ctrl+Space (kitty: CSI 32;5u).
+                KeyCode::Char(' ') => "ctrl+space".into(),
+                KeyCode::Char(ch) => format!("ctrl+{}", ch.to_ascii_lowercase()),
+                _ => return None,
             }
         } else if key.modifiers == KeyModifiers::ALT {
             if let KeyCode::Char(ch) = key.code {
@@ -1964,6 +2015,7 @@ impl Workspace {
                 "ctrl+alt+2" => "focus_assistant",
                 "ctrl+alt+3" => "focus_terminal",
                 "ctrl+p" => "find",
+                "ctrl+space" => "suggest",
                 "ctrl+k" => "palette",
                 "ctrl+s" => "save",
                 "ctrl+w" => "close",
@@ -2065,6 +2117,294 @@ impl Workspace {
         }
         Ok(())
     }
+    /// Keys a visible completion popup takes: Down/Ctrl+N and Up/Ctrl+P
+    /// select, Tab/Enter accept the selected item. Esc closes the popup and,
+    /// as in Vim, still leaves Insert mode (so `Esc :w` always saves).
+    /// Every other key (and Tab/Enter with nothing selected) goes on.
+    fn popup_key(&mut self, key: KeyEvent) -> Option<Result<(), FrontendError>> {
+        if key.code == KeyCode::Esc {
+            self.popup = None;
+            return None;
+        }
+        let popup = self.popup.as_mut().filter(|p| !p.is_empty())?;
+        let ctrl = key.modifiers == KeyModifiers::CONTROL;
+        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+        match key.code {
+            KeyCode::Down if plain => popup.next(),
+            KeyCode::Char('n') if ctrl => popup.next(),
+            KeyCode::Up if plain => popup.previous(),
+            KeyCode::Char('p') if ctrl => popup.previous(),
+            KeyCode::Tab | KeyCode::Enter
+                if key.modifiers.is_empty() && popup.selected.is_some() =>
+            {
+                return Some(self.accept_completion())
+            }
+            _ => return None,
+        }
+        Some(Ok(()))
+    }
+    /// Replace the typed word (or the range the language server named)
+    /// with the selected candidate; part of the current Insert undo step.
+    fn accept_completion(&mut self) -> Result<(), FrontendError> {
+        let Some(popup) = self.popup.take() else {
+            return Ok(());
+        };
+        let Some(candidate) = popup.chosen().cloned() else {
+            return Ok(());
+        };
+        let editor = &mut self.documents[popup.doc].session.editor;
+        let state = editor.state();
+        let cursor = state.cursor();
+        let line = state
+            .line_range(state.position()?.line)
+            .unwrap_or(cursor..cursor);
+        let range = candidate
+            .range
+            .filter(|r| line.start <= r.start && r.start <= cursor && r.end <= line.end)
+            .map_or(popup.start..cursor, |r| r.start..r.end.max(cursor));
+        editor.replace(range, &candidate.insert)?;
+        self.after_editor_input();
+        Ok(())
+    }
+    /// After an Insert-mode key: identifier characters open or update the
+    /// popup (from `completion.min_chars` characters), the server's trigger
+    /// characters (`.`, `::`, `->`) ask it for members, other keys close it.
+    fn after_completion_key(&mut self, key: KeyEvent) -> Result<(), FrontendError> {
+        if self.editor().input().mode() != Mode::Insert {
+            self.popup = None;
+            return Ok(());
+        }
+        let auto = self.config.completion.auto;
+        let typed = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char(ch) if typed && completion::is_word_char(ch) => {
+                if auto || self.popup.is_some() {
+                    self.suggest(false, None)?;
+                }
+            }
+            KeyCode::Char(ch) if typed && auto && self.is_trigger(ch) => {
+                self.popup = None;
+                self.suggest(false, Some(ch))?;
+            }
+            KeyCode::Backspace if self.popup.is_some() => self.suggest(false, None)?,
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End | KeyCode::Char(_) => {
+                self.popup = None
+            }
+            _ => self.validate_popup(),
+        }
+        Ok(())
+    }
+    /// Whether `ch` asks the document's language server for members.
+    fn is_trigger(&self, ch: char) -> bool {
+        let state = self.editor().state();
+        let Some(language) = lsp_language(state.path()) else {
+            return false;
+        };
+        let Some(server) = lsp::server_for(language, &self.config.completion) else {
+            return false;
+        };
+        match self.lsp.get(&server_key(&server)) {
+            Some(LspSlot::Running(client)) if client.is_ready() => {
+                client.trigger_characters().iter().any(|t| t.ends_with(ch))
+            }
+            Some(_) => false,
+            None => matches!(ch, '.' | ':' | '>'),
+        }
+    }
+    /// Close the popup when its document, focus, mode or word changed.
+    fn validate_popup(&mut self) {
+        let Some(popup) = &self.popup else { return };
+        let doc = &self.documents[self.active];
+        let valid = popup.doc == self.active
+            && self.focus == Focus::Editor
+            && self.dialog.is_none()
+            && doc.editor().input().mode() == Mode::Insert
+            && completion::word_before_cursor(doc.editor().state())
+                .is_ok_and(|w| w.start == popup.start);
+        if !valid {
+            self.popup = None;
+        }
+    }
+    /// Open or update completion at the cursor. `manual` (Ctrl+Space) also
+    /// works below `min_chars` and preselects the first item; `trigger` is
+    /// a member-access character just typed.
+    fn suggest(&mut self, manual: bool, trigger: Option<char>) -> Result<(), FrontendError> {
+        let doc = self.active;
+        let editor = self.documents[doc].editor();
+        if editor.input().mode() != Mode::Insert {
+            self.popup = None;
+            if manual {
+                self.notification = "Completion works in Insert mode (press i first)".into();
+            }
+            return Ok(());
+        }
+        let state = editor.state();
+        let word = completion::word_before_cursor(state)?;
+        let query = state.buffer().slice(word.clone())?;
+        let same = self
+            .popup
+            .as_ref()
+            .is_some_and(|p| p.doc == doc && p.start == word.start);
+        let enough = query.chars().count() >= self.config.completion.min_chars;
+        if !manual && trigger.is_none() && !enough && !same {
+            self.popup = None;
+            return Ok(());
+        }
+        let mut ask = manual;
+        if same {
+            let popup = self.popup.as_mut().expect("open popup");
+            popup.refilter(&query);
+            if manual && popup.selected.is_none() && !popup.is_empty() {
+                popup.selected = Some(0);
+            }
+            ask |= popup.semantic && popup.incomplete && popup.request.is_none();
+        } else {
+            // Member completion has no word yet: only the server can answer.
+            let words = if trigger.is_some() {
+                Vec::new()
+            } else {
+                completion::document_words(state)
+                    .iter()
+                    .map(|w| Candidate::word(w))
+                    .collect()
+            };
+            self.popup = Some(Popup::new(doc, word.start, words, "words", &query, manual));
+            ask = true;
+        }
+        if ask {
+            self.request_completion(trigger);
+        }
+        let popup = self.popup.as_ref().expect("open popup");
+        if popup.is_empty() && popup.request.is_none() && !self.server_starting(popup) {
+            self.popup = None;
+            if manual {
+                self.notification = "No suggestions".into();
+            }
+        }
+        Ok(())
+    }
+    /// The popup's language server is still initializing (it is asked as
+    /// soon as it is ready).
+    fn server_starting(&self, popup: &Popup) -> bool {
+        popup.server.as_ref().is_some_and(|key| {
+            matches!(self.lsp.get(key), Some(LspSlot::Running(c)) if !c.is_ready() && !c.is_stopped())
+        })
+    }
+    /// Ask the document's language server (starting it on first use).
+    fn request_completion(&mut self, trigger: Option<char>) {
+        let Some(popup) = self.popup.as_mut() else {
+            return;
+        };
+        let state = self.documents[popup.doc].session.editor.state();
+        let (Some(path), Some(language)) = (state.path(), lsp_language(state.path())) else {
+            return;
+        };
+        let Some(server) = lsp::server_for(language, &self.config.completion) else {
+            return;
+        };
+        let key = server_key(&server);
+        if !self.lsp.contains_key(&key) {
+            match lsp::Client::start(language, &server, &self.root) {
+                Ok(client) => {
+                    self.notification = format!(
+                        "Starting {} for {language} completion; words from this file until it is ready",
+                        client.name()
+                    );
+                    self.lsp.insert(key.clone(), LspSlot::Running(client));
+                }
+                Err(e) => {
+                    self.notification = format!("{e}; completion uses words from this file");
+                    self.lsp.insert(key.clone(), LspSlot::Failed);
+                    return;
+                }
+            }
+        }
+        popup.server = Some(key.clone());
+        if let Some(LspSlot::Running(client)) = self.lsp.get_mut(&key) {
+            popup.request = client.complete(path, language, state, trigger);
+        }
+    }
+    /// Language-server events: readiness, answers, crashes. Never blocks.
+    fn poll_lsp(&mut self) -> bool {
+        let mut events = Vec::new();
+        for (key, slot) in &mut self.lsp {
+            if let LspSlot::Running(client) = slot {
+                for event in client.poll() {
+                    events.push((key.clone(), client.name().to_string(), client.utf8(), event));
+                }
+            }
+        }
+        let mut changed = false;
+        for (key, name, utf8, event) in events {
+            let ours = self
+                .popup
+                .as_ref()
+                .is_some_and(|p| p.server.as_deref() == Some(&key));
+            match event {
+                lsp::Event::Ready => {
+                    if ours && self.popup.as_ref().is_some_and(|p| p.request.is_none()) {
+                        self.request_completion(None);
+                        changed = true;
+                    }
+                }
+                lsp::Event::Completion {
+                    request,
+                    items,
+                    incomplete,
+                } => {
+                    let Some(popup) = self.popup.as_mut() else {
+                        continue;
+                    };
+                    if !ours || popup.request != Some(request) {
+                        continue; // superseded or for a closed popup
+                    }
+                    popup.request = None;
+                    let state = self.documents[popup.doc].session.editor.state();
+                    let candidates: Vec<Candidate> = items
+                        .into_iter()
+                        .map(|item| Candidate {
+                            range: item.range.and_then(|((sl, sc), (el, ec))| {
+                                Some(
+                                    lsp::offset(state, sl, sc, utf8)?
+                                        ..lsp::offset(state, el, ec, utf8)?,
+                                )
+                            }),
+                            label: item.label,
+                            insert: item.insert,
+                            kind: item.kind,
+                            detail: item.detail,
+                            filter: item.filter,
+                            sort: item.sort,
+                        })
+                        .collect();
+                    if !candidates.is_empty() {
+                        popup.replace(candidates, &name, true);
+                        popup.incomplete = incomplete;
+                    }
+                    if popup.is_empty() {
+                        self.popup = None;
+                    }
+                    changed = true;
+                }
+                lsp::Event::Stopped(reason) => {
+                    self.notification = format!(
+                        "{reason}; completion uses words from this file (:lsp_restart retries)"
+                    );
+                    self.lsp.insert(key.clone(), LspSlot::Failed);
+                    if let Some(popup) = self.popup.as_mut().filter(|_| ours) {
+                        popup.request = None;
+                        if popup.is_empty() {
+                            self.popup = None;
+                        }
+                    }
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
     /// How the focus chord for panel `digit` is typed in this terminal.
     fn panel_key(&self, digit: char) -> String {
         if self.keyboard_enhanced {
@@ -2093,6 +2433,11 @@ impl Workspace {
                 }
                 if self.dialog.is_some() {
                     return self.handle_dialog(key);
+                }
+                if self.focus == Focus::Editor && self.popup.is_some() {
+                    if let Some(result) = self.popup_key(key) {
+                        return result;
+                    }
                 }
                 let shortcut = self.shortcut(key);
                 if self.focus == Focus::Terminal
@@ -2236,6 +2581,7 @@ impl Workspace {
                             self.host_command(&command)?;
                         }
                         self.after_editor_input();
+                        self.after_completion_key(key)?;
                         if let Some(action) = self.documents[self.active].take_ide_action() {
                             self.command(match action {
                                 IdeAction::ProjectExplorer => "explorer",
@@ -2316,6 +2662,7 @@ impl Workspace {
                 return self.mouse_event(mouse)
             }
             Event::Paste(text) => {
+                self.popup = None;
                 if let Some(Dialog::Input { text: input, .. }) = &mut self.dialog {
                     for ch in text.chars().filter(|c| !c.is_control()) {
                         if input.len() >= 4096 {
@@ -2411,6 +2758,7 @@ impl Workspace {
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
+        changed |= self.poll_lsp();
         if let Some(t) = &mut self.terminal {
             changed |= t.poll();
         }
@@ -2927,6 +3275,7 @@ impl Workspace {
         let width = usize::from(self.size.0.min(1024)).saturating_sub(1);
         let height = usize::from(self.size.1.min(256));
         self.hits = Hits::default();
+        self.validate_popup();
         if height < 6 || width < 12 {
             self.documents[self.active].size = self.size;
             let mut frame = self.documents[self.active].frame()?;
@@ -3093,6 +3442,9 @@ impl Workspace {
             }
         }
         rows.resize_with(2 + editor_height, Row::default);
+        if let (Some(popup), Some(area), Some((x, y))) = (&self.popup, self.hits.editor, cursor) {
+            draw_popup(popup, area, (x, y), &mut rows);
+        }
         if panel_height > 0 && self.panel == Panel::Terminal {
             let (term_rows, term_cursor) = self.draw_terminal(width, panel_height);
             if let Some((x, y)) = term_cursor {
@@ -3259,12 +3611,71 @@ pub fn run_with(
         }
     }
     // Drop service owners while the terminal guard is still active.
+    app.lsp.clear();
     app.operation = None;
     app.serial = None;
     app.debug = None;
     app.terminal = None;
     app.assistant.cancel();
     Ok(())
+}
+
+/// Draw the popup under the cursor (above it when there is more room),
+/// starting at the column where the completed word begins and kept inside
+/// the editor area. The cursor row itself is never covered.
+fn draw_popup(popup: &Popup, area: Area, cursor: (u16, u16), rows: &mut [Row]) {
+    let (x, y) = (usize::from(cursor.0), usize::from(cursor.1));
+    let (top, bottom) = (usize::from(area.y), usize::from(area.y + area.height));
+    let (left, width) = (usize::from(area.x), usize::from(area.width));
+    let below = bottom.saturating_sub(y + 1);
+    let above = y.saturating_sub(top);
+    let wanted = popup.shown.len().min(popup::VISIBLE) + 1;
+    let room = if below >= wanted || below >= above {
+        below
+    } else {
+        above
+    };
+    let (lines, w) = popup.rows(room, width);
+    if lines.is_empty() {
+        return;
+    }
+    let word = UnicodeWidthStr::width(popup.query());
+    let column = x.saturating_sub(word).max(left).min(left + width - w);
+    let first = if room == below {
+        y + 1
+    } else {
+        y - lines.len()
+    };
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(row) = rows.get_mut(first + i) {
+            *row = popup::overlay(row, column, line, w);
+        }
+    }
+}
+
+/// Identity of a server process: its command line.
+fn server_key(server: &embedide_core::config::LspServerConfig) -> String {
+    std::iter::once(server.command.as_str())
+        .chain(server.args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Indentation for a document: the configured width and auto setting; with
+/// style `detect` the file's own tabs-or-spaces convention wins.
+fn indent_style(config: &NativeConfig, state: &embedide_editor::EditorState) -> IndentStyle {
+    let indent = &config.indent;
+    let style = IndentStyle::new(indent.width, indent.style == "tabs", indent.auto);
+    if indent.style != "detect" {
+        return style;
+    }
+    let buffer = state.buffer();
+    let mut end = buffer.byte_len().min(64 * 1024);
+    while end > 0 && buffer.char_at(end).is_err() {
+        end -= 1;
+    }
+    let sample = buffer.slice(0..end).unwrap_or_default();
+    style.detect(state.path(), &sample)
 }
 
 /// Key bindings whose command id does not exist (a typo would otherwise
@@ -3438,6 +3849,14 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "        Command (:w :q :q! :wq, :<line> go to line, :w <file> / :saveas <file> save as a NEW file (never overwrites),",
         "        plus :build :clean :cancel :e <file> :help :settings :complete :ai <question>). Search: / ? n N",
         "        Leader (Space): e explorer | b build | d debug | t terminal | s serial | f find file",
+        "INDENT  Enter keeps the indentation and adds a level after { [ ( (Rust, C, C++, Zig, JS/TS, JSON), : (Python),",
+        "        then/do/else/{ (shell), a label (assembly); a typed } ] ) on a blank line aligns with its opener",
+        "        Insert: Tab indents (in the leading blanks) or inserts spaces/tab to the next stop; Shift+Tab dedents",
+        "        Normal/Visual: Tab / Shift+Tab shift the line(s). Paste is never re-indented",
+        "COMPLETE While typing (2+ letters) a popup lists words or language-server items; nothing is selected:",
+        "        Down/Ctrl+N, Up/Ctrl+P select, then Tab or Enter accept. Without a selection Tab and Enter work as usual",
+        "        Ctrl+Space asks explicitly and selects the first item; Esc closes it and leaves Insert mode",
+        "        Servers: rust-analyzer (Rust), clangd (C/C++), zls (Zig) when installed; otherwise words of this file",
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
         "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
@@ -3722,6 +4141,244 @@ mod tests {
             "{}",
             ws.notification()
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn completion_workspace(
+        name: &str,
+        files: &[(&str, &str)],
+        native: &str,
+    ) -> (Workspace, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("embed-ws-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (file, text) in files {
+            fs::write(dir.join(file), text).unwrap();
+        }
+        fs::write(
+            dir.join("embedide.json"),
+            format!(r#"{{"native": {native}}}"#),
+        )
+        .unwrap();
+        let ws = Workspace::open(&dir, 120, 40).unwrap();
+        (ws, dir)
+    }
+
+    fn key(ws: &mut Workspace, code: KeyCode, modifiers: KeyModifiers) {
+        ws.handle(Event::Key(KeyEvent::new(code, modifiers)));
+    }
+
+    fn buffer(ws: &Workspace) -> String {
+        ws.editor().state().buffer().contents()
+    }
+
+    fn shown(ws: &Workspace) -> Vec<String> {
+        ws.popup
+            .as_ref()
+            .map(|p| p.shown.iter().map(|&i| p.items[i].label.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn word_completion_opens_while_typing_and_enter_tab_need_a_selection() {
+        let (mut ws, dir) = completion_workspace(
+            "words",
+            &[("notes.txt", "compute counter cobalt")],
+            r#"{"completion": {"lsp": false}}"#,
+        );
+        ws.open_file(Path::new("notes.txt")).unwrap();
+        type_keys(&mut ws, "Go");
+        type_keys(&mut ws, "c");
+        assert!(ws.popup.is_none(), "below min_chars");
+        type_keys(&mut ws, "o");
+        assert_eq!(shown(&ws), ["cobalt", "compute", "counter"]);
+        assert_eq!(ws.popup.as_ref().unwrap().selected, None);
+        ws.frame().unwrap();
+        // Enter without a selection is a newline; the popup closes.
+        key(&mut ws, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(ws.popup.is_none());
+        assert_eq!(buffer(&ws), "compute counter cobalt\nco\n");
+        // Typing narrows; Down selects; Tab accepts and replaces the typed prefix.
+        type_keys(&mut ws, "cou");
+        // Prefix matches first, then in-order matches (c-o-…-u in "compute").
+        assert_eq!(shown(&ws), ["counter", "compute"]);
+        key(&mut ws, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ws, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(buffer(&ws), "compute counter cobalt\nco\ncounter");
+        assert!(ws.popup.is_none());
+        // Ctrl+N / Ctrl+P navigate (Ctrl+P does not open the file finder), Enter accepts.
+        type_keys(&mut ws, " co");
+        key(&mut ws, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        key(&mut ws, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        key(&mut ws, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(ws.dialog.is_none());
+        key(&mut ws, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(buffer(&ws), "compute counter cobalt\nco\ncounter cobalt");
+        // Esc closes the popup and leaves Insert mode, so `Esc :w` saves.
+        type_keys(&mut ws, " co");
+        assert!(ws.popup.is_some());
+        key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(ws.popup.is_none());
+        assert_eq!(ws.editor().input().mode(), Mode::Normal);
+        type_keys(&mut ws, ":w\r");
+        assert_eq!(
+            fs::read_to_string(dir.join("notes.txt")).unwrap(),
+            "compute counter cobalt\nco\ncounter cobalt co"
+        );
+        // The whole Insert session (from `o`), completions included, is one undo step.
+        type_keys(&mut ws, "u");
+        assert_eq!(buffer(&ws), "compute counter cobalt");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manual_completion_unicode_words_tab_indent_and_normal_mode() {
+        let (mut ws, dir) = completion_workspace(
+            "manual",
+            &[("u.txt", "数据量 значение zeta")],
+            r#"{"completion": {"lsp": false, "auto": false}}"#,
+        );
+        ws.open_file(Path::new("u.txt")).unwrap();
+        // Normal mode: letters are commands, no popup.
+        type_keys(&mut ws, "jj");
+        assert!(ws.popup.is_none());
+        type_keys(&mut ws, "Go");
+        // auto=false: typing does not open it; Ctrl+Space does, with the first item selected.
+        type_keys(&mut ws, "зн");
+        assert!(ws.popup.is_none());
+        key(&mut ws, KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert_eq!(shown(&ws), ["значение"]);
+        assert_eq!(ws.popup.as_ref().unwrap().selected, Some(0));
+        key(&mut ws, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(buffer(&ws), "数据量 значение zeta\nзначение");
+        // Wide characters: the popup is drawn at the word start, inside the editor.
+        type_keys(&mut ws, " 数");
+        key(&mut ws, KeyCode::Char(' '), KeyModifiers::CONTROL);
+        let frame = ws.frame().unwrap();
+        let (cx, cy) = frame.cursor.unwrap();
+        let below = frame.rows[usize::from(cy) + 1]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<String>();
+        assert!(below.contains(">数据量"), "{below}");
+        let prefix: String = below.chars().take_while(|&c| c != '>').collect();
+        assert_eq!(
+            UnicodeWidthStr::width(prefix.as_str()),
+            usize::from(cx) - 2,
+            "popup starts at the word (数 is 2 cells)"
+        );
+        key(&mut ws, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(buffer(&ws), "数据量 значение zeta\nзначение 数据量");
+        // No popup: Tab is indentation again (after text: spaces to the next stop).
+        key(&mut ws, KeyCode::Tab, KeyModifiers::NONE);
+        // "значение 数据量" is 15 cells: one space reaches column 16.
+        assert_eq!(buffer(&ws), "数据量 значение zeta\nзначение 数据量 ");
+        // Ctrl+Space in Normal mode explains instead of changing anything.
+        key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
+        key(&mut ws, KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert!(
+            ws.notification().contains("Insert mode"),
+            "{}",
+            ws.notification()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn mock_lsp(mode: &str, log: &Path) -> String {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../embedide-core/tests/fixtures/mock_lsp.py");
+        serde_json::json!({ "completion": { "servers": { "rust": {
+            "command": "python3",
+            "args": [script, mode, log]
+        }}}})
+        .to_string()
+    }
+
+    fn tick_until(ws: &mut Workspace, mut done: impl FnMut(&Workspace) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(ws) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out; {}",
+                ws.notification()
+            );
+            ws.tick();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn language_server_items_replace_their_range_and_a_crash_falls_back_to_words() {
+        let log =
+            std::env::temp_dir().join(format!("embed-ws-lsp-log-{}.jsonl", std::process::id()));
+        let _ = fs::remove_file(&log);
+        let (mut ws, dir) = completion_workspace(
+            "lsp",
+            &[("m.rs", "fn main() {\n    let primary = 1;\n}\n")],
+            &mock_lsp("normal", &log),
+        );
+        ws.open_file(Path::new("m.rs")).unwrap();
+        type_keys(&mut ws, "jo");
+        type_keys(&mut ws, "pr");
+        // Words first (primary), then the server's items when it is ready.
+        assert!(
+            ws.notification().contains("Starting python3"),
+            "{}",
+            ws.notification()
+        );
+        tick_until(&mut ws, |ws| ws.popup.as_ref().is_some_and(|p| p.semantic));
+        assert_eq!(shown(&ws), ["println!", "print_ж"]);
+        assert_eq!(ws.popup.as_ref().unwrap().source, "python3");
+        // Typing more re-filters the server's list without a new popup.
+        type_keys(&mut ws, "i");
+        tick_until(&mut ws, |ws| {
+            ws.popup.as_ref().is_some_and(|p| p.request.is_none())
+        });
+        key(&mut ws, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ws, KeyCode::Enter, KeyModifiers::NONE);
+        // The server's range covered "pr"; the typed "i" after it is replaced too.
+        assert_eq!(
+            buffer(&ws),
+            "fn main() {\n    let primary = 1;\n    println!()\n}\n"
+        );
+        // Closing the document tells the server.
+        ws.command("close").unwrap();
+        ws.dialog = None;
+        ws.documents[ws.active].session.editor.save().unwrap();
+        ws.close_document();
+        drop(ws);
+        let methods: Vec<String> = fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter_map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).ok()?["method"]
+                    .as_str()
+                    .map(String::from)
+            })
+            .collect();
+        assert!(
+            methods.iter().any(|m| m == "textDocument/didClose"),
+            "{methods:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        // A crashing server: a clear message, and word completion keeps working.
+        let (mut ws, dir) = completion_workspace(
+            "lsp-crash",
+            &[("m.rs", "fn main() {\n    let primary = 1;\n}\n")],
+            &mock_lsp("crash", &log),
+        );
+        ws.open_file(Path::new("m.rs")).unwrap();
+        type_keys(&mut ws, "jo");
+        type_keys(&mut ws, "pr");
+        tick_until(&mut ws, |ws| {
+            ws.notification().contains("completion uses words")
+        });
+        key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
+        type_keys(&mut ws, "a pri");
+        assert_eq!(shown(&ws), ["primary"]);
+        assert!(!ws.popup.as_ref().unwrap().semantic);
+        let _ = fs::remove_file(&log);
         let _ = fs::remove_dir_all(&dir);
     }
 

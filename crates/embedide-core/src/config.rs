@@ -76,6 +76,62 @@ impl Default for SerialConfig {
         }
     }
 }
+/// Automatic indentation in the editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IndentConfig {
+    /// Language-aware indentation on Enter and for typed closing delimiters.
+    pub auto: bool,
+    /// Columns per indentation level, 1..=16.
+    pub width: usize,
+    /// detect (follow each file, Makefiles use tabs), spaces or tabs.
+    pub style: String,
+}
+impl Default for IndentConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            width: 4,
+            style: "detect".into(),
+        }
+    }
+}
+/// One language server: a program started without a shell.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LspServerConfig {
+    /// Executable name or path; an empty string disables the server.
+    pub command: String,
+    /// Literal arguments.
+    pub args: Vec<String>,
+    /// `initializationOptions` sent to the server.
+    pub initialization_options: Option<serde_json::Value>,
+}
+/// Code completion in the editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CompletionConfig {
+    /// Show suggestions while typing (Ctrl+Space works either way).
+    pub auto: bool,
+    /// Identifier characters typed before suggestions appear automatically, 1..=8.
+    pub min_chars: usize,
+    /// Ask language servers (rust-analyzer, clangd, zls) when they are installed.
+    pub lsp: bool,
+    /// Per-language server overrides: rust, c, cpp, zig.
+    pub servers: BTreeMap<String, LspServerConfig>,
+}
+impl Default for CompletionConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            min_chars: 2,
+            lsp: true,
+            servers: BTreeMap::new(),
+        }
+    }
+}
+/// Languages that can have a configured language server.
+pub const LSP_LANGUAGES: [&str; 4] = ["rust", "c", "cpp", "zig"];
 /// GDB/MI with an optional owned OpenOCD server. Starting never loads firmware.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -148,6 +204,10 @@ pub struct NativeConfig {
     /// scroll). Off by default: while captured, the terminal's own text
     /// selection usually needs Shift+drag.
     pub mouse: bool,
+    /// Automatic indentation.
+    pub indent: IndentConfig,
+    /// Code completion and language servers.
+    pub completion: CompletionConfig,
 }
 impl Default for NativeConfig {
     fn default() -> Self {
@@ -177,6 +237,8 @@ impl Default for NativeConfig {
             tasks: BTreeMap::new(),
             keys: BTreeMap::new(),
             mouse: false,
+            indent: IndentConfig::default(),
+            completion: CompletionConfig::default(),
         }
     }
 }
@@ -231,7 +293,8 @@ impl NativeConfig {
                 .and_then(|n| n.parse::<u8>().ok())
                 .is_some_and(|n| (1..=12).contains(&n))
                 || binding.strip_prefix("ctrl+").is_some_and(|letter| {
-                    letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase()
+                    letter == "space"
+                        || letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase()
                 })
                 || binding
                     .strip_prefix("ctrl+alt+")
@@ -239,10 +302,31 @@ impl NativeConfig {
                     .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit());
             if !valid || !bindings.insert(binding) {
                 return Err(Error(
-                    "Key bindings must be unique F1..F12, ctrl+a..ctrl+z, alt+0..alt+9 or ctrl+alt+0..ctrl+alt+9 chords"
+                    "Key bindings must be unique F1..F12, ctrl+a..ctrl+z, ctrl+space, alt+0..alt+9 or ctrl+alt+0..ctrl+alt+9 chords"
                         .into(),
                 ));
             }
+        }
+        if !(1..=16).contains(&config.indent.width)
+            || !["detect", "spaces", "tabs"].contains(&config.indent.style.as_str())
+        {
+            return Err(Error(
+                "Expected indent.width=1..16 and indent.style=detect|spaces|tabs".into(),
+            ));
+        }
+        if !(1..=8).contains(&config.completion.min_chars) {
+            return Err(Error("Expected completion.min_chars=1..8".into()));
+        }
+        if let Some(language) = config
+            .completion
+            .servers
+            .keys()
+            .find(|l| !LSP_LANGUAGES.contains(&l.as_str()))
+        {
+            return Err(Error(format!(
+                "completion.servers.{language}: language servers are configurable for {}",
+                LSP_LANGUAGES.join(", ")
+            )));
         }
         if config.profiles.is_empty() {
             return Err(Error("At least one build profile is required".into()));

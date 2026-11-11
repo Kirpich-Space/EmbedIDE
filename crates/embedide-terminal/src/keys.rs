@@ -40,6 +40,7 @@ pub(crate) fn decode(line: &str) -> Result<Vec<Key>, EditorError> {
                     "<Esc>" => Some(Key::Escape),
                     "<Enter>" | "<CR>" => Some(Key::Enter),
                     "<Tab>" => Some(Key::Tab),
+                    "<S-Tab>" => Some(Key::BackTab),
                     "<BS>" => Some(Key::Backspace),
                     "<Del>" => Some(Key::Delete),
                     "<C-r>" => Some(Key::Ctrl('r')),

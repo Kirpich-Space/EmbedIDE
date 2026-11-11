@@ -1,6 +1,7 @@
 //! Typed action interpreter. Every edit goes through EditorState::replace.
 use crate::{
     document::SearchEntry,
+    indent,
     motion::{self, next_unit, previous_unit},
     search,
     session::Effect,
@@ -82,6 +83,52 @@ fn apply_range(
     state.replace(range, "", cursor, changing)?;
     state.unnamed = Some(Register { text, kind });
     state.selection = None;
+    Ok(())
+}
+
+/// Shift one line by a level; the cursor keeps its place in the text (or
+/// moves to the end of the new indentation when it was inside it).
+fn shift_row(
+    state: &mut EditorState,
+    row: usize,
+    dedent: bool,
+    insert: bool,
+) -> Result<(), EditorError> {
+    let (range, whitespace, blank) = indent::line_indent(state, row)?;
+    if blank && !dedent && !insert {
+        return Ok(()); // like Vim, empty lines are not indented by line shifts
+    }
+    let new = indent::shifted(&state.indent, &whitespace, dedent);
+    if new == whitespace {
+        return Ok(());
+    }
+    let cursor = if state.lines.row(state.cursor) != row {
+        state.cursor
+    } else if state.cursor <= range.end {
+        range.start + new.len()
+    } else {
+        state.cursor - whitespace.len() + new.len()
+    };
+    state.replace(range, &new, cursor, insert)
+}
+
+/// Shift lines `first..=last` as one undo step; the cursor goes to the
+/// first non-blank character of `first`.
+fn shift_rows(
+    state: &mut EditorState,
+    first: usize,
+    last: usize,
+    dedent: bool,
+) -> Result<(), EditorError> {
+    state.begin_group();
+    let result = (first..=last)
+        .rev()
+        .try_for_each(|row| shift_row(state, row, dedent, false));
+    state.finish_group();
+    result?;
+    let target = state.lines.first_nonblank(first, &state.buffer)?;
+    state.cursor = state.lines.clamp(target, false, &state.buffer)?;
+    state.preferred = None;
     Ok(())
 }
 
@@ -181,17 +228,17 @@ fn begin_insert(
         }
     };
     state.begin_group();
-    if matches!(
-        position,
-        InsertPosition::LineAbove | InsertPosition::LineBelow
-    ) {
-        let eol = state.eol;
-        let cursor = if position == InsertPosition::LineBelow && row + 1 == state.lines.count() {
-            target + eol.len()
-        } else {
-            target
-        };
-        state.replace(target..target, eol, cursor, true)?;
+    if position == InsertPosition::LineBelow {
+        // `o` is Enter at the end of the line: same indentation rules.
+        state.cursor = end;
+        let (range, text, cursor) = indent::newline(state)?;
+        let at = range.start;
+        state.replace(range, &text, at + cursor, true)?;
+    } else if position == InsertPosition::LineAbove {
+        // `O` keeps the indentation of the line it opens above.
+        let (_, whitespace, _) = indent::line_indent(state, row)?;
+        let text = format!("{whitespace}{}", state.eol);
+        state.replace(target..target, &text, target + whitespace.len(), true)?;
     } else {
         state.cursor = target;
     }
@@ -277,26 +324,54 @@ pub(crate) fn execute(
         }
         Action::InsertNewline => {
             state.begin_group();
-            let row = state.lines.row(state.cursor);
-            let start = state.lines.start(row);
-            let prefix: String = state
-                .buffer
-                .chunks_in(start..state.cursor)?
-                .flat_map(str::chars)
-                .take_while(|ch| matches!(ch, ' ' | '\t'))
-                .take(4096)
-                .collect();
-            let text = format!("{}{prefix}", state.eol);
-            state.replace(
-                state.cursor..state.cursor,
-                &text,
-                state.cursor + text.len(),
-                true,
-            )?;
+            let (range, text, cursor) = indent::newline(state)?;
+            let at = range.start;
+            state.replace(range, &text, at + cursor, true)?;
         }
         Action::InsertTab => {
             state.begin_group();
-            state.replace(state.cursor..state.cursor, "\t", state.cursor + 1, true)?;
+            let row = state.lines.row(state.cursor);
+            let (range, whitespace, _) = indent::line_indent(state, row)?;
+            if state.cursor <= range.end {
+                let new = indent::shifted(&state.indent, &whitespace, false);
+                let cursor = range.start + new.len();
+                state.replace(range, &new, cursor, true)?;
+            } else {
+                let text = indent::tab_text(state)?;
+                let cursor = state.cursor;
+                state.replace(cursor..cursor, &text, cursor + text.len(), true)?;
+            }
+        }
+        Action::Dedent => {
+            state.begin_group();
+            let row = state.lines.row(state.cursor);
+            shift_row(state, row, true, true)?;
+        }
+        Action::TypeCloser(closer) => {
+            state.begin_group();
+            if let Some((range, whitespace)) = indent::closer(state, closer)? {
+                let cursor = range.start + whitespace.len();
+                state.replace(range, &whitespace, cursor, true)?;
+            }
+            let text = closer.to_string();
+            let cursor = state.cursor;
+            state.replace(cursor..cursor, &text, cursor + text.len(), true)?;
+        }
+        Action::ShiftLines { dedent, count } => {
+            let row = state.lines.row(state.cursor);
+            let last = row
+                .saturating_add(count.max(1) as usize - 1)
+                .min(state.lines.count() - 1);
+            shift_rows(state, row, last, dedent)?;
+        }
+        Action::ShiftSelection { dedent } => {
+            let selection = state
+                .selection
+                .ok_or(EditorError::Unsupported("no active Visual selection"))?;
+            let first = state.lines.row(selection.anchor.min(selection.head));
+            let last = state.lines.row(selection.anchor.max(selection.head));
+            state.selection = None;
+            shift_rows(state, first, last, dedent)?;
         }
         Action::Backspace => {
             if state.cursor > 0 {

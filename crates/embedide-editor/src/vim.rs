@@ -25,6 +25,8 @@ pub enum Key {
     Enter,
     /// Tab.
     Tab,
+    /// Shift+Tab.
+    BackTab,
     /// Backspace.
     Backspace,
     /// Delete.
@@ -180,8 +182,26 @@ pub enum Action {
     InsertText(String),
     /// Insert a line break using the document's line-ending and indent policy.
     InsertNewline,
-    /// Insert indentation using the document's tabs/spaces policy.
+    /// Tab in Insert mode: indent the line one level when the cursor is in
+    /// its leading whitespace, otherwise insert a tab or spaces to the next stop.
     InsertTab,
+    /// Shift+Tab in Insert mode: remove one indentation level from the line.
+    Dedent,
+    /// A typed closing delimiter (`}`, `]`, `)`); on an otherwise blank line
+    /// it re-aligns with its opener before being inserted.
+    TypeCloser(char),
+    /// Tab / Shift+Tab in Normal mode: shift `count` lines by one level.
+    ShiftLines {
+        /// Remove a level instead of adding one.
+        dedent: bool,
+        /// Number of lines.
+        count: u32,
+    },
+    /// Tab / Shift+Tab in Visual mode: shift the selected lines by one level.
+    ShiftSelection {
+        /// Remove a level instead of adding one.
+        dedent: bool,
+    },
     /// Delete before the insertion point.
     Backspace,
     /// Delete characters after the cursor or insertion point.
@@ -593,6 +613,14 @@ impl VimInput {
         if let Some(motion) = Self::motion(&key) {
             return Self::emit(Action::Move { motion, count });
         }
+        if matches!(key, Key::Tab | Key::BackTab) {
+            let dedent = key == Key::BackTab;
+            if self.mode == Mode::Visual {
+                self.mode = Mode::Normal;
+                return Self::emit(Action::ShiftSelection { dedent });
+            }
+            return Self::emit(Action::ShiftLines { dedent, count });
+        }
         let character = match key {
             Key::Char(character) => character,
             Key::Delete => 'x',
@@ -679,11 +707,13 @@ impl VimInput {
                 Self::emit(Action::FinishInsert)
             }
             Key::Text(text) => Self::emit(Action::InsertText(text)),
+            Key::Char(closer @ ('}' | ']' | ')')) => Self::emit(Action::TypeCloser(closer)),
             Key::Char(character) if !character.is_control() => {
                 Self::emit(Action::InsertText(character.to_string()))
             }
             Key::Enter => Self::emit(Action::InsertNewline),
             Key::Tab => Self::emit(Action::InsertTab),
+            Key::BackTab => Self::emit(Action::Dedent),
             Key::Backspace => Self::emit(Action::Backspace),
             Key::Delete => Self::emit(Action::DeleteForward(1)),
             Key::Left | Key::Down | Key::Up | Key::Right | Key::Home | Key::End => {

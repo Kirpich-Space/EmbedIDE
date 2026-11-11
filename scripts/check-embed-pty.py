@@ -750,6 +750,79 @@ class EmbedContracts(unittest.TestCase):
         ide.until(b"Finished: exit=Some(0)", timeout=120)
         self.quit(ide)
 
+    # --- Smart indentation and completion -----------------------------------
+
+    def test_auto_indent_enter_closers_tab_and_shift_tab(self):
+        (self.root / "src" / "lib.rs").write_text("")
+        ide = self.ide(args=["src/lib.rs"])
+        ide.until(b"NORMAL | src/lib.rs")
+        ide.type("i")
+        for line in ["fn main() {", "if ok {", "run();"]:
+            ide.type(line)
+            ide.keys(b"\r")
+        ide.type("}")
+        ide.keys(b"\r")
+        ide.type("}")
+        ide.keys(b"\x1b[Z")          # Shift+Tab on a line without indentation: no change
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.assertEqual((self.root / "src" / "lib.rs").read_text(),
+                         "fn main() {\n    if ok {\n        run();\n    }\n}")
+        # Normal mode: Tab / Shift+Tab shift the line; u undoes.
+        ide.type("gg")
+        ide.keys(b"\t")
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.assertTrue((self.root / "src" / "lib.rs").read_text().startswith("    fn main() {"))
+        ide.type("u:w\r")
+        ide.until(b"Saved")
+        self.assertTrue((self.root / "src" / "lib.rs").read_text().startswith("fn main() {"))
+        self.quit(ide)
+
+    def lsp_completion(self, server, files, path, line, typed, expect_label, expect_text):
+        if not shutil.which(server):
+            self.skipTest(f"{server} not installed")
+        for name, text in files.items():
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        ide = self.ide(args=[path])
+        ide.until(b"NORMAL |")
+        ide.type(f"{line}GA")
+        ide.keys(b"\r")
+        for ch in typed:
+            ide.type(ch)
+            ide.pump(0.1)
+        ide.until(f"{server} · ".encode(), timeout=60)
+        self.assertIn(expect_label.encode(), ide.output[ide.offset - 4000:])
+        ide.keys(b"\x1b[B")           # Down selects the first item
+        ide.keys(b"\t")               # Tab accepts it
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.assertIn(expect_text, (self.root / path).read_text())
+        self.quit(ide)
+
+    def test_rust_analyzer_completion(self):
+        self.lsp_completion(
+            "rust-analyzer",
+            {"ra/Cargo.toml": '[package]\nname = "ra"\nversion = "0.1.0"\nedition = "2021"\n\n[workspace]\n',
+             "ra/src/main.rs": "fn main() {\n    let values: Vec<u32> = Vec::new();\n}\n"},
+            "ra/src/main.rs", 2, "values.le", "len", "values.len")
+
+    def test_clangd_completion(self):
+        self.lsp_completion(
+            "clangd",
+            {"cc/main.c": "#include <string.h>\nint main(void) {\n    return 0;\n}\n"},
+            "cc/main.c", 2, "strle", "strlen", "strlen")
+
+    def test_zls_completion(self):
+        self.lsp_completion(
+            "zls",
+            {"zg/main.zig": 'const std = @import("std");\npub fn main() void {\n}\n'},
+            "zg/main.zig", 2, "std.me", "mem", "std.mem")
+
     # --- Panel chords ---------------------------------------------------------
 
     def test_held_digit_delete_hides_panels_and_reopening_restores_state(self):

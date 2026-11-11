@@ -39,7 +39,9 @@ return to the editor); hold the digit and press Delete to hide a panel. These ch
 the kitty keyboard protocol; elsewhere **Alt+1/2/3** switch panels and `:hide_*` commands (or your own
 bindings) hide them — see [what terminals can report](docs/cli/tui.md#what-terminals-can-report). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
 command palette, `:help` lists every key. In the integrated terminal Shift+PageUp/PageDown/Home/End
-scroll through history; `:mouse` turns on mouse support. See [the TUI guide](docs/cli/tui.md).
+scroll through history; `:mouse` turns on mouse support. Enter indents by language, and a completion
+popup appears while you type (rust-analyzer, clangd and zls when installed, otherwise words of the
+file). See [the TUI guide](docs/cli/tui.md).
 
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds

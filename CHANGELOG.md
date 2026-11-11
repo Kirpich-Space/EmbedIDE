@@ -12,6 +12,12 @@ below belong to the deprecated Electron desktop application.
   undo/redo, Unicode/wide characters/tabs, line numbers, staged saves that never overwrite a file
   changed on disk, `:<line>`, `:w <file>` / `:saveas <file>` (new files only), unsaved-change guards
   on close and quit.
+- Automatic indentation: language-aware Enter/`o`/`O` (Rust, C, C++, Zig, JS/TS, JSON, shell, Python,
+  assembly), closers that align with their opener, Tab/Shift+Tab in Insert, Normal and Visual mode,
+  `native.indent` (`auto`, `width`, `style` = detect/spaces/tabs; Makefiles use tabs).
+- Code completion popup while typing (nothing preselected; Down/Ctrl+N, Up/Ctrl+P, Tab/Enter, Esc;
+  Ctrl+Space on demand) with semantic items from rust-analyzer, clangd and zls through a small LSP
+  client, and words of the current file as a clearly labelled fallback; `native.completion`.
 - Syntax highlighting for C, C++, Rust, Zig, assembly (GNU as/NASM, x86/ARM/RISC-V registers),
   Fortran, shell, Python, JavaScript/TypeScript, TOML and JSON; detection by extension, file name and
   shebang.

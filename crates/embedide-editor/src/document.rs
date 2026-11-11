@@ -156,6 +156,7 @@ pub struct EditorState {
     pub(crate) file: Option<FileBinding>,
     pub(crate) eol: &'static str,
     pub(crate) closed: bool,
+    pub(crate) indent: crate::indent::IndentStyle,
     initial_unsaved: bool,
     undo: VecDeque<CursorChange>,
     redo: Vec<CursorChange>,
@@ -188,6 +189,7 @@ impl EditorState {
             file,
             eol,
             closed: false,
+            indent: crate::indent::IndentStyle::default(),
             initial_unsaved,
             undo: VecDeque::new(),
             redo: Vec::new(),
@@ -209,6 +211,10 @@ impl EditorState {
     /// Bound path, or None for an untitled document.
     pub fn path(&self) -> Option<&Path> {
         self.file.as_ref().map(FileBinding::path)
+    }
+    /// Indentation settings used by Enter, typed closers and Tab/Shift+Tab.
+    pub fn indent(&self) -> crate::indent::IndentStyle {
+        self.indent
     }
     /// Line ending used for new Enter/open-line operations; existing bytes remain intact.
     pub fn line_ending(&self) -> &str {

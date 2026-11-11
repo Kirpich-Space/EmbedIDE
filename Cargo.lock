@@ -311,6 +311,7 @@ name = "embedide-editor"
 version = "0.1.0"
 dependencies = [
  "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -805,7 +806,6 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
-
 
 [[package]]
 name = "rustix"

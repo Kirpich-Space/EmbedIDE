@@ -27,6 +27,9 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | Integrated terminal: `sh`, `bash`, `fish` sessions, colours/bold/inverse kept, scrollback with colours, stable view while output arrives, typing returns live, full-screen program on the alternate screen keeps Shift+PageUp (`vim -u NONE`), Ctrl+C stops `yes` while it floods (IDE RSS stays bounded), Ctrl+D ends the shell and Enter restarts it, resize reaches `stty size`, no processes survive quit | bash 5.3, fish 4, vim; `less`/`htop` are not installed on this machine |
 | Mouse (opt-in `:mouse`): SGR clicks select/open explorer rows and place the editor cursor, wheel scrolls; capture is released on exit | PTY with SGR mouse sequences |
 | Editor: `:<line>`, `:w <file>`/`:saveas` (refuses to overwrite), untitled `:w` explains how to name the file, explorer refresh keeps expanded directories and the selection | unit tests on the real workspace |
+| Automatic indentation: Enter/`o`/`O` per language (Rust, C, C++, Zig, shell, Python, assembly, plain), Enter between braces, closers aligned with their opener, strings/comments ignored, Tab/Shift+Tab in Insert/Normal/Visual, width/tabs/detect configuration, undo/redo, literal paste | engine tests; typed in the real binary through a PTY |
+| Completion popup with real language servers in the real binary through a PTY: `values.le` → `len` from rust-analyzer 1.99.1, `strle` → `strlen` from clangd 23.1.3, `std.me` → `mem` from zls 0.17.0; accepted with Down+Tab and saved | rust-analyzer, clangd, zls installed on this machine |
+| LSP protocol: initialize, UTF-8/UTF-16 negotiation and conversion, didOpen/didChange/didClose, server requests answered, superseded requests cancelled and stale answers ignored, crash/garbage handling, process-group cleanup; local word fallback, selection rules, Unicode, Esc/Insert interaction | scripted mock server; workspace unit tests |
 
 ## Verified only with mocks / fakes
 
@@ -64,6 +67,8 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
   the `embed` binary (the CLI was renamed from `embedide`).
 - Terminal panel: one shell session; 5000 lines of history; programs cannot receive mouse events
   (the IDE's mouse mode is for the IDE itself); the history of a full-screen program is its own.
+- Completion: plain-text insertion of snippets, no automatic-import edits, no signature help, hover or
+  LSP diagnostics; one server per workspace root; full-text document sync.
 - Mouse is off by default; while it is on, selecting text in the outer terminal usually needs
   Shift+drag. No drag selection inside the editor.
 - Real terminal emulators (kitty, foot, xterm, VTE, tmux) were not driven by hand in this session; the

@@ -129,6 +129,34 @@ fn missing_configuration_uses_defaults_and_key_bindings_are_validated() {
     assert!(error.contains("unique"), "{error}");
 }
 #[test]
+fn indentation_and_completion_settings_have_defaults_and_are_validated() {
+    let f = Fixture::new();
+    let config = NativeConfig::load(&f.0).unwrap();
+    assert!(config.indent.auto && config.indent.width == 4 && config.indent.style == "detect");
+    assert!(config.completion.auto && config.completion.lsp && config.completion.min_chars == 2);
+    f.write(
+        "embedide.local.json",
+        r#"{"indent":{"width":2,"style":"tabs"},"completion":{"min_chars":1,"servers":{"zig":{"command":""}}},"keys":{"suggest":"ctrl+space"}}"#,
+    );
+    let config = NativeConfig::load(&f.0).unwrap();
+    assert_eq!(
+        (config.indent.width, config.indent.style.as_str()),
+        (2, "tabs")
+    );
+    assert_eq!(config.completion.servers["zig"].command, "");
+    for bad in [
+        r#"{"indent":{"width":0}}"#,
+        r#"{"indent":{"style":"smart"}}"#,
+        r#"{"indent":{"tabs":true}}"#,
+        r#"{"completion":{"min_chars":9}}"#,
+        r#"{"completion":{"servers":{"python":{"command":"pylsp"}}}}"#,
+        r#"{"completion":{"servers":{"rust":{"cmd":"ra"}}}}"#,
+    ] {
+        f.write("embedide.local.json", bad);
+        assert!(NativeConfig::load(&f.0).is_err(), "{bad} was accepted");
+    }
+}
+#[test]
 fn cargo_and_cmake_profiles_keep_arguments_separate_and_do_not_execute() {
     let f = Fixture::new();
     f.write("Cargo.toml", "[package]\nname='test'\nversion='0.1.0'\n");

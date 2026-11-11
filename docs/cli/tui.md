@@ -139,6 +139,109 @@ unknown command id is reported at startup (`:settings`). The table lives in one 
 Ctrl+letter, Shift+PageUp/PageDown/Home/End/Up/Down, arrows, Esc, Enter, Tab, Backspace, Delete,
 bracketed paste. Ctrl+Alt+digit and the held-digit hide chords need the kitty keyboard protocol.
 
+## Indentation
+
+Indentation follows the language of the file (detected like syntax highlighting). Rules look only at
+code: braces inside strings and comments are ignored, and nothing is re-indented inside a block comment
+or string. **Pasted text is inserted exactly as pasted.**
+
+| Language | Enter adds a level after | A typed closer on a blank line aligns with its opener |
+|---|---|---|
+| Rust, C, C++, Zig, JavaScript/TypeScript, JSON | `{`, `[`, `(` at the end of the line | `}`, `]`, `)` |
+| Shell | `{`, `(`, `then`, `do`, `else` | `}` |
+| Python | `:` | — |
+| Assembly (GNU as, NASM) | a label (`reset:`) at column 0 | — |
+| Fortran, TOML, other text | — (the current indentation is kept) | — |
+
+* Enter always keeps the current line's indentation; Enter between `{` and `}` puts the cursor on an
+  indented empty line and the `}` on its own line. An Enter on a line that holds only indentation
+  leaves no trailing blanks behind. `o` and `O` follow the same rules.
+* **Tab** in Insert mode: in the leading blanks of a line it adds one level (snapping to the grid);
+  after text it inserts a tab or spaces up to the next stop (measured in terminal cells, so wide
+  characters are respected). **Shift+Tab** removes one level from the line wherever the cursor is.
+* **Tab / Shift+Tab** in Normal mode shift the current line (a count shifts several: `3 Tab`); in Visual
+  mode they shift the selected lines. Empty lines are not indented. A multi-line shift is one undo
+  step; indentation typed in Insert mode is part of that Insert's undo step.
+
+Configuration (`embedide.json` → `native.indent`, defaults shown):
+
+```json
+{"native": {"indent": {"auto": true, "width": 4, "style": "detect"}}}
+```
+
+`width` is the number of columns per level (1–16). `style` is `detect` (follow the file: tab-indented
+files use tabs, space-indented files use spaces; Makefiles and `*.mk` always use tabs), `spaces` or
+`tabs` (one tab per level). `auto: false` keeps only "Enter preserves indentation". The existing
+`tab_width` setting is still the display width of tab characters.
+
+## Code completion
+
+While you type in Insert mode, a compact popup appears under the cursor (above it near the bottom of
+the window) once a word has `completion.min_chars` characters (default 2), and after `.`, `::` or `->`
+when a language server is running. It shows the name, the kind (`method`, `struct`, `word`, …) and a
+short detail (type or signature); the last line names the source.
+
+| Key (while the popup is visible) | Action |
+|---|---|
+| Down / Ctrl+N, Up / Ctrl+P | Select the next / previous item (wraps) |
+| Tab or Enter | Accept the **selected** item |
+| Tab or Enter with nothing selected | Their usual meaning (indent, new line); the popup closes |
+| Esc | Close the popup and leave Insert mode (as in Vim, so `Esc :w` always saves) |
+| Any other key | Goes to the editor; typing narrows the list, other characters close it |
+| **Ctrl+Space** (also when `completion.auto` is off) | Ask explicitly; the first item is selected |
+
+An automatic popup starts with **nothing selected**, so it never takes Enter or Tab away from you.
+Accepting replaces the word you typed (or the range the language server names) and is part of the
+current Insert undo step.
+
+**Sources.** For Rust, C, C++ and Zig files EmbedIDE starts the matching language server the first time
+completion is needed in such a file (never when a directory is merely opened), one process per server
+for the workspace:
+
+| Language | Server | Install (examples) |
+|---|---|---|
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer` or your distribution's package |
+| C, C++ | `clangd` | the `clang` / `clang-tools` / `clangd` package of your distribution, or LLVM releases |
+| Zig | `zls` | the zigtools release matching your Zig version, or your distribution's package |
+
+Until a server is ready, when it is not installed, crashed, or for other languages (assembly, shell,
+Python, …) and untitled buffers, the popup offers **words from the current file**, labelled
+`words (local, no types)`: plain identifiers already in the document, with no knowledge of types,
+methods or signatures. Server items are labelled with the server name. A missing or failed server is
+reported once in the status bar; `:lsp_restart` (Ctrl+K: Restart Language Servers) tries again.
+
+Servers run without a shell in their own process group and are stopped when the IDE exits. Requests
+never block the editor: only the newest completion request is answered (older ones are cancelled),
+and documents are sent to the server only when completion asks for them. clangd uses
+`compile_commands.json` when the project has one. **rust-analyzer starts with build scripts and
+procedural macros disabled** so that completion does not execute project code; zls may evaluate the
+project's `build.zig` to discover modules.
+
+Configuration (`embedide.json` → `native.completion`, defaults shown):
+
+```json
+{"native": {"completion": {
+  "auto": true, "min_chars": 2, "lsp": true,
+  "servers": {
+    "rust": {"command": "rust-analyzer",
+             "initialization_options": {"cargo": {"buildScripts": {"enable": true}},
+                                        "procMacro": {"enable": true}}},
+    "c":    {"command": "/opt/llvm/bin/clangd", "args": ["--query-driver=/opt/arm/bin/*"]},
+    "zig":  {"command": ""}
+  }
+}}}
+```
+
+`servers` overrides the built-in command for `rust`, `c`, `cpp` or `zig` (the example re-enables build
+scripts for rust-analyzer, uses another clangd, and turns zls off with an empty command).
+`lsp: false` uses local words only; `auto: false` shows the popup only on Ctrl+Space, which can be
+rebound like any command (`"keys": {"suggest": "f12"}`). The existing `:complete` command is the
+separate, optional AI suggestion (ghost text).
+
+**Limitations:** snippet placeholders are inserted as plain text; extra edits a server attaches to an
+item (automatic imports) are not applied; there is no signature help, hover or LSP diagnostics yet;
+indentation rules look back at most 2000 lines; shell `fi`/`done`/`esac` are not dedented as you type.
+
 ## Build and diagnostics
 
 F5 builds the project with the same engine as `embed build`:

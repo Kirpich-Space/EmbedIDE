@@ -96,11 +96,17 @@ compilers and flags, create an `embedide.toml` (`embed project init`, see the
 | F2 / F4 / F6 | toggle explorer / cycle bottom panels / cycle focus |
 | Shift+PageUp, Shift+PageDown, Shift+Home, Shift+End | terminal history |
 | `:mouse` | turn mouse support on/off (off by default) |
+| Tab / Shift+Tab | indent / dedent (Insert: the current line; Normal/Visual: line or selection) |
+| typing in Insert mode | completion popup: Down/Ctrl+N select, Tab/Enter accept, Esc close; Ctrl+Space asks explicitly |
 
 Which keys a terminal can deliver is explained in
 [the TUI guide](tui.md#what-terminals-can-report). In short: Ctrl+Alt+digit and "hold a digit, press
 Delete" (hide a panel) exist only with the kitty keyboard protocol; everything in the table above
 except those works in any xterm-compatible terminal, tmux and over SSH.
+
+Enter indents after `{` in Rust/C/C++/Zig and a typed `}` aligns itself. For semantic completion install
+the language servers you need (rust-analyzer, clangd, zls); without them the popup offers words from
+the current file. Details: [indentation](tui.md#indentation) and [completion](tui.md#code-completion).
 
 ## 5. Embedded workflow
 
@@ -136,7 +142,7 @@ Hardware paths were tested with virtual serial ports and fake tools only; see [s
 | File | Scope |
 |---|---|
 | `embedide.toml` | project: language, build system, toolchains, flags, profiles ([reference](embedide-toml.md)) |
-| `embedide.json` → `native` | IDE per project: `theme` (mono/dark/light), `tab_width`, `keys`, `mouse`, `targets`, `serial`, `debug`, `tasks`, `tools`, `environment` |
+| `embedide.json` → `native` | IDE per project: `theme` (mono/dark/light), `tab_width`, `indent`, `completion`, `keys`, `mouse`, `targets`, `serial`, `debug`, `tasks`, `tools`, `environment` |
 | `embedide.local.json` | personal overrides of `native`, not meant for version control |
 | `~/.config/embedide/config.toml` | per user: preferred compilers, AI provider |
 
@@ -152,5 +158,6 @@ applies changes.
 * Real hardware (probes, boards, USB serial adapters) was not used in testing.
 * Fortran builds were not run (no Fortran compiler on the test machine).
 * Builds use the files on disk: save before F5.
+* Completion: no snippet placeholders, automatic imports, signature help or LSP diagnostics yet.
 
 More in [status](status.md).

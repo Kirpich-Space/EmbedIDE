@@ -5,6 +5,7 @@ pub mod debug;
 pub mod diagnostics;
 pub mod explorer;
 pub mod hardware;
+pub mod lsp;
 pub mod process;
 
 pub use embedide_editor as editor;

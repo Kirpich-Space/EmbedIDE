@@ -63,6 +63,10 @@ impl Editor {
     pub fn input(&self) -> &VimInput {
         &self.input
     }
+    /// Set the indentation style (see [`crate::indent::IndentStyle::detect`]).
+    pub fn set_indent(&mut self, style: crate::indent::IndentStyle) {
+        self.state.indent = style;
+    }
     /// Change bindings without exposing mutable modal state.
     pub fn set_keymap(&mut self, keymap: Keymap) {
         self.input.set_keymap(keymap);
