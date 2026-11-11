@@ -165,6 +165,8 @@ impl Popup {
             .min(36);
         let tag = if self.semantic {
             self.source.clone()
+        } else if self.source == "asm" {
+            "asm: labels, mnemonics, registers (local)".into()
         } else {
             "words (local, no types)".into()
         };

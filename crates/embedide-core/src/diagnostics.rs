@@ -45,15 +45,37 @@ pub fn parse(line: &str) -> Option<Diagnostic> {
             source: "rustc".into(),
         });
     }
-    for severity in ["fatal error", "error", "warning", "note"] {
-        let marker = format!(": {severity}: ");
-        let Some((location, message)) = line.split_once(&marker) else {
+    // GCC/Clang/llvm-mc: `path:line:column: severity: text`; NASM:
+    // `path:line: error: text`; GNU as: `path:line: Error: text`.
+    for (marker, severity) in [
+        (": fatal error: ", "fatal error"),
+        (": error: ", "error"),
+        (": Error: ", "error"),
+        (": warning: ", "warning"),
+        (": Warning: ", "warning"),
+        (": note: ", "note"),
+    ] {
+        let Some((location, message)) = line.split_once(marker) else {
             continue;
         };
+        let number = |s: &str| s.trim().parse::<usize>().ok();
         let mut parts = location.rsplitn(3, ':');
-        let column = parts.next()?.trim().parse::<usize>().ok()?;
-        let row = parts.next()?.trim().parse::<usize>().ok()?;
-        let file = parts.next()?;
+        let (last, middle, first) = (parts.next(), parts.next(), parts.next());
+        let (file, row, column) = match (first, middle.and_then(number), last.and_then(number)) {
+            (Some(file), Some(row), Some(column)) => (file, row, column),
+            _ => match (middle, last.and_then(number)) {
+                // No column: `path:line`, where the path may itself contain ':'.
+                (Some(_), Some(row)) => (
+                    location.rsplit_once(':').map_or(location, |(f, _)| f),
+                    row,
+                    1,
+                ),
+                _ => continue,
+            },
+        };
+        if file.is_empty() || file.starts_with(' ') {
+            continue;
+        }
         return Some(Diagnostic {
             severity: severity.into(),
             message: message.into(),

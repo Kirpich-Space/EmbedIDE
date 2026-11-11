@@ -366,6 +366,15 @@ impl Viewport {
     pub fn language(&self) -> embedide_editor::syntax::Language {
         self.highlighter.language()
     }
+    /// Assembly dialect of the document (detected or configured).
+    pub fn dialect(&self) -> Option<embedide_editor::asm::Dialect> {
+        self.highlighter.dialect()
+    }
+    /// Force an assembly dialect (None: detect from the file).
+    pub fn set_dialect(&mut self, dialect: Option<embedide_editor::asm::Dialect>) {
+        self.highlighter.set_dialect(dialect);
+        self.revision = None;
+    }
     /// Configure tab rendering and invalidate cached line layouts.
     pub fn set_tab_width(&mut self, width: usize) {
         let width = width.clamp(1, 16);

@@ -151,6 +151,7 @@ fn indentation_and_completion_settings_have_defaults_and_are_validated() {
         r#"{"completion":{"min_chars":9}}"#,
         r#"{"completion":{"servers":{"python":{"command":"pylsp"}}}}"#,
         r#"{"completion":{"servers":{"rust":{"cmd":"ra"}}}}"#,
+        r#"{"asm":{"syntax":"masm"}}"#,
     ] {
         f.write("embedide.local.json", bad);
         assert!(NativeConfig::load(&f.0).is_err(), "{bad} was accepted");
@@ -219,6 +220,25 @@ fn diagnostics_accept_cargo_and_windows_paths_but_reject_ambiguous_locations() {
     assert_eq!(rust.line, 3);
     assert!(diagnostics::parse("something error: oops").is_none());
     assert!(diagnostics::parse("CMake Error at CMakeLists.txt:3 (message):").is_some());
+}
+#[test]
+fn assembler_diagnostics_without_columns_point_at_the_line() {
+    // Exact output of NASM 3.02 and GNU as 2.47 for a bad instruction.
+    let nasm =
+        diagnostics::parse("/tmp/x y/a.asm:4: error: instruction expected, found `movv eax'")
+            .unwrap();
+    assert_eq!(
+        (nasm.file.unwrap(), nasm.line, nasm.column),
+        (PathBuf::from("/tmp/x y/a.asm"), 4, 1)
+    );
+    assert_eq!(nasm.severity, "error");
+    let gas = diagnostics::parse("b.s:5: Error: no such instruction: `movv %rdi,%rdi'").unwrap();
+    assert_eq!((gas.file.unwrap(), gas.line), (PathBuf::from("b.s"), 5));
+    let warning = diagnostics::parse("b.s:7: Warning: end of file not at end of a line").unwrap();
+    assert_eq!(warning.severity, "warning");
+    let mc = diagnostics::parse("t.s:3:9: error: invalid operand for instruction").unwrap();
+    assert_eq!((mc.line, mc.column), (3, 9));
+    assert!(diagnostics::parse("b.s: Assembler messages:").is_none());
 }
 #[test]
 fn flash_requires_unambiguous_hardware_and_matching_elf_architecture() {

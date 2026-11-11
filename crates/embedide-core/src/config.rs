@@ -96,6 +96,20 @@ impl Default for IndentConfig {
         }
     }
 }
+/// Assembly settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AsmConfig {
+    /// auto (detect per file), nasm, gas-att, gas-intel, arm, aarch64 or riscv.
+    pub syntax: String,
+}
+impl Default for AsmConfig {
+    fn default() -> Self {
+        Self {
+            syntax: "auto".into(),
+        }
+    }
+}
 /// One language server: a program started without a shell.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -208,6 +222,8 @@ pub struct NativeConfig {
     pub indent: IndentConfig,
     /// Code completion and language servers.
     pub completion: CompletionConfig,
+    /// Assembly dialect.
+    pub asm: AsmConfig,
 }
 impl Default for NativeConfig {
     fn default() -> Self {
@@ -239,6 +255,7 @@ impl Default for NativeConfig {
             mouse: false,
             indent: IndentConfig::default(),
             completion: CompletionConfig::default(),
+            asm: AsmConfig::default(),
         }
     }
 }
@@ -312,6 +329,13 @@ impl NativeConfig {
         {
             return Err(Error(
                 "Expected indent.width=1..16 and indent.style=detect|spaces|tabs".into(),
+            ));
+        }
+        if config.asm.syntax != "auto"
+            && embedide_editor::asm::Dialect::parse(&config.asm.syntax).is_none()
+        {
+            return Err(Error(
+                "Expected asm.syntax=auto|nasm|gas-att|gas-intel|arm|aarch64|riscv".into(),
             ));
         }
         if !(1..=8).contains(&config.completion.min_chars) {

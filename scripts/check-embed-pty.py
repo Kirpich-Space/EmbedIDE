@@ -918,6 +918,56 @@ class EmbedContracts(unittest.TestCase):
             {"zg/main.zig": 'const std = @import("std");\npub fn main() void {\n}\n'},
             "zg/main.zig", 2, "std.me", "mem", "std.mem")
 
+    # --- Assembly --------------------------------------------------------------
+
+    def test_assembly_editing_labels_completion_build_and_error_jump(self):
+        if not (shutil.which("nasm") and shutil.which("ld") and shutil.which("make")):
+            self.skipTest("nasm, ld and make are required")
+        example = Path(__file__).resolve().parent.parent / "examples" / "asm"
+        project = self.root / "asm"
+        shutil.copytree(example, project)
+        ide = self.ide(cwd=project, args=["hello-nasm.asm"])
+        ide.until(b"NORMAL | hello-nasm.asm | asm")
+        # Branch mnemonics get their own colour; `:label` jumps to a label.
+        self.assertIn(b"js", ide.output)
+        ide.type(":label .fail\r")
+        ide.until(b"Ln 21, Col 1 | Ctrl+K commands | .fail: line 21")
+        # Completion offers this file's labels and the dialect's mnemonics.
+        ide.type("o")
+        ide.type("jmp .ex")
+        self.until_panel_text(ide, "asm: labels, mnemonics")
+        ide.keys(b"\x1b[B", b"\t")
+        ide.keys(ide.esc)
+        ide.type("dd:w\r")
+        ide.until(b"Saved")
+        # A mistake: the assembler error lands in PROBLEMS and Enter jumps to it.
+        ide.type("ggjjjjjjjjjjjjA\r")
+        ide.type("movv eax, 1")
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        ide.keys(F5)
+        ide.until(b"Failed / cancelled", timeout=60)
+        ide.keys(F3)
+        ide.until(b"PROBLEMS")
+        ide.until(b"instruction expected")
+        ide.keys(b"\r")
+        ide.until(b"Ln 14, Col 1")
+        ide.type("dd:w\r")
+        ide.until(b"Saved")
+        ide.keys(F5)
+        ide.until(b"Finished: exit=Some(0)", timeout=60)
+        self.quit(ide)
+        out = subprocess.run([str(project / "hello-nasm")], capture_output=True, text=True)
+        self.assertEqual(out.stdout, "Hello from NASM\n")
+
+    def until_panel_text(self, ide, text, timeout=15):
+        deadline = time.monotonic() + timeout
+        while text not in ide.screen():
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"missing {text!r}; screen:\n{ide.screen()}")
+            ide.pump(0.1)
+
     # --- Panel chords ---------------------------------------------------------
 
     def test_held_digit_delete_hides_panels_and_reopening_restores_state(self):

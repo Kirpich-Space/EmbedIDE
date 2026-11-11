@@ -116,6 +116,7 @@ pub fn syntax_color(theme: Theme, kind: Highlight) -> Color {
         (0x8a, 0xbe, 0xb7), // operator: teal
         (0xc9, 0x8c, 0xb4), // preprocessor: mauve
         (0xe0, 0x8a, 0x6e), // variable: coral
+        (0xf0, 0xa0, 0x5a), // branch: bright orange (jumps stand out)
     ];
     let light = [
         (0x7a, 0x3e, 0x9d),
@@ -128,6 +129,7 @@ pub fn syntax_color(theme: Theme, kind: Highlight) -> Color {
         (0x1f, 0x7a, 0x80),
         (0x9b, 0x2f, 0x76),
         (0xa8, 0x40, 0x1e),
+        (0xc0, 0x50, 0x00),
     ];
     let index = match kind {
         Highlight::Keyword => 0,
@@ -140,6 +142,7 @@ pub fn syntax_color(theme: Theme, kind: Highlight) -> Color {
         Highlight::Operator => 7,
         Highlight::Preprocessor => 8,
         Highlight::Variable => 9,
+        Highlight::Branch => 10,
     };
     let (r, g, b) = if theme == Theme::Light {
         light[index]

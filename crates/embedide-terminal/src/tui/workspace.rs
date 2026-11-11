@@ -71,6 +71,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "Suggest Completions at the Cursor (Ctrl+Space, Insert mode)",
     ),
     ("lsp_restart", "Restart Language Servers (completion)"),
+    ("labels", "Go to Label (assembly: labels of this file)"),
     ("build", "Build Project"),
     ("check", "Check Project (Cargo)"),
     ("clean", "Clean Project"),
@@ -498,6 +499,10 @@ impl Workspace {
         editor.set_indent(indent_style(&self.config, editor.state()));
         let mut doc = TuiEditor::new(editor, self.size.0, self.size.1);
         doc.viewport.set_tab_width(self.config.tab_width);
+        doc.viewport
+            .set_dialect(embedide_editor::asm::Dialect::parse(
+                &self.config.asm.syntax,
+            ));
         doc
     }
     /// Toolchains `embedide.toml` and the user configuration select for this
@@ -729,6 +734,7 @@ impl Workspace {
         match name {
             "e" | "edit" | "open" if !arg.is_empty() => self.open_file(Path::new(arg)),
             "w" | "write" | "saveas" if !arg.is_empty() => self.save_as(Path::new(arg)),
+            "label" | "l" => self.goto_label(arg),
             line if !line.is_empty()
                 && line.bytes().all(|b| b.is_ascii_digit())
                 && arg.is_empty() =>
@@ -762,6 +768,63 @@ impl Workspace {
         self.notification = format!("Saved as {}", path.display());
         let _ = self.refresh();
         Ok(())
+    }
+    /// Assembly dialect of the active document, if it is assembly.
+    fn asm_dialect(&self) -> Option<embedide_editor::asm::Dialect> {
+        let doc = &self.documents[self.active];
+        let state = doc.editor().state();
+        if language_of(state.path()) != "asm" {
+            return None;
+        }
+        doc.viewport.dialect().or_else(|| {
+            let sample = state
+                .buffer()
+                .slice(0..state.buffer().byte_len().min(16 * 1024))
+                .ok()?;
+            Some(embedide_editor::asm::Dialect::detect(state.path(), &sample))
+        })
+    }
+    /// Labels of the active assembly document (empty for other languages).
+    fn asm_labels(&self) -> Vec<embedide_editor::asm::Label> {
+        let Some(dialect) = self.asm_dialect() else {
+            return Vec::new();
+        };
+        let text = self.editor().state().buffer().contents();
+        embedide_editor::asm::labels(&text, dialect)
+    }
+    /// `:label [name]`: jump to a label of this assembly file (the word under
+    /// the cursor without a name).
+    fn goto_label(&mut self, name: &str) -> Result<(), FrontendError> {
+        let name = if name.is_empty() {
+            let state = self.editor().state();
+            let cursor = state.cursor();
+            let line = state
+                .line_range(state.position()?.line)
+                .unwrap_or(cursor..cursor);
+            let text = state.buffer().slice(line.clone())?;
+            let at = cursor - line.start;
+            let is_label = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$');
+            let start = text[..at].rfind(|c| !is_label(c)).map_or(0, |i| i + 1);
+            let end = text[at..]
+                .find(|c| !is_label(c))
+                .map_or(text.len(), |i| at + i);
+            text[start..end].to_string()
+        } else {
+            name.to_string()
+        };
+        if self.asm_dialect().is_none() {
+            return Err(service_error(
+                ":label works in assembly files (Ctrl+K: Go to Label)",
+            ));
+        }
+        match self.asm_labels().into_iter().find(|l| l.name == name) {
+            Some(label) => {
+                self.goto_line(label.line + 1)?;
+                self.notification = format!("{name}: line {}", label.line + 1);
+                Ok(())
+            }
+            None => Err(service_error(format!("No label {name:?} in this file"))),
+        }
     }
     /// `:<line>`: move to a 1-based line (clamped to the last line), first column.
     fn goto_line(&mut self, line: usize) -> Result<(), FrontendError> {
@@ -1180,6 +1243,16 @@ impl Workspace {
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
             "suggest" => self.suggest(true, None)?,
+            "labels" => {
+                self.dialog = Some(Dialog::Palette {
+                    query: "label: ".into(),
+                    selected: 0,
+                })
+            }
+            id if id.starts_with("line:") => {
+                let line: usize = id[5..].parse().map_err(service_error)?;
+                self.goto_line(line)?;
+            }
             "lsp_restart" => {
                 self.lsp.clear();
                 if let Some(popup) = &mut self.popup {
@@ -1660,6 +1733,12 @@ impl Workspace {
             .iter()
             .map(|(id, label)| (id.to_string(), label.to_string()))
             .collect();
+        choices.extend(self.asm_labels().into_iter().map(|l| {
+            (
+                format!("line:{}", l.line + 1),
+                format!("label: {} (line {})", l.name, l.line + 1),
+            )
+        }));
         choices.extend(self.config.targets.iter().enumerate().map(|(i, target)| {
             (
                 format!("target:{i}"),
@@ -2272,7 +2351,11 @@ impl Workspace {
                     .map(|w| Candidate::word(w))
                     .collect()
             };
-            self.popup = Some(Popup::new(doc, word.start, words, "words", &query, manual));
+            let (items, source) = match self.asm_dialect().filter(|_| trigger.is_none()) {
+                Some(dialect) => (asm_candidates(dialect, self.asm_labels(), words), "asm"),
+                None => (words, "words"),
+            };
+            self.popup = Some(Popup::new(doc, word.start, items, source, &query, manual));
             ask = true;
         }
         if ask {
@@ -3653,6 +3736,50 @@ fn draw_popup(popup: &Popup, area: Area, cursor: (u16, u16), rows: &mut [Row]) {
             *row = popup::overlay(row, column, line, w);
         }
     }
+}
+
+/// Assembly completion: labels of the file, then the dialect's mnemonics
+/// (branches marked), directives and registers, then other words.
+fn asm_candidates(
+    dialect: embedide_editor::asm::Dialect,
+    labels: Vec<embedide_editor::asm::Label>,
+    words: Vec<Candidate>,
+) -> Vec<Candidate> {
+    let item = |label: &str, kind: &str, detail: String, sort: &str| Candidate {
+        kind: kind.into(),
+        detail,
+        sort: sort.into(),
+        ..Candidate::word(label)
+    };
+    let mut items: Vec<Candidate> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for l in labels {
+        if seen.insert(l.name.clone()) {
+            items.push(item(&l.name, "label", format!("line {}", l.line + 1), "0"));
+        }
+    }
+    for m in dialect.mnemonics() {
+        let (kind, detail) = if dialect.is_branch(m) {
+            ("branch", dialect.name().to_string())
+        } else {
+            ("instruction", dialect.name().to_string())
+        };
+        if seen.insert(m.to_string()) {
+            items.push(item(m, kind, detail, "1"));
+        }
+    }
+    for d in dialect.directives() {
+        if seen.insert(d.to_string()) {
+            items.push(item(d, "directive", String::new(), "2"));
+        }
+    }
+    for r in dialect.registers() {
+        if seen.insert(r.clone()) {
+            items.push(item(&r, "register", String::new(), "3"));
+        }
+    }
+    items.extend(words.into_iter().filter(|w| seen.insert(w.label.clone())));
+    items
 }
 
 /// Identity of a server process: its command line.

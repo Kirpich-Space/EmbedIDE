@@ -242,6 +242,36 @@ separate, optional AI suggestion (ghost text).
 item (automatic imports) are not applied; there is no signature help, hover or LSP diagnostics yet;
 indentation rules look back at most 2000 lines; shell `fi`/`done`/`esac` are not dedented as you type.
 
+## Assembly
+
+Files ending in `.asm`, `.nasm`, `.inc` (NASM) and `.s`, `.S`, `.sx` (GNU as) are assembly. The
+dialect is detected per file and changes comments, registers and immediates:
+
+| Dialect | Detected by | Comments | Notes |
+|---|---|---|---|
+| NASM (x86/x86-64, Intel) | `.asm`/`.nasm`/`.inc`, `bits`, `%define` | `;` | `%` preprocessor, bare registers |
+| GNU as, AT&T (x86/x86-64) | other `.s` files (GNU as's default) | `#`, `/* */` | `%rax`, `$imm`; `;` separates statements |
+| GNU as, Intel | `.intel_syntax` | `#`, `/* */` | bare registers |
+| GNU as, ARM (32-bit/Thumb) | `.syntax unified`, `.thumb`, `r0`–`r15`, `bx` | `@`, `//` | `#imm` |
+| GNU as, AArch64 | `.arch armv8`, `x0`–`x30`, `svc`, `adrp` | `//` | `#imm`, `b.eq` |
+| GNU as, RISC-V | `a0`, `t0`, `ecall`, `li`, `la` | `#` | |
+
+Override detection in `embedide.json` → `native.asm.syntax` (`auto`, `nasm`, `gas-att`, `gas-intel`,
+`arm`, `aarch64`, `riscv`).
+
+* **Highlighting:** mnemonics, **jumps/calls/returns/branches in their own colour** with their target
+  label, registers, labels, directives, numbers, strings, comments.
+* **Labels:** `:label name` jumps to a label, `:label` to the label under the cursor; Ctrl+K → *Go to
+  Label* lists the file's labels (also typing `label:` in the palette).
+* **Completion** (popup source `asm: labels, mnemonics, registers (local)`): this file's labels first,
+  then the dialect's instructions (branches marked), directives and registers. These are fixed lists;
+  the assembler is the authority on what is valid.
+* **Indentation:** after a label at column 0, Enter indents the next instruction.
+* **Errors:** NASM (`file:line: error:`) and GNU as (`file:line: Error:`) messages appear in PROBLEMS;
+  Enter jumps to the line.
+* **Building:** use a Makefile (see `examples/asm`, with NASM, AT&T and Intel GNU as programs and
+  AArch64/RISC-V sources) or `embedide.toml` with `[toolchain] asm = "nasm"` or a GNU as driver.
+
 ## Build and diagnostics
 
 F5 builds the project with the same engine as `embed build`:

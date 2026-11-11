@@ -46,6 +46,8 @@ pub enum Highlight {
     Preprocessor,
     /// Variables with syntactic markers: shell `$VAR`, registers, keys.
     Variable,
+    /// Control transfer: assembly jumps, calls, returns and branches.
+    Branch,
 }
 
 /// One highlighted byte range (absolute document offsets).
@@ -225,6 +227,18 @@ pub fn highlight_line(
     state: &LineState,
     out: &mut Vec<Span>,
 ) -> LineState {
+    highlight_line_in(language, None, line, state, out)
+}
+
+/// [`highlight_line`] with the assembly dialect known (None: tolerant rules
+/// that accept every dialect's comments).
+pub fn highlight_line_in(
+    language: Language,
+    dialect: Option<crate::asm::Dialect>,
+    line: &str,
+    state: &LineState,
+    out: &mut Vec<Span>,
+) -> LineState {
     let mut lexer = Lexer {
         s: line,
         b: line.as_bytes(),
@@ -235,7 +249,7 @@ pub fn highlight_line(
     match language {
         Language::Plain => LineState::Normal,
         Language::Shell => lexer.shell(state.clone()),
-        Language::Asm => lexer.asm(state.clone()),
+        Language::Asm => lexer.asm(state.clone(), dialect),
         Language::Toml => lexer.toml(state.clone()),
         Language::Json => lexer.code(&JSON, state.clone()),
         Language::Fortran => lexer.code(&FORTRAN, state.clone()),
@@ -253,6 +267,9 @@ pub fn highlight_line(
 #[derive(Debug, Default)]
 pub struct Highlighter {
     language: Option<Language>,
+    dialect: Option<crate::asm::Dialect>,
+    /// The dialect was set by configuration, not detected.
+    forced: bool,
     path: Option<PathBuf>,
     revision: Option<u64>,
     validated: bool,
@@ -261,6 +278,21 @@ pub struct Highlighter {
 }
 
 impl Highlighter {
+    /// Assembly dialect in use (detected, or set by [`Highlighter::set_dialect`]).
+    pub fn dialect(&self) -> Option<crate::asm::Dialect> {
+        self.dialect
+    }
+
+    /// Force an assembly dialect (configuration), or None to detect it.
+    pub fn set_dialect(&mut self, dialect: Option<crate::asm::Dialect>) {
+        if self.dialect != dialect || self.forced != dialect.is_some() {
+            self.dialect = dialect;
+            self.forced = dialect.is_some();
+            self.lines.clear();
+            self.revision = None;
+        }
+    }
+
     /// Language detected for the document at the last call.
     pub fn language(&self) -> Language {
         self.language.unwrap_or(Language::Plain)
@@ -290,6 +322,20 @@ impl Highlighter {
         };
         if self.language != Some(language) || self.path.as_deref() != path {
             self.lines.clear();
+        }
+        if language == Language::Asm && !self.forced {
+            // Detection reads the first 16 KiB; a changed verdict re-lexes.
+            let buffer = state.buffer();
+            let mut end = buffer.byte_len().min(16 * 1024);
+            while end > 0 && buffer.char_at(end).is_err() {
+                end -= 1;
+            }
+            let sample = buffer.slice(0..end).unwrap_or_default();
+            let dialect = Some(crate::asm::Dialect::detect(path, &sample));
+            if dialect != self.dialect {
+                self.dialect = dialect;
+                self.lines.clear();
+            }
         }
         self.language = Some(language);
         self.path = path.map(Path::to_path_buf);
@@ -335,7 +381,7 @@ impl Highlighter {
             let end = match line_text(state, index) {
                 Some((_, text)) => {
                     scratch.clear();
-                    highlight_line(language, &text, &start, &mut scratch)
+                    highlight_line_in(language, self.dialect, &text, &start, &mut scratch)
                 }
                 None => start,
             };
@@ -347,7 +393,7 @@ impl Highlighter {
             return Vec::new();
         };
         let mut spans = Vec::new();
-        let end = highlight_line(language, &text, &start, &mut spans);
+        let end = highlight_line_in(language, self.dialect, &text, &start, &mut spans);
         if self.lines.len() == line {
             let hash = line_hash(state, line).unwrap_or_default();
             self.lines.push((hash, end));
@@ -2143,7 +2189,18 @@ fn is_register(word: &str) -> bool {
 
 impl Lexer<'_, '_> {
     /// GNU as / NASM assembly for x86, ARM and RISC-V.
-    fn asm(&mut self, state: LineState) -> LineState {
+    fn asm(&mut self, state: LineState, dialect: Option<crate::asm::Dialect>) -> LineState {
+        use crate::asm::Dialect;
+        // Which characters start a comment depends on the dialect; without
+        // one every convention is accepted (the historical behaviour).
+        let semicolon_comment = matches!(dialect, None | Some(Dialect::Nasm));
+        let hash_comment = matches!(
+            dialect,
+            Some(Dialect::GasAtt | Dialect::GasIntel | Dialect::RiscV)
+        );
+        let at_comment_anywhere = dialect == Some(Dialect::Arm);
+        let at_comment_after_blank = dialect.is_none();
+        let mut branch = false;
         if let LineState::Comment(depth) = state {
             let state = self.block_comment(&ASM_SPEC, depth, 0);
             if state != LineState::Normal {
@@ -2173,9 +2230,15 @@ impl Lexer<'_, '_> {
             let after_blank = start == 0 || matches!(self.b[start - 1], b' ' | b'\t');
             match byte {
                 b' ' | b'\t' | b',' => self.i += 1,
-                b';' => {
+                b';' if semicolon_comment => {
                     self.rest(Highlight::Comment);
                     break;
+                }
+                b';' => {
+                    // GNU as: a statement separator; a new mnemonic follows.
+                    self.i += 1;
+                    mnemonic = false;
+                    branch = false;
                 }
                 b'/' if self.at("//") => {
                     self.rest(Highlight::Comment);
@@ -2188,11 +2251,14 @@ impl Lexer<'_, '_> {
                         return state;
                     }
                 }
-                b'@' if after_blank => {
+                b'@' if at_comment_anywhere || (at_comment_after_blank && after_blank) => {
                     self.rest(Highlight::Comment);
                     break;
                 }
-                b'#' if matches!(self.peek_at(1), None | Some(b' ' | b'\t')) => {
+                b'#' if hash_comment
+                    || (dialect.is_none()
+                        && matches!(self.peek_at(1), None | Some(b' ' | b'\t'))) =>
+                {
                     self.rest(Highlight::Comment);
                     break;
                 }
@@ -2247,14 +2313,20 @@ impl Lexer<'_, '_> {
                             self.emit(start, self.i, Highlight::Function);
                         } else if !mnemonic {
                             mnemonic = true;
-                            let kind = if word.starts_with('.') {
+                            branch = dialect.is_some_and(|d| d.is_branch(word));
+                            let kind = if word.starts_with('.') && !word.starts_with("b.") {
                                 Highlight::Preprocessor
+                            } else if branch {
+                                Highlight::Branch
                             } else {
                                 Highlight::Keyword
                             };
                             self.emit(start, end, kind);
                         } else if is_register(&word.to_ascii_lowercase()) {
                             self.emit(start, end, Highlight::Variable);
+                        } else if branch {
+                            // The target of a jump or call: a label.
+                            self.emit(start, end, Highlight::Function);
                         } else if is_caps(word) {
                             self.emit(start, end, Highlight::Constant);
                         }
