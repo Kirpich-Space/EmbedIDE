@@ -36,6 +36,8 @@ pub struct CellStyle {
     pub bg: Option<crossterm::style::Color>,
     /// Bold.
     pub bold: bool,
+    /// Dim (faint).
+    pub dim: bool,
     /// Italic.
     pub italic: bool,
     /// Underlined.
@@ -187,6 +189,17 @@ impl Layout {
             Self::Escaped { .. } => std::mem::size_of::<Self>(),
         }
     }
+    /// Byte offset of the grapheme drawn at display `column` (the line end
+    /// past the last one). Escaped long lines map to their start.
+    fn byte_at(&self, column: usize) -> usize {
+        match self {
+            Self::Unicode { tokens, end, .. } => tokens
+                .iter()
+                .find(|token| column < token.column + token.width.max(1))
+                .map_or(*end, |token| token.bytes.start),
+            Self::Escaped { range, .. } => range.start,
+        }
+    }
     fn cursor(&self, state: &EditorState, byte: usize) -> Result<(usize, usize), FrontendError> {
         match self {
             Self::Unicode { tokens, end, width } => {
@@ -336,6 +349,19 @@ pub struct Viewport {
     highlighter: Highlighter,
 }
 impl Viewport {
+    /// Document byte under a text-area cell (`row` from the top of the view,
+    /// `column` after the gutter), for mouse clicks. Rows below the document
+    /// select its last line.
+    pub fn byte_at_cell(
+        &mut self,
+        state: &EditorState,
+        row: usize,
+        column: usize,
+    ) -> Result<usize, FrontendError> {
+        let line = (self.top + row).min(state.line_count().saturating_sub(1));
+        let column = self.left + column;
+        Ok(self.line(state, line)?.byte_at(column))
+    }
     /// Syntax language detected for the document shown in this viewport.
     pub fn language(&self) -> embedide_editor::syntax::Language {
         self.highlighter.language()

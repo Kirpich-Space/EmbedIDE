@@ -9,7 +9,10 @@ use super::{
 };
 use crate::FrontendError;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
     terminal,
 };
 use embedide_core::{
@@ -106,10 +109,46 @@ const COMMANDS: &[(&str, &str)] = &[
     ("edit_user_config", "Edit User Config (config.toml)"),
     ("reload", "Reload Settings"),
     ("theme", "Cycle Theme"),
+    (
+        "mouse",
+        "Toggle Mouse (click focus/cursor, wheel scroll; Shift+drag selects text)",
+    ),
     ("help", "Keyboard Help"),
     ("close", "Close Document"),
     ("quit", "Quit Workspace"),
 ];
+/// Screen rectangle of a panel in the last frame, for mouse hit tests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Area {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+}
+impl Area {
+    fn new(x: usize, y: usize, width: usize, height: usize) -> Option<Self> {
+        let cell = |v: usize| u16::try_from(v).ok();
+        (width > 0 && height > 0).then_some(Self {
+            x: cell(x)?,
+            y: cell(y)?,
+            width: cell(width)?,
+            height: cell(height)?,
+        })
+    }
+    fn contains(self, column: u16, row: u16) -> bool {
+        (self.x..self.x.saturating_add(self.width)).contains(&column)
+            && (self.y..self.y.saturating_add(self.height)).contains(&row)
+    }
+}
+/// Where the explorer, editor text, AI panel and bottom panel were drawn.
+#[derive(Debug, Clone, Copy, Default)]
+struct Hits {
+    tree: Option<Area>,
+    editor: Option<Area>,
+    assistant: Option<Area>,
+    bottom: Option<Area>,
+}
+
 /// Current keyboard destination. Insert-mode text is never interpreted as a command name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -303,6 +342,9 @@ pub struct Workspace {
     terminal: Option<TerminalPane>,
     keyboard_enhanced: bool,
     held_panel: Option<String>,
+    /// Mouse capture requested (config `mouse` or `:mouse`).
+    pub mouse: bool,
+    hits: Hits,
     user: UserConfig,
     manifest: Option<Manifest>,
     config_notes: Vec<String>,
@@ -321,6 +363,7 @@ impl Workspace {
             return Err(service_error("Workspace must be a directory"));
         }
         let config = NativeConfig::load(&root).map_err(service_error)?;
+        let mouse = config.mouse;
         let tree = explorer::read_directory(&root, &root)
             .map_err(service_error)?
             .into_iter()
@@ -341,7 +384,8 @@ impl Workspace {
                 .clone()
         };
         let target = (!config.targets.is_empty()).then_some(0);
-        let (user, manifest, config_notes) = load_configs(&root);
+        let (user, manifest, mut config_notes) = load_configs(&root);
+        config_notes.extend(unknown_key_commands(&config));
         let profile = match &manifest {
             Some(m) if m.profiles.contains_key("debug") || m.profiles.is_empty() => "debug".into(),
             Some(m) => m
@@ -399,6 +443,8 @@ impl Workspace {
             terminal: None,
             keyboard_enhanced: false,
             held_panel: None,
+            mouse,
+            hits: Hits::default(),
             user,
             manifest,
             config_notes,
@@ -647,6 +693,13 @@ impl Workspace {
             .map_or((line, ""), |(n, a)| (n, a.trim()));
         match name {
             "e" | "edit" | "open" if !arg.is_empty() => self.open_file(Path::new(arg)),
+            "w" | "write" | "saveas" if !arg.is_empty() => self.save_as(Path::new(arg)),
+            line if !line.is_empty()
+                && line.bytes().all(|b| b.is_ascii_digit())
+                && arg.is_empty() =>
+            {
+                self.goto_line(line.parse().unwrap_or(usize::MAX))
+            }
             "e" | "edit" | "open" => self.command("open"),
             "ai" if !arg.is_empty() => {
                 self.assistant_visible = true;
@@ -660,6 +713,30 @@ impl Workspace {
                 "Unknown command :{line} (Ctrl+K lists commands; :help shows keys)"
             ))),
         }
+    }
+    /// `:w <file>` / `:saveas <file>`: write the active document to a new
+    /// file (relative to the project) and keep editing it there. An existing
+    /// file is never overwritten.
+    fn save_as(&mut self, path: &Path) -> Result<(), FrontendError> {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        self.documents[self.active].session.editor.save_as(&path)?;
+        self.notification = format!("Saved as {}", path.display());
+        let _ = self.refresh();
+        Ok(())
+    }
+    /// `:<line>`: move to a 1-based line (clamped to the last line), first column.
+    fn goto_line(&mut self, line: usize) -> Result<(), FrontendError> {
+        let editor = &mut self.documents[self.active].session.editor;
+        let count = editor.state().line_count().max(1);
+        let index = line.clamp(1, count) - 1;
+        let start = editor.state().line_range(index).map_or(0, |r| r.start);
+        editor.set_cursor(start)?;
+        self.focus = Focus::Editor;
+        Ok(())
     }
     /// Active engine, shared with all other frontends.
     pub fn editor(&self) -> &Editor {
@@ -740,17 +817,54 @@ impl Workspace {
             }
         }
     }
+    /// Re-read the tree, keeping expanded directories open and the selected
+    /// path selected. Directories that disappeared or became unreadable stay
+    /// collapsed; only a failure to read the workspace root is an error.
     fn refresh(&mut self) -> core::Result<()> {
-        self.tree = explorer::read_directory(&self.root, &self.root)?
-            .into_iter()
-            .map(|entry| TreeRow {
-                entry,
-                depth: 0,
-                expanded: false,
-            })
+        fn fill(
+            root: &Path,
+            dir: &Path,
+            depth: usize,
+            expanded: &std::collections::HashSet<PathBuf>,
+            tree: &mut Vec<TreeRow>,
+        ) -> core::Result<()> {
+            for entry in explorer::read_directory(root, dir)? {
+                let open = entry.directory && !entry.symlink && expanded.contains(&entry.path);
+                let path = entry.path.clone();
+                tree.push(TreeRow {
+                    entry,
+                    depth,
+                    expanded: false,
+                });
+                if open && tree.len() < 20000 {
+                    let at = tree.len() - 1;
+                    if fill(root, &path, depth + 1, expanded, tree).is_ok() {
+                        tree[at].expanded = true;
+                    } else {
+                        tree.truncate(at + 1);
+                    }
+                }
+            }
+            Ok(())
+        }
+        let expanded = self
+            .tree
+            .iter()
+            .filter(|row| row.expanded)
+            .map(|row| row.entry.path.clone())
             .collect();
-        self.selected = self.selected.min(self.tree.len().saturating_sub(1));
-        self.tree_top = 0;
+        let selected = self
+            .tree
+            .get(self.selected)
+            .map(|row| row.entry.path.clone());
+        let mut tree = Vec::new();
+        fill(&self.root, &self.root, 0, &expanded, &mut tree)?;
+        self.tree = tree;
+        self.selected = selected
+            .and_then(|path| self.tree.iter().position(|row| row.entry.path == path))
+            .unwrap_or(self.selected)
+            .min(self.tree.len().saturating_sub(1));
+        self.tree_top = self.tree_top.min(self.selected);
         Ok(())
     }
     fn toggle_entry(&mut self) -> Result<(), FrontendError> {
@@ -1022,6 +1136,15 @@ impl Workspace {
                 }
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
+            "mouse" => {
+                self.mouse = !self.mouse;
+                self.notification = if self.mouse {
+                    "Mouse on: click focuses and places the cursor, wheel scrolls; Shift+drag selects text"
+                } else {
+                    "Mouse off: the terminal selects and copies text as usual"
+                }
+                .into();
+            }
             "hide_explorer" | "hide_assistant" | "hide_terminal" => self.hide_panel(id),
             "assistant" => {
                 self.assistant_visible = !self.assistant_visible;
@@ -1370,11 +1493,13 @@ impl Workspace {
             "settings" => self.show_panel(Panel::Settings),
             "reload" => {
                 self.config = NativeConfig::load(&self.root).map_err(service_error)?;
+                self.mouse = self.config.mouse;
                 let (user, manifest, notes) = load_configs(&self.root);
                 self.assistant = Assistant::new(user.ai.clone());
                 self.user = user;
                 self.manifest = manifest;
                 self.config_notes = notes;
+                self.config_notes.extend(unknown_key_commands(&self.config));
                 self.select_compilers();
                 self.target = self.target.filter(|i| *i < self.config.targets.len());
                 if !self.config.profiles.contains_key(&self.profile) {
@@ -1549,6 +1674,9 @@ impl Workspace {
                 let directory = matches!(kind, InputKind::NewDirectory);
                 let path = explorer::create(&self.root, &text, directory).map_err(service_error)?;
                 self.refresh().map_err(service_error)?;
+                if let Some(index) = self.tree.iter().position(|row| row.entry.path == path) {
+                    self.selected = index;
+                }
                 if !directory {
                     self.open_file(&path)?;
                 }
@@ -1859,6 +1987,84 @@ impl Workspace {
             Some(default.into())
         }
     }
+    /// Mouse (only while `:mouse` is on): a left click focuses the panel under
+    /// it, places the editor cursor or selects an explorer row (a second click
+    /// on the selected row opens/expands it); the wheel scrolls the editor,
+    /// explorer, AI chat, output panels and terminal history by 3 lines.
+    fn mouse_event(&mut self, mouse: MouseEvent) -> Result<(), FrontendError> {
+        let (x, y) = (mouse.column, mouse.row);
+        let hits = self.hits;
+        let inside = |area: Option<Area>| area.filter(|a| a.contains(x, y));
+        let wheel = match mouse.kind {
+            MouseEventKind::ScrollUp => -3isize,
+            MouseEventKind::ScrollDown => 3,
+            MouseEventKind::Down(MouseButton::Left) => 0,
+            _ => return Ok(()),
+        };
+        if let Some(area) = inside(hits.tree) {
+            // The first row is the EXPLORER header.
+            let index = self.tree_top + usize::from(y - area.y).saturating_sub(1);
+            if wheel != 0 {
+                self.selected = self
+                    .selected
+                    .saturating_add_signed(wheel)
+                    .min(self.tree.len().saturating_sub(1));
+            } else if y > area.y && index < self.tree.len() {
+                let again = self.focus == Focus::Explorer && index == self.selected;
+                self.focus = Focus::Explorer;
+                self.selected = index;
+                if again {
+                    self.toggle_entry()?;
+                }
+            } else {
+                self.focus = Focus::Explorer;
+            }
+        } else if let Some(area) = inside(hits.editor) {
+            let doc = &mut self.documents[self.active];
+            let state = doc.session.editor.state();
+            if wheel != 0 {
+                let line = state.position()?.line.saturating_add_signed(wheel);
+                self.goto_line(line + 1)?;
+            } else {
+                let digits = state.line_count().to_string().len();
+                let width = usize::from(area.width);
+                let gutter = if width > digits + 3 { digits + 2 } else { 0 };
+                let column = usize::from(x - area.x).saturating_sub(gutter);
+                let byte = doc
+                    .viewport
+                    .byte_at_cell(state, usize::from(y - area.y), column)?;
+                doc.session.editor.set_cursor(byte)?;
+                self.focus = Focus::Editor;
+            }
+        } else if let Some(_area) = inside(hits.assistant) {
+            if wheel != 0 {
+                self.assistant.scroll(-wheel);
+            } else {
+                self.assistant_visible = true;
+                self.focus = Focus::Assistant;
+            }
+        } else if let Some(_area) = inside(hits.bottom) {
+            if self.panel == Panel::Terminal {
+                match &mut self.terminal {
+                    Some(t) if wheel != 0 => {
+                        if !t.alternate_screen() {
+                            t.scroll(-wheel);
+                        }
+                    }
+                    _ if wheel == 0 => {
+                        self.ensure_terminal()?;
+                        self.focus = Focus::Terminal;
+                    }
+                    _ => {}
+                }
+            } else if wheel != 0 {
+                self.panel_scroll = self.panel_scroll.saturating_add_signed(-wheel);
+            } else {
+                self.focus = Focus::Panel;
+            }
+        }
+        Ok(())
+    }
     /// How the focus chord for panel `digit` is typed in this terminal.
     fn panel_key(&self, digit: char) -> String {
         if self.keyboard_enhanced {
@@ -1895,8 +2101,17 @@ impl Workspace {
                         .is_some_and(|id| id.starts_with("focus_") || id.starts_with("hide_"))
                 {
                     // The shell owns the keyboard: Ctrl+C, Ctrl+D, Tab, Esc, F-keys.
+                    if let Some(t) = &mut self.terminal {
+                        if !t.alternate_screen() && scrollback_key(t, key) {
+                            return Ok(());
+                        }
+                    }
                     match &mut self.terminal {
-                        Some(t) if t.exited().is_none() => t.key(key),
+                        Some(t) if t.exited().is_none() => {
+                            // Typing returns to the live screen, like a terminal emulator.
+                            t.scroll_to_live();
+                            t.key(key);
+                        }
                         _ => {
                             if matches!(key.code, KeyCode::Enter) {
                                 self.terminal = None;
@@ -2097,6 +2312,9 @@ impl Workspace {
                     },
                 }
             }
+            Event::Mouse(mouse) if self.mouse && self.dialog.is_none() => {
+                return self.mouse_event(mouse)
+            }
             Event::Paste(text) => {
                 if let Some(Dialog::Input { text: input, .. }) = &mut self.dialog {
                     for ch in text.chars().filter(|c| !c.is_control()) {
@@ -2110,6 +2328,7 @@ impl Workspace {
                     self.after_editor_input();
                 } else if self.dialog.is_none() && self.focus == Focus::Terminal {
                     if let Some(t) = &mut self.terminal {
+                        t.scroll_to_live();
                         t.paste(&text);
                     }
                 } else if self.dialog.is_none() && self.focus == Focus::Assistant {
@@ -2514,10 +2733,17 @@ impl Workspace {
         let key = self.panel_key('3');
         let (title, mut body, cursor) = match &mut self.terminal {
             Some(t) => {
-                let state = match t.exited() {
+                let mut state = match t.exited() {
                     Some(why) => format!("shell ended ({why}); Enter restarts"),
                     None => t.shell().to_string(),
                 };
+                if t.scrolled() > 0 {
+                    let history = t.history();
+                    state.push_str(&format!(
+                        " | HISTORY {}/{history} lines up, Shift+End live",
+                        t.scrolled()
+                    ));
+                }
                 let (rows, cursor) = t.rows(width, height.saturating_sub(1));
                 (state, rows, cursor)
             }
@@ -2700,6 +2926,7 @@ impl Workspace {
     pub fn frame(&mut self) -> Result<Frame, FrontendError> {
         let width = usize::from(self.size.0.min(1024)).saturating_sub(1);
         let height = usize::from(self.size.1.min(256));
+        self.hits = Hits::default();
         if height < 6 || width < 12 {
             self.documents[self.active].size = self.size;
             let mut frame = self.documents[self.active].frame()?;
@@ -2730,8 +2957,10 @@ impl Workspace {
             .unwrap_or("host / unconfigured");
         let mut rows = vec![layout::label(
             &format!(
-                "EmbedIDE 2.0 | {} | {project} | {target} | {}",
-                self.build_status, self.profile
+                "EmbedIDE {} | {} | {project} | {target} | {}",
+                env!("CARGO_PKG_VERSION"),
+                self.build_status,
+                self.profile
             ),
             width,
             true,
@@ -2789,7 +3018,27 @@ impl Workspace {
             self.explorer_visible && self.focus == Focus::Explorer && side_width == 0;
         let overlay_ai = self.focus == Focus::Assistant && ai_width == 0;
         let mut cursor = None;
+        self.hits.bottom = Area::new(0, 2 + editor_height, width, panel_height);
         if editor_height > 0 {
+            let left = if side_width > 0 { side_width + 1 } else { 0 };
+            let right = if ai_width > 0 { ai_width + 1 } else { 0 };
+            let editor_width = width.saturating_sub(left + right);
+            self.hits = match (overlay_tree, overlay_ai) {
+                (true, _) => Hits {
+                    tree: Area::new(0, 2, width, editor_height),
+                    ..self.hits
+                },
+                (_, true) => Hits {
+                    assistant: Area::new(0, 2, width, editor_height),
+                    ..self.hits
+                },
+                _ => Hits {
+                    tree: Area::new(0, 2, side_width, editor_height),
+                    editor: Area::new(left, 2, editor_width, editor_height),
+                    assistant: Area::new(left + editor_width + 1, 2, ai_width, editor_height),
+                    ..self.hits
+                },
+            };
             if overlay_tree {
                 rows.extend(self.draw_tree(width, editor_height));
             } else if overlay_ai {
@@ -2797,9 +3046,6 @@ impl Workspace {
                 cursor = ai_cursor.map(|(x, y)| (x, y + 2));
                 rows.extend(ai);
             } else {
-                let left = if side_width > 0 { side_width + 1 } else { 0 };
-                let right = if ai_width > 0 { ai_width + 1 } else { 0 };
-                let editor_width = width.saturating_sub(left + right);
                 self.documents[self.active].size =
                     ((editor_width + 1) as u16, editor_height as u16);
                 let mut frame = self.documents[self.active].frame()?;
@@ -2928,6 +3174,29 @@ impl Workspace {
         })
     }
 }
+/// Terminal history keys. Shift+PageUp starts scrolling back (when there is
+/// history); while scrolled, Shift+PageUp/PageDown move a page, Shift+Up/Down
+/// a line, Shift+Home goes to the oldest line and Shift+End back to the live
+/// screen. On the live screen every other Shift key still reaches the shell.
+/// Returns whether the key was consumed.
+fn scrollback_key(t: &mut TerminalPane, key: KeyEvent) -> bool {
+    if key.modifiers != KeyModifiers::SHIFT {
+        return false;
+    }
+    let page = t.page().saturating_sub(1).max(1) as isize;
+    let scrolled = t.scrolled() > 0;
+    match key.code {
+        KeyCode::PageUp if scrolled || t.history() > 0 => t.scroll(page),
+        KeyCode::PageDown if scrolled => t.scroll(-page),
+        KeyCode::Up if scrolled => t.scroll(1),
+        KeyCode::Down if scrolled => t.scroll(-1),
+        KeyCode::Home if scrolled => t.scroll(isize::MAX),
+        KeyCode::End if scrolled => t.scroll_to_live(),
+        _ => return false,
+    }
+    true
+}
+
 /// Run a project workspace. Startup performs local metadata and one directory read only.
 pub fn run(root: &Path) -> Result<(), FrontendError> {
     run_with(root, None)
@@ -2948,7 +3217,7 @@ pub fn run_with(
     if let Some(file) = file {
         app.open_launch_file(file)?;
     }
-    let guard = guard::TerminalGuard::enter(true)?;
+    let mut guard = guard::TerminalGuard::enter(true)?;
     app.set_keyboard_enhanced(guard.keyboard_enhanced());
     let mut screen = Screen::default();
     let mut dirty = true;
@@ -2962,6 +3231,7 @@ pub fn run_with(
             dirty = true;
         }
         dirty |= app.tick();
+        guard.set_mouse(app.mouse)?;
         if dirty {
             screen.set_theme(match app.config.theme.as_str() {
                 "dark" => Theme::Dark,
@@ -2995,6 +3265,19 @@ pub fn run_with(
     app.terminal = None;
     app.assistant.cancel();
     Ok(())
+}
+
+/// Key bindings whose command id does not exist (a typo would otherwise
+/// leave the key silently unbound).
+fn unknown_key_commands(config: &NativeConfig) -> Vec<String> {
+    config
+        .keys
+        .iter()
+        .filter(|(id, _)| !COMMANDS.iter().any(|(command, _)| command == id))
+        .map(|(id, chord)| {
+            format!("Key binding {chord} names unknown command {id:?}; Ctrl+K lists command ids")
+        })
+        .collect()
 }
 
 /// User configuration, project manifest and any problems loading them.
@@ -3152,12 +3435,17 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
     .chain(&[
         "        F2 show/hide explorer | F4 cycle bottom panels | F6 cycle focus | Ctrl+K command palette",
         "EDITOR  Vim modes: Normal (hjkl w b e 0 $ gg G x dd yy p u Ctrl+R / ? n N v V), Insert (i a o O, Esc),",
-        "        Command (:w :q :q! :wq, plus :build :clean :cancel :e <file> :help :settings :complete :ai <question>)",
+        "        Command (:w :q :q! :wq, :<line> go to line, :w <file> / :saveas <file> save as a NEW file (never overwrites),",
+        "        plus :build :clean :cancel :e <file> :help :settings :complete :ai <question>). Search: / ? n N",
         "        Leader (Space): e explorer | b build | d debug | t terminal | s serial | f find file",
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
         "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
-        "TERMINAL Ctrl+Alt+3: your shell in a real pseudo-terminal; all keys go to it except Ctrl+Alt+1/2/3",
+        "TERMINAL Ctrl+Alt+3: your shell in a real pseudo-terminal; all keys go to it except the panel keys",
+        "        History: Shift+PageUp scrolls back; then Shift+PageUp/PageDown page, Shift+Up/Down line,",
+        "        Shift+Home oldest, Shift+End (or typing) back to live. Full-screen programs keep these keys",
+        "MOUSE   Off by default; :mouse toggles it (or \"mouse\": true in embedide.json native). Click focuses a panel,",
+        "        places the cursor, selects / opens explorer rows; the wheel scrolls. Shift+drag still selects text",
         "AI      Ctrl+Alt+2, type a message, Enter sends (only then). /file /sel /explain /edit <instr> /apply /reject",
         "        /complete or :complete shows a suggestion at the cursor: Tab accepts, Esc rejects. /help in the panel",
         "        AI is optional: without a provider the IDE works fully offline. EMBEDIDE_AI_OFFLINE=1 blocks requests",
@@ -3280,6 +3568,309 @@ mod tests {
     }
 
     #[test]
+    fn explorer_refresh_keeps_open_directories_selection_and_survives_deletions() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src/drivers")).unwrap();
+        fs::create_dir_all(dir.join("gone")).unwrap();
+        fs::write(dir.join("src/main.c"), "").unwrap();
+        fs::write(dir.join("src/drivers/uart.c"), "").unwrap();
+        fs::write(dir.join("gone/x.c"), "").unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        let root = ws.root.clone();
+        let select = |ws: &mut Workspace, rel: &str| {
+            ws.selected = ws
+                .tree
+                .iter()
+                .position(|r| r.entry.path == root.join(rel))
+                .unwrap();
+        };
+        for rel in ["gone", "src", "src/drivers"] {
+            select(&mut ws, rel);
+            ws.toggle_entry().unwrap();
+        }
+        select(&mut ws, "src/drivers/uart.c");
+        fs::remove_dir_all(dir.join("gone")).unwrap();
+        fs::write(dir.join("src/new.h"), "").unwrap();
+        ws.command("refresh").unwrap();
+        let paths: Vec<_> = ws
+            .tree
+            .iter()
+            .map(|r| {
+                r.entry
+                    .path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "src",
+                "src/drivers",
+                "src/drivers/uart.c",
+                "src/main.c",
+                "src/new.h"
+            ],
+            "expanded directories stay open; the deleted one is gone"
+        );
+        assert_eq!(
+            ws.tree[ws.selected].entry.path,
+            root.join("src/drivers/uart.c")
+        );
+        // The selected file was deleted: the selection stays in range.
+        fs::remove_dir_all(dir.join("src")).unwrap();
+        ws.command("refresh").unwrap();
+        assert!(ws.tree.is_empty() && ws.selected == 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mouse_clicks_focus_panels_place_the_cursor_and_the_wheel_scrolls() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let dir = std::env::temp_dir().join(format!("embed-ws-mouse-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let body: String = (1..=80)
+            .map(|i| format!("line {i}\tx\u{4e2d}y\n"))
+            .collect();
+        fs::write(dir.join("a.c"), &body).unwrap();
+        fs::write(dir.join("b.c"), "").unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        let click = |column, row| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let wheel = |down: bool, column, row| {
+            Event::Mouse(MouseEvent {
+                kind: if down {
+                    MouseEventKind::ScrollDown
+                } else {
+                    MouseEventKind::ScrollUp
+                },
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        ws.frame().unwrap();
+        // Off by default: clicks are ignored.
+        assert!(!ws.mouse);
+        ws.handle(click(2, 3));
+        assert_eq!(ws.selected, 0);
+        ws.command("mouse").unwrap();
+        // Explorer: row 2 is the header, row 3 = a.c, row 4 = b.c.
+        ws.handle(click(2, 4));
+        assert_eq!((ws.focus(), ws.selected), (Focus::Explorer, 1));
+        ws.handle(click(2, 3));
+        ws.handle(click(2, 3)); // second click on the selected row opens it
+        assert_eq!(
+            ws.editor().state().path(),
+            Some(ws.root.join("a.c").as_path())
+        );
+        ws.frame().unwrap();
+        let editor = ws.hits.editor.unwrap();
+        // Gutter is 2 digits + 2 cells. Line 3 "line 3<tab>x中y": column 12 is
+        // the 中 (tab stops at 4 → "line 3" 0..6, tab 6..8, x 8, 中 9..11, y 11).
+        ws.handle(click(editor.x + 4 + 10, editor.y + 2));
+        assert_eq!(ws.focus(), Focus::Editor);
+        let state = ws.editor().state();
+        let line = state.line_range(2).unwrap();
+        assert_eq!(
+            state.cursor() - line.start,
+            "line 3\tx".len(),
+            "click on 中 selects it"
+        );
+        // Wheel moves the editor three lines per notch.
+        ws.handle(wheel(true, editor.x + 5, editor.y));
+        assert_eq!(ws.editor().state().position().unwrap().line, 5);
+        ws.handle(wheel(false, editor.x + 5, editor.y));
+        assert_eq!(ws.editor().state().position().unwrap().line, 2);
+        // Clicking the bottom panel area while it shows the terminal focuses the shell.
+        ws.terminal =
+            Some(TerminalPane::spawn("/bin/sh", &dir, &BTreeMap::new(), &[], 10, 80).unwrap());
+        ws.panel = Panel::Terminal;
+        ws.panel_visible = true;
+        ws.frame().unwrap();
+        let bottom = ws.hits.bottom.unwrap();
+        ws.handle(click(bottom.x + 3, bottom.y + 2));
+        assert_eq!(ws.focus(), Focus::Terminal);
+        ws.command("mouse").unwrap();
+        assert!(!ws.mouse);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_binding_to_a_misspelled_command_is_reported_at_startup() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-badkey-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("embedide.json"),
+            r#"{"native": {"keys": {"biuld": "f12"}}}"#,
+        )
+        .unwrap();
+        let ws = Workspace::open(&dir, 120, 40).unwrap();
+        assert!(
+            ws.notification().contains("unknown command \"biuld\""),
+            "{}",
+            ws.notification()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn type_keys(ws: &mut Workspace, text: &str) {
+        for ch in text.chars() {
+            let key = match ch {
+                '\r' => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                '\x1b' => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                c => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            };
+            ws.handle(Event::Key(key));
+        }
+    }
+
+    #[test]
+    fn goto_line_and_save_as_never_overwrite_and_untitled_buffers_get_a_name() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-saveas-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("taken.c"), "keep me\n").unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.focus = Focus::Editor;
+        type_keys(&mut ws, "ione\rtwo\rthree\x1b");
+        // Untitled :w explains how to name the file; nothing is written.
+        type_keys(&mut ws, ":w\r");
+        let message = &ws.documents[ws.active].session.message;
+        assert!(message.contains(":w <file>"), "{message}");
+        type_keys(&mut ws, "\x1b"); // a failed command line stays editable; leave it
+                                    // :2 goes to line 2; :99 clamps to the last line.
+        type_keys(&mut ws, ":2\r");
+        assert_eq!(ws.editor().state().position().unwrap().line, 1);
+        type_keys(&mut ws, ":99\r");
+        assert_eq!(ws.editor().state().position().unwrap().line, 2);
+        // Save As refuses an existing file and leaves it untouched.
+        type_keys(&mut ws, ":w taken.c\r");
+        assert!(
+            ws.notification().starts_with("Error"),
+            "{}",
+            ws.notification()
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("taken.c")).unwrap(),
+            "keep me\n"
+        );
+        assert!(ws.editor().state().is_modified());
+        type_keys(&mut ws, "\x1b");
+        // A new name works; later plain :w saves there, and the language follows.
+        type_keys(&mut ws, ":saveas src.c\r");
+        assert!(
+            ws.notification().starts_with("Saved as"),
+            "{}",
+            ws.notification()
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("src.c")).unwrap(),
+            "one\ntwo\nthree"
+        );
+        assert!(!ws.editor().state().is_modified());
+        type_keys(&mut ws, "o// more\x1b:w\r");
+        assert_eq!(
+            fs::read_to_string(dir.join("src.c")).unwrap(),
+            "one\ntwo\nthree\n// more"
+        );
+        assert_eq!(language_of(ws.editor().state().path()), "c");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn wait_for(t: &mut TerminalPane, needle: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            t.poll();
+            if t.contents().contains(needle) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "missing {needle:?}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn terminal_scrollback_keeps_position_colours_and_returns_live_on_typing() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-scroll-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        let mut t = TerminalPane::spawn("/bin/sh", &dir, &BTreeMap::new(), &[], 10, 80).unwrap();
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        // No history yet: Shift+PageUp belongs to the shell.
+        assert!(!scrollback_key(&mut t, shift(KeyCode::PageUp)));
+        t.paste("i=1; while [ $i -le 60 ]; do printf '\\033[32mL%02d\\033[0m\\n' $i; i=$((i+1)); done; echo DONE\n");
+        wait_for(&mut t, "DONE");
+        assert!(t.history() >= 50, "history {}", t.history());
+        // Shift+PageUp: one page (rows - 1) back; the cursor is hidden.
+        assert!(scrollback_key(&mut t, shift(KeyCode::PageUp)));
+        assert_eq!(t.scrolled(), 9);
+        let (rows, cursor) = t.rows(80, 10);
+        assert!(cursor.is_none());
+        let first = rows[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<String>();
+        let line: String = first.trim().into();
+        assert!(line.starts_with('L'), "{line:?}");
+        // Colours survive in history.
+        assert!(rows[0].runs[0].cell.is_some_and(|c| c.fg.is_some()));
+        // New output does not move a scrolled view: it stays on the same lines.
+        let (at, before, grown) = (t.scrolled(), t.rows(80, 10).0, t.history() + 2);
+        t.paste("echo AFTER");
+        t.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while t.history() < grown {
+            assert!(std::time::Instant::now() < deadline, "no new output");
+            t.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(t.scrolled() >= at + 2, "the view follows its lines");
+        assert_eq!(t.rows(80, 10).0, before, "scrolled view is stable");
+        // Line keys, oldest, live.
+        let at = t.scrolled();
+        assert!(scrollback_key(&mut t, shift(KeyCode::Down)));
+        assert_eq!(t.scrolled(), at - 1);
+        assert!(scrollback_key(&mut t, shift(KeyCode::Home)));
+        assert_eq!(t.scrolled(), t.history());
+        assert!(scrollback_key(&mut t, shift(KeyCode::End)));
+        assert_eq!(t.scrolled(), 0);
+        // Live: Shift+End and Shift+Up go to the shell.
+        assert!(!scrollback_key(&mut t, shift(KeyCode::End)));
+        assert!(!scrollback_key(&mut t, shift(KeyCode::Up)));
+        // Through the workspace: typing while scrolled returns live and types.
+        ws.terminal = Some(t);
+        ws.focus = Focus::Terminal;
+        ws.handle(Event::Key(shift(KeyCode::PageUp)));
+        assert!(ws.terminal.as_ref().unwrap().scrolled() > 0);
+        let title = ws.draw_terminal(80, 11).0[0]
+            .runs
+            .iter()
+            .map(|r| r.text.clone())
+            .collect::<String>();
+        assert!(title.contains("HISTORY"), "{title}");
+        ws.handle(Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(ws.terminal.as_ref().unwrap().scrolled(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn legacy_terminals_switch_panels_with_alt_digit_and_honour_hide_bindings() {
         // Regression: without the kitty protocol, Ctrl+Alt+<digit> arrives as
         // ESC <digit> (crossterm: Alt+<digit>), and no key switched panels.
@@ -3292,6 +3883,7 @@ mod tests {
         )
         .unwrap();
         let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        assert!(ws.config_notes.is_empty(), "{:?}", ws.config_notes);
         ws.set_keyboard_enhanced(false);
         let alt = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
         assert_eq!(ws.focus(), Focus::Explorer, "no document: explorer first");

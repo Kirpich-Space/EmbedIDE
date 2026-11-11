@@ -48,7 +48,9 @@ impl fmt::Display for EditorError {
                 f.write_str("file changed externally; reopen or reconcile before saving")
             }
             Self::SymbolicLink => f.write_str("symbolic-link file entries are not supported"),
-            Self::NoPath => f.write_str("untitled document has no save path"),
+            Self::NoPath => {
+                f.write_str("untitled document has no file name; save it with :w <file>")
+            }
             Self::UnsavedChanges => {
                 f.write_str("unsaved changes; save first or explicitly use :q!")
             }
@@ -392,6 +394,20 @@ impl EditorState {
             .as_mut()
             .ok_or(EditorError::NoPath)?
             .save(&self.buffer)?;
+        self.buffer.mark_saved();
+        self.initial_unsaved = false;
+        Ok(report)
+    }
+    /// Write to a path that must not exist yet, then bind the document to it.
+    /// On failure the previous binding (and unsaved state) is unchanged.
+    pub(crate) fn save_as(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<crate::file::SaveReport, EditorError> {
+        self.finish_group();
+        let mut binding = FileBinding::create(path)?;
+        let report = binding.save(&self.buffer)?;
+        self.file = Some(binding);
         self.buffer.mark_saved();
         self.initial_unsaved = false;
         Ok(report)

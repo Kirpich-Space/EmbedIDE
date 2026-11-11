@@ -65,6 +65,7 @@ impl Screen {
                 for (on, attribute) in [
                     (run.selected || cell.inverse, Attribute::Reverse),
                     (cell.bold, Attribute::Bold),
+                    (cell.dim, Attribute::Dim),
                     (cell.italic, Attribute::Italic),
                     (cell.underline, Attribute::Underlined),
                 ] {

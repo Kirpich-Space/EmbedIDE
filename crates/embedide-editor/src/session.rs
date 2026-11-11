@@ -94,6 +94,14 @@ impl Editor {
         }
         self.state.save()
     }
+    /// Save to a new file (it must not exist; nothing is overwritten) and
+    /// continue editing it there. Untitled buffers are saved this way.
+    pub fn save_as(&mut self, path: &Path) -> Result<SaveReport, EditorError> {
+        if self.state.closed {
+            return Err(EditorError::Closed);
+        }
+        self.state.save_as(path)
+    }
     /// Replace a validated range through the same history portal used by Vim.
     pub fn replace(&mut self, range: Range<usize>, text: &str) -> Result<(), EditorError> {
         if self.state.closed {

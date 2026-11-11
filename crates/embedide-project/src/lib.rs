@@ -139,7 +139,7 @@ impl Project {
         }
         if metadata.is_none() && detected_build_systems.is_empty() {
             return Err(Error(format!(
-                "No embedide.json or supported build manifest in {}; run embed init",
+                "No embedide.json or supported build manifest in {}; run `embed project init` (it can adopt an existing directory without touching its files)",
                 root.display()
             )));
         }

@@ -14,7 +14,7 @@ Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, R
 `embed` opens a full-screen, keyboard-driven IDE in your terminal:
 
 ```
-┌ EmbedIDE 2.0 | build status | project | target | profile ────────────────────────────────┐
+┌ EmbedIDE 0.1.0 | build status | project | target | profile ──────────────────────────────┐
 │ EXPLORER (C-A-1) │ editor tabs, Vim modes, syntax highlighting           │ AI (C-A-2)    │
 │                  │                                                        │ chat, context │
 │                  │                                                        │ edits, review │
@@ -23,16 +23,23 @@ Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, R
 ```
 
 ```sh
-cargo build --release --locked -p embedide-cli      # → target/release/embed
-install -m 755 target/release/embed ~/.local/bin/   # or: cargo install --path crates/embedide-cli
-cd my-project && embed                              # or: embed path/to/project, embed src/main.c
+cargo install --path crates/embedide-cli --locked --root ~/.local   # → ~/.local/bin/embed
+command -v embed && embed --version                                  # → embed 0.1.0
+cd my-project && embed                     # or: embed path/to/project, embed src/main.c
 ```
+
+If your shell says `Unknown command: embed`, `~/.local/bin` is not on `PATH` (fish:
+`fish_add_path ~/.local/bin`; bash/zsh: add `export PATH="$HOME/.local/bin:$PATH"` to the rc file).
+A plain `cargo install` puts the binary in `~/.cargo/bin`, which is often not on `PATH` either.
+**New here? Read [Getting started](docs/cli/getting-started.md)** — install, a first project, keys,
+the embedded workflow and known limitations of 0.1.0.
 
 Panels: **Ctrl+Alt+1** explorer, **Ctrl+Alt+2** AI assistant, **Ctrl+Alt+3** terminal (press again to
 return to the editor); hold the digit and press Delete to hide a panel. These chords need a terminal with
 the kitty keyboard protocol; elsewhere **Alt+1/2/3** switch panels and `:hide_*` commands (or your own
 bindings) hide them — see [what terminals can report](docs/cli/tui.md#what-terminals-can-report). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
-command palette, `:help` lists every key. See [the TUI guide](docs/cli/tui.md).
+command palette, `:help` lists every key. In the integrated terminal Shift+PageUp/PageDown/Home/End
+scroll through history; `:mouse` turns on mouse support. See [the TUI guide](docs/cli/tui.md).
 
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds
@@ -59,6 +66,7 @@ embed ai providers                               # Anthropic, OpenAI, Moonshot (
 embed ai chat "Why does this hard-fault?" --file src/main.c --provider anthropic --model <id> --dry-run
 ```
 
+- [Getting started: install, first project, embedded workflow](docs/cli/getting-started.md)
 - [TUI guide: panels, keys, configuration](docs/cli/tui.md)
 - [Command reference](docs/cli/commands.md)
 - [`embedide.toml` reference](docs/cli/embedide-toml.md)

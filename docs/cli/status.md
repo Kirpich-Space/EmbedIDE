@@ -1,4 +1,4 @@
-# CLI status — verified vs. unverified (2026-11-08)
+# CLI status — verified vs. unverified (2026-11-11, `embed` 0.1.0 release candidate)
 
 Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test --workspace`,
 `crates/embedide-cli/tests/workflows.rs` (real compilers), `crates/embedide-cli/tests/ai.rs` and
@@ -22,6 +22,11 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | `embed` IDE, keyboard only through a PTY: no-argument launch, Vim editing and `:w` of real files, `:e`, `:help`, unknown `:` commands, Alt+1/2/3 focus switching, explorer navigation, narrow (80×24) and wide (120×40) layouts, status bar (mode, file, language, compiler, position) | `/bin/sh` as the user shell, no `DISPLAY`/`WAYLAND_DISPLAY`, a trap `node` first on `PATH` (never executed) |
 | Integrated terminal: real interactive shell in a PTY, commands create files, Ctrl+C / Esc / Ctrl+D reach the program | `/bin/sh` (bash 5.3), `cat -v` |
 | F5 build of an `embedide.toml` project with the configured compiler, incremental "up to date", diagnostics in PROBLEMS, Enter jumps to the reported line/column, F8 cancels a running Make build | gcc 16.2.1, make |
+| End-to-end acceptance path through a PTY on the release and the `cargo install`ed binary: create a file from the explorer, edit, `:w`, build in the integrated terminal, read the error, scroll history (Shift+PageUp/Home/End), fix via `:2`, F5 build, run the program, quit with terminal attributes unchanged | gcc 16.2.1, make; and a Cargo project (rustc error → PROBLEMS → jump → fix → F5) with cargo 1.99.1 |
+| `embed build` outside the IDE: Make, CMake, Cargo, Zig (`zig init` project), native `embedide.toml`; exit codes preserved (make: 2), compiler errors on stderr, missing command reported, missing configured toolchain names the installed alternatives | make, cmake, ninja, cargo, zig 0.17.0, gcc |
+| Integrated terminal: `sh`, `bash`, `fish` sessions, colours/bold/inverse kept, scrollback with colours, stable view while output arrives, typing returns live, full-screen program on the alternate screen keeps Shift+PageUp (`vim -u NONE`), Ctrl+C stops `yes` while it floods (IDE RSS stays bounded), Ctrl+D ends the shell and Enter restarts it, resize reaches `stty size`, no processes survive quit | bash 5.3, fish 4, vim; `less`/`htop` are not installed on this machine |
+| Mouse (opt-in `:mouse`): SGR clicks select/open explorer rows and place the editor cursor, wheel scrolls; capture is released on exit | PTY with SGR mouse sequences |
+| Editor: `:<line>`, `:w <file>`/`:saveas` (refuses to overwrite), untitled `:w` explains how to name the file, explorer refresh keeps expanded directories and the selection | unit tests on the real workspace |
 
 ## Verified only with mocks / fakes
 
@@ -57,7 +62,11 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 - Credentials are stored in a 0600 file, not in the OS keychain.
 - The Electron app (`electron/`, `src/`) is deprecated. The only change: its serial service now looks for
   the `embed` binary (the CLI was renamed from `embedide`).
-- Terminal panel: text only (colours and attributes of the shell are not rendered), no scrollback
-  navigation, one shell session; no mouse support anywhere in the TUI.
+- Terminal panel: one shell session; 5000 lines of history; programs cannot receive mouse events
+  (the IDE's mouse mode is for the IDE itself); the history of a full-screen program is its own.
+- Mouse is off by default; while it is on, selecting text in the outer terminal usually needs
+  Shift+drag. No drag selection inside the editor.
+- Real terminal emulators (kitty, foot, xterm, VTE, tmux) were not driven by hand in this session; the
+  PTY driver sends their documented byte sequences.
 - Ghost text shows the first line of a multi-line suggestion plus a line count; Tab inserts all of it.
 - Builds use files on disk: modified buffers must be saved before F5.

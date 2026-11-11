@@ -144,6 +144,10 @@ pub struct NativeConfig {
     pub tasks: BTreeMap<String, TaskConfig>,
     /// Global command bindings; documented command IDs mapped to F1..F12, ctrl+letter or alt+digit.
     pub keys: BTreeMap<String, String>,
+    /// Capture the mouse in the IDE (click to focus/place the cursor, wheel to
+    /// scroll). Off by default: while captured, the terminal's own text
+    /// selection usually needs Shift+drag.
+    pub mouse: bool,
 }
 impl Default for NativeConfig {
     fn default() -> Self {
@@ -172,6 +176,7 @@ impl Default for NativeConfig {
             debug: DebugConfig::default(),
             tasks: BTreeMap::new(),
             keys: BTreeMap::new(),
+            mouse: false,
         }
     }
 }

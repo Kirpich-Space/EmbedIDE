@@ -2,8 +2,8 @@
 use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
-        DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     style::{Attribute, SetAttribute},
@@ -21,6 +21,7 @@ pub(super) struct TerminalGuard {
     raw: bool,
     screen: bool,
     keyboard: bool,
+    mouse: bool,
     interrupted: Arc<AtomicBool>,
     resized: Arc<AtomicBool>,
     #[cfg(unix)]
@@ -36,6 +37,7 @@ impl TerminalGuard {
             raw: false,
             screen: false,
             keyboard: false,
+            mouse: false,
             interrupted: Arc::new(AtomicBool::new(false)),
             resized: Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]
@@ -82,6 +84,18 @@ impl TerminalGuard {
         }
         Ok(guard)
     }
+    /// Capture (or release) mouse events; released again on drop.
+    pub fn set_mouse(&mut self, on: bool) -> io::Result<()> {
+        if on != self.mouse {
+            if on {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+            self.mouse = on;
+        }
+        Ok(())
+    }
     /// Whether the kitty keyboard protocol (with event types) is active.
     pub fn keyboard_enhanced(&self) -> bool {
         self.keyboard
@@ -95,6 +109,9 @@ impl TerminalGuard {
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.mouse {
+            let _ = execute!(io::stdout(), DisableMouseCapture);
+        }
         if self.keyboard {
             let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         }

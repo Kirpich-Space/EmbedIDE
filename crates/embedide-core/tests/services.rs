@@ -97,6 +97,38 @@ fn configuration_preserves_unknown_project_fields_and_layers_local_settings() {
     assert!(NativeConfig::load(&f.0).is_err());
 }
 #[test]
+fn missing_configuration_uses_defaults_and_key_bindings_are_validated() {
+    let f = Fixture::new();
+    let config = NativeConfig::load(&f.0).unwrap();
+    assert_eq!((config.theme.as_str(), config.tab_width), ("mono", 4));
+    assert!(!config.mouse && config.keys.is_empty());
+    f.write(
+        "embedide.local.json",
+        r#"{"mouse":true,"keys":{"hide_terminal":"alt+6","build":"F12","palette":"ctrl+alt+7","quit":"Ctrl+Q"}}"#,
+    );
+    let config = NativeConfig::load(&f.0).unwrap();
+    assert!(config.mouse);
+    assert_eq!(config.keys["build"], "F12");
+    for bad in [
+        r#"{"keys":{"build":"f13"}}"#,
+        r#"{"keys":{"build":"ctrl+1"}}"#,
+        r#"{"keys":{"build":"alt+x"}}"#,
+        r#"{"keys":{"build":"shift+f1"}}"#,
+        r#"{"keys":{"build":"f5","check":"F5"}}"#,
+        r#"{"mouse":"yes"}"#,
+    ] {
+        f.write("embedide.local.json", bad);
+        let error = NativeConfig::load(&f.0).err().map(|e| e.to_string());
+        assert!(error.is_some(), "{bad} was accepted");
+    }
+    f.write(
+        "embedide.local.json",
+        r#"{"keys":{"build":"f5","check":"F5"}}"#,
+    );
+    let error = NativeConfig::load(&f.0).err().unwrap().to_string();
+    assert!(error.contains("unique"), "{error}");
+}
+#[test]
 fn cargo_and_cmake_profiles_keep_arguments_separate_and_do_not_execute() {
     let f = Fixture::new();
     f.write("Cargo.toml", "[package]\nname='test'\nversion='0.1.0'\n");
@@ -439,4 +471,36 @@ time.sleep(1)
     };
     let monitor = SerialMonitor::connect(&config).unwrap();
     assert!(monitor.send("not allowed").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn serial_open_failures_explain_permissions_and_missing_devices() {
+    use embedide_core::hardware::SerialMonitor;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("embed-serial-perm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = SerialConfig {
+        port: dir.join("ttyNOPE").display().to_string(),
+        ..SerialConfig::default()
+    };
+    let error = SerialMonitor::connect(&missing).err().unwrap().to_string();
+    assert!(error.contains("no such device"), "{error}");
+    // A device node the user may not open (skipped as root, who bypasses modes).
+    let locked = dir.join("ttyLOCKED");
+    std::fs::write(&locked, "").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&locked).is_err() {
+        let config = SerialConfig {
+            port: locked.display().to_string(),
+            ..SerialConfig::default()
+        };
+        let error = SerialMonitor::connect(&config).err().unwrap().to_string();
+        assert!(
+            error.contains("permission denied") && error.contains("ls -l"),
+            "{error}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

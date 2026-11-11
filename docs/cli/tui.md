@@ -6,7 +6,7 @@ directory when the file is inside it). A missing file in an existing directory b
 is written only on `:w`. Subcommand names win over same-named files: use `embed ./build`. It needs an interactive terminal (`TERM` other than `dumb`); no GUI, Electron or Node.js.
 
 ```
-EmbedIDE 2.0 | Ready | project | target | profile              ← build status, project, target, profile
+EmbedIDE 0.1.0 | Ready | project | target | profile            ← build status, project, target, profile
 >main.c  uart.c*                                                ← open documents (* = unsaved)
 EXPLORER │ editor (Vim modes)                    │ AI · provider/model · state
 > src    │  1 int main(void) {                   │ you: …
@@ -81,13 +81,32 @@ shell; only the panel keys (Ctrl+Alt+1/2/3, Alt+1/2/3 without the kitty protocol
 to `hide_*` commands are taken by the IDE. Colours and attributes (bold, underline, inverse) of the
 program's output are kept. Paste is forwarded as bracketed paste when the program asks for it. When the shell exits, Enter starts a new one; `:terminal_restart` restarts it.
 
+**Terminal history** (5000 lines, colours kept):
+
+| Key | Action |
+|---|---|
+| Shift+PageUp | Start scrolling back (when there is history); then one page further back |
+| Shift+PageDown | One page forward |
+| Shift+Up / Shift+Down | One line back / forward |
+| Shift+Home / Shift+End | Oldest line / back to the live screen |
+| Any other key, or paste | Back to the live screen, and the key goes to the shell |
+
+While scrolled back the title shows `HISTORY n/m lines up` and new output does not move the view. On
+the live screen only Shift+PageUp is taken (Shift+Up/Down/Home/End still reach the shell). Full-screen
+programs (`less`, `vim`, `htop` — the alternate screen) have no history of their own here; these keys go
+to the program. If your terminal emulator keeps Shift+PageUp for its own scrollback (the
+key then never reaches `embed`), turn on `:mouse` and use the wheel.
+
+A program that floods output (`yes`) cannot freeze the IDE or grow its memory: output is applied in
+bounded slices between frames, and the reader waits for the screen instead of buffering without limit.
+
 **Editor** (Vim/Kenit modal editing, shared engine `embedide-editor`):
 
 | Mode | Keys |
 |---|---|
 | Normal | `h j k l`, `w b e`, `0 $`, `gg G`, counts, `x`, `dd`, `yy`, `p`, `u`, Ctrl+R, `/ ? n N`, `v` / `V` |
 | Insert | `i a o O` enter, Esc leaves |
-| Command | `:w`, `:q`, `:q!`, `:wq`, and IDE commands (below) |
+| Command | `:w`, `:q`, `:q!`, `:wq`, `:<line>` (go to line, clamped), `:w <file>` / `:saveas <file>` (save as a **new** file — an existing file is never overwritten; this is also how an untitled buffer is saved), and IDE commands (below) |
 | Leader (Space) | `e` explorer · `b` build · `d` debug · `t` terminal · `s` serial · `f` find file |
 
 IDE commands in Command mode: `:build`, `:clean`, `:cancel`, `:e <file>` (also `:edit`, `:open`),
@@ -96,14 +115,29 @@ IDE commands in Command mode: `:build`, `:clean`, `:cancel`, `:e <file>` (also `
 other palette command id. Unknown commands report an error and change nothing.
 
 **Explorer:** `j`/`k` or arrows, Enter/Right open or expand, Left collapse, `n` new file, Delete
-delete (empty directories only, confirmed), `r` refresh, `/` find, Esc editor.
+delete (files and empty directories, always confirmed with `y`; open documents must be closed first),
+`r` refresh (expanded directories and the selection are kept), `/` find, Esc editor. Ctrl+K also has
+**Create Directory** and **Rename**. Files changed or deleted on disk are never overwritten by a save:
+the save fails with an error and the buffer stays.
 
 **Bottom panels:** `j`/`k`, PgUp/PgDn, End follows output, `/` filters, Tab next panel, Enter in
 Problems jumps to the file, line and column, Esc editor.
 
+**Mouse** (off by default, because capturing the mouse takes text selection away from your terminal):
+`:mouse` toggles it for the session, `"mouse": true` in `embedide.json` → `native` turns it on at start.
+A click focuses the panel under it, places the editor cursor, selects an explorer row (a second click
+opens or expands it); the wheel scrolls the editor, explorer, AI chat, output panels and terminal
+history. With the mouse on, most terminals still select text with Shift+drag.
+
 Global bindings can be changed per project in `embedide.json` → `native.keys`
-(`{"build": "f12", "focus_terminal": "alt+9"}`; F1–F12, `ctrl+a`–`ctrl+z`, `alt+0`–`alt+9`). The table
-lives in one place (`Workspace::shortcut`); Vim keys stay in the editor's `Keymap`.
+(`{"build": "f12", "focus_terminal": "alt+9"}`; F1–F12, `ctrl+a`–`ctrl+z`, `alt+0`–`alt+9`,
+`ctrl+alt+0`–`ctrl+alt+9`). Invalid or duplicate chords are configuration errors; a binding to an
+unknown command id is reported at startup (`:settings`). The table lives in one place
+(`Workspace::shortcut`); Vim keys stay in the editor's `Keymap`.
+
+**Keys that work in every xterm-compatible terminal** (no kitty protocol needed): Alt+1/2/3, F1–F12,
+Ctrl+letter, Shift+PageUp/PageDown/Home/End/Up/Down, arrows, Esc, Enter, Tab, Backspace, Delete,
+bracketed paste. Ctrl+Alt+digit and the held-digit hide chords need the kitty keyboard protocol.
 
 ## Build and diagnostics
 

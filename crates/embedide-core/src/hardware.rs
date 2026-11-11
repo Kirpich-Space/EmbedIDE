@@ -184,6 +184,22 @@ pub struct SerialMonitor {
     config: SerialConfig,
     worker: Option<JoinHandle<()>>,
 }
+/// Explain a failed open with the next step for the common causes.
+fn open_error(port: &str, error: &serialport::Error) -> String {
+    let hint = match error.kind() {
+        serialport::ErrorKind::Io(std::io::ErrorKind::PermissionDenied) => format!(
+            "permission denied: your user needs read/write access to the device; `ls -l {port}` \
+             shows its group (often dialout or uucp), add yourself to it and log in again"
+        ),
+        serialport::ErrorKind::NoDevice
+        | serialport::ErrorKind::Io(std::io::ErrorKind::NotFound) => {
+            "no such device: check the cable and pick a port from `ports` (Ctrl+K)".into()
+        }
+        _ => "check device availability and OS permissions".into(),
+    };
+    format!("Cannot open serial {port}: {error}; {hint}")
+}
+
 impl SerialMonitor {
     /// Open a configured port. Does not change OS permissions or reconnect silently.
     pub fn connect(config: &SerialConfig) -> Result<Self> {
@@ -212,12 +228,7 @@ impl SerialMonitor {
             })
             .timeout(Duration::from_millis(30))
             .open()
-            .map_err(|e| {
-                Error(format!(
-                    "Cannot open serial {}: {e}; check device availability and OS permissions",
-                    config.port
-                ))
-            })?;
+            .map_err(|e| Error(open_error(&config.port, &e)))?;
         let (tx, events) = mpsc::sync_channel(128);
         let (failure_tx, failure) = mpsc::sync_channel(1);
         let (outgoing, rx) = mpsc::sync_channel::<Vec<u8>>(32);

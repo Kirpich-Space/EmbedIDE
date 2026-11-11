@@ -1,3 +1,55 @@
+# Changelog
+
+## `embed` 0.1.0 — release candidate (unreleased, not published)
+
+First release of the Rust terminal IDE (`crates/`, binary `embed`). Entries numbered 2.x further
+below belong to the deprecated Electron desktop application.
+
+### Added
+- Full-screen keyboard IDE: `embed`, `embed <directory>`, `embed <file>` (a missing file in an
+  existing directory becomes a buffer written on the first `:w`).
+- Editor on the shared `embedide-editor` engine: Vim modes, counts, registers, Visual mode, search,
+  undo/redo, Unicode/wide characters/tabs, line numbers, staged saves that never overwrite a file
+  changed on disk, `:<line>`, `:w <file>` / `:saveas <file>` (new files only), unsaved-change guards
+  on close and quit.
+- Syntax highlighting for C, C++, Rust, Zig, assembly (GNU as/NASM, x86/ARM/RISC-V registers),
+  Fortran, shell, Python, JavaScript/TypeScript, TOML and JSON; detection by extension, file name and
+  shebang.
+- Explorer: lazy tree, open/expand/collapse, create file/directory, rename, confirmed delete, refresh
+  that keeps expanded directories and the selection, Ctrl+P file finder.
+- Integrated terminal: the user's shell in a real PTY (`portable-pty` + `vt100` 0.16), colours and
+  text attributes, terminal status-query replies (fish 4), resize, Ctrl+C/Ctrl+D, restart, process-
+  group hang-up on exit, **5000-line scrollback** (Shift+PageUp/PageDown/Up/Down/Home/End; the view
+  stays put while output arrives), bounded output buffering so flooding programs cannot freeze the UI.
+- Builds: Make, CMake, Cargo, Zig and native `embedide.toml` projects with the compilers you select;
+  F5/F7/F8, BUILD OUTPUT, PROBLEMS with jump to file:line:column, named tasks.
+- Embedded: toolchain inventory (`embed doctor`, `embed toolchain`), Cortex-M templates, serial monitor
+  with port/baud selection, probe-rs flashing and GDB/MI (+ OpenOCD) debugging behind explicit
+  confirmations that show the exact command.
+- Panels: Ctrl+Alt+1/2/3 with the kitty keyboard protocol (held digit + Delete hides a panel),
+  Alt+1/2/3 in other terminals, configurable bindings (`native.keys`).
+- Opt-in mouse support (`:mouse`, `native.mouse`): click to focus/place the cursor/open explorer rows,
+  wheel scrolling.
+- Optional AI assistant (Anthropic, OpenAI, Moonshot, xAI); nothing is sent without an explicit action.
+
+### Fixed (during release preparation)
+- `vt100` 0.15 panicked when scrolling back more than one screen; upgraded to 0.16.2.
+- A flooding program could grow memory without bound and stall the UI (unbounded PTY channel).
+- Explorer refresh collapsed every directory and lost the selection.
+- Untitled buffers could not be saved; the error now explains `:w <file>`.
+- The status bar said "EmbedIDE 2.0" while the binary is 0.1.0.
+- Serial open errors now say what to do about missing devices and permissions.
+- Key bindings to unknown command ids were silently ignored; they are reported at startup.
+
+### Known limitations
+- Verified on Linux x86_64 only; Windows and macOS are untested.
+- No real hardware (probes, boards, USB serial) and no real AI provider were used in testing.
+- See `docs/cli/status.md` and `docs/cli/getting-started.md`.
+
+---
+
+# Deprecated Electron desktop application
+
 ## 2.6.2 — 2026-08-11
 
 ### Fixed

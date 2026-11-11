@@ -18,7 +18,18 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
+    time::{Duration, Instant},
 };
+
+/// Lines of history kept for scrollback.
+pub const SCROLLBACK_LINES: usize = 5000;
+/// Output chunks buffered between the PTY reader and the screen model. When
+/// full, the reader blocks, so a flooding program is slowed by the PTY
+/// instead of growing memory without bound.
+const PENDING_CHUNKS: usize = 64;
+/// Longest a single `poll` spends feeding output, so the UI keeps drawing
+/// and reading keys (Ctrl+C) while a program floods the terminal.
+const POLL_BUDGET: Duration = Duration::from_millis(30);
 
 /// One shell session.
 pub struct TerminalPane {
@@ -90,7 +101,7 @@ impl TerminalPane {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(io_err)?;
         let writer = pair.master.take_writer().map_err(io_err)?;
-        let (tx, output) = mpsc::channel();
+        let (tx, output) = mpsc::sync_channel(PENDING_CHUNKS);
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -105,7 +116,7 @@ impl TerminalPane {
             }
         });
         Ok(Self {
-            parser: vt100::Parser::new(rows, cols, 2000),
+            parser: vt100::Parser::new(rows, cols, SCROLLBACK_LINES),
             master: pair.master,
             writer,
             child,
@@ -125,7 +136,12 @@ impl TerminalPane {
     /// Feed pending output to the screen model. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        let started = Instant::now();
         loop {
+            if changed && started.elapsed() >= POLL_BUDGET {
+                // More output is waiting; the next frame continues.
+                return true;
+            }
             match self.output.try_recv() {
                 Ok(bytes) => {
                     self.process(&bytes);
@@ -160,6 +176,8 @@ impl TerminalPane {
     }
 
     /// Feed shell output to the screen model, answering status queries in order.
+    /// A scrolled-back view stays on the same history lines (vt100 moves the
+    /// offset as new lines arrive).
     fn process(&mut self, mut bytes: &[u8]) {
         while let Some((end, query)) = self.replies.scan(bytes) {
             self.parser.process(&bytes[..end]);
@@ -168,6 +186,43 @@ impl TerminalPane {
             bytes = &bytes[end..];
         }
         self.parser.process(bytes);
+    }
+
+    /// Lines the view is scrolled back from the live screen (0 = live).
+    pub fn scrolled(&self) -> usize {
+        self.parser.screen().scrollback()
+    }
+
+    /// Lines of history above the live screen.
+    pub fn history(&mut self) -> usize {
+        let current = self.scrolled();
+        self.parser.screen_mut().set_scrollback(usize::MAX);
+        let total = self.scrolled();
+        self.parser.screen_mut().set_scrollback(current);
+        total
+    }
+
+    /// Scroll the view `delta` lines back (positive) or forward (negative),
+    /// clamped to the history. Full-screen programs (alternate screen) have
+    /// no history: there the keys belong to the program.
+    pub fn scroll(&mut self, delta: isize) {
+        let target = self.scrolled().saturating_add_signed(delta);
+        self.parser.screen_mut().set_scrollback(target);
+    }
+
+    /// Return to the live screen.
+    pub fn scroll_to_live(&mut self) {
+        self.parser.screen_mut().set_scrollback(0);
+    }
+
+    /// A full-screen program (less, htop, vim) owns the screen.
+    pub fn alternate_screen(&self) -> bool {
+        self.parser.screen().alternate_screen()
+    }
+
+    /// Visible rows of the panel body.
+    pub fn page(&self) -> usize {
+        usize::from(self.size.0)
     }
 
     /// Why the shell ended, if it did.
@@ -182,7 +237,7 @@ impl TerminalPane {
             return;
         }
         self.size = (rows, cols);
-        self.parser.set_size(rows, cols);
+        self.parser.screen_mut().set_size(rows, cols);
         let _ = self.master.resize(PtySize {
             rows,
             cols,
@@ -226,7 +281,7 @@ impl TerminalPane {
             .map(|row| screen_row(screen, row, width as u16))
             .collect();
         rows.resize_with(height, Row::default);
-        let cursor = (!screen.hide_cursor()).then(|| {
+        let cursor = (!screen.hide_cursor() && screen.scrollback() == 0).then(|| {
             let (r, c) = screen.cursor_position();
             (c, r)
         });
@@ -267,6 +322,7 @@ pub fn screen_row(screen: &vt100::Screen, row: u16, width: u16) -> Row {
             fg: color(cell.fgcolor()),
             bg: color(cell.bgcolor()),
             bold: cell.bold(),
+            dim: cell.dim(),
             italic: cell.italic(),
             underline: cell.underline(),
             inverse: cell.inverse(),

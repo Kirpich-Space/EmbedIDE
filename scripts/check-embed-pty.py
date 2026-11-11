@@ -226,7 +226,7 @@ class EmbedContracts(unittest.TestCase):
     def ide(self, size=(40, 120), args=(), keyboard="kitty", cwd=None):
         ide = Ide(cwd or self.root, self.env, size, args, keyboard)
         self.addCleanup(ide.close)
-        ide.until(b"EmbedIDE 2.0")
+        ide.until(b"EmbedIDE 0.")
         if keyboard == "kitty":
             self.assertIn(KITTY_PUSH, ide.output, "kitty keyboard flags were not requested")
         else:
@@ -409,6 +409,32 @@ class EmbedContracts(unittest.TestCase):
         self.quit(ide)
         self.assertEqual((self.root / "src" / "main.c").read_text(), before)
 
+    def test_mouse_is_opt_in_and_clicks_open_files(self):
+        (self.root / "clicked.c").write_text("int clicked;\n")
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.until(b"\x1b[49mNORMAL | [untitled]")
+        self.assertNotIn(b"\x1b[?1000h", ide.output, "mouse must be off by default")
+        ide.type(":mouse\r")
+        ide.until(b"\x1b[?1000h")
+        ide.until(b"Mouse on")
+        # SGR mouse, 1-based: row 4 is the first explorer entry (src/), row 5
+        # clicked.c. A click selects; a second click opens.
+        ide.keys(b"\x1b[<0;3;5M", b"\x1b[<0;3;5m")
+        ide.until(b"> EXPLORER")
+        ide.keys(b"\x1b[<0;3;5M", b"\x1b[<0;3;5m")
+        ide.until(b"NORMAL | clicked.c")
+        # Wheel over the editor and a click in it keep working with the keyboard.
+        ide.keys(b"\x1b[<65;40;6M", b"\x1b[<0;40;3M")
+        ide.type("ix")
+        ide.keys(ide.esc)
+        ide.until(b"clicked.c [+]")
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        self.quit(ide)
+        self.assertEqual((self.root / "clicked.c").read_text(), "int clickedx;\n")
+        self.assertIn(b"\x1b[?1000l", ide.output, "mouse capture was not released")
+
     def test_ide_works_offline_without_ai_configuration(self):
         self.env["EMBEDIDE_AI_OFFLINE"] = "1"
         ide = self.ide()
@@ -553,6 +579,175 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(b"exit\r")
         ide.until(b"shell ended")
         ide.panel("3")
+        self.quit(ide)
+
+    def test_terminal_scrollback_with_shift_page_keys(self):
+        self.env["SHELL"] = "/bin/sh"
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("3")
+        ide.until(b"> TERMINAL | /bin/sh")
+        ide.type("seq -f 'ROW_%03g' 1 120; echo SEQ_DONE\r")
+        ide.until(b"SEQ_DONE")
+        ide.pump(0.3)
+        ide.keys(b"\x1b[5;2~")                      # Shift+PageUp
+        ide.latest(rb"HISTORY \d+/\d+ lines up")
+        ide.keys(b"\x1b[1;2H")                      # Shift+Home: oldest line
+        ide.until(b"ROW_001")
+        ide.keys(b"\x1b[6;2~", b"\x1b[1;2B")         # Shift+PageDown, Shift+Down
+        ide.latest(rb"HISTORY \d+/\d+ lines up")
+        ide.keys(b"\x1b[1;2F")                      # Shift+End: live screen again
+        ide.until(b"/bin/sh | keys go to the shell")
+        # Typing while scrolled back returns to the live screen and reaches the shell.
+        ide.keys(b"\x1b[5;2~")
+        ide.latest(rb"HISTORY")
+        ide.type("printf 'BACK_%s\\n' LIVE\r")
+        ide.until(b"BACK_LIVE")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.panel("3")
+        self.quit(ide)
+
+    def test_full_screen_programs_ctrl_d_and_shell_restart(self):
+        pager = "less" if shutil.which("less") else "vim" if shutil.which("vim") else None
+        if not pager:
+            self.skipTest("neither less nor vim installed")
+        self.env["SHELL"] = "/bin/sh"
+        self.env["LESS"] = ""
+        (self.root / "pages.txt").write_text("".join(f"PAGE_{i:03}\n" for i in range(1, 501)))
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("3")
+        ide.until(b"> TERMINAL | /bin/sh")
+        # Many lines of history first, so Shift+PageUp would scroll if it were taken.
+        ide.type("seq -f 'HIST_%03g' 1 100\r")
+        ide.until(b"HIST_100")
+        ide.type("less pages.txt\r" if pager == "less" else "vim -u NONE -N -n pages.txt\r")
+        ide.until(b"PAGE_001")
+        # The program owns the alternate screen: Shift+PageUp is its key, not history.
+        ide.keys(b"\x1b[5;2~")
+        ide.pump(0.3)
+        self.assertNotIn(b"HISTORY", ide.output[ide.offset:])
+        ide.type("G")
+        ide.until(b"PAGE_500")
+        ide.type("q" if pager == "less" else ":q!\r")
+        ide.pump(1.0)  # let the program restore the screen before the shell reads input
+        ide.type("printf 'LESS_%s\\n' QUIT\r")
+        ide.until(b"LESS_QUIT")
+        # Ctrl+D ends the shell; Enter starts a new one in the same panel.
+        ide.keys(ide.ctrl("d"))
+        ide.until(b"shell ended (exit 0); Enter restarts")
+        ide.keys(b"\r")
+        ide.type("printf 'NEW_%s\\n' SHELL\r")
+        ide.until(b"NEW_SHELL")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.panel("3")
+        self.quit(ide)
+
+    def test_flooding_program_keeps_ide_responsive_and_memory_bounded(self):
+        self.env["SHELL"] = "/bin/sh"
+        ide = self.ide()
+        ide.keys(ide.esc)
+        ide.panel("3")
+        ide.until(b"> TERMINAL | /bin/sh")
+        ide.type("yes EMBED_FLOOD_LINE\r")
+        ide.until(b"EMBED_FLOOD_LINE")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            ide.pump(0.1)
+            del ide.output[:-200000]                  # the driver keeps only the tail
+            ide.offset = 0
+        rss = int(re.search(rb"VmRSS:\s+(\d+)", Path(f"/proc/{ide.process.pid}/status").read_bytes()).group(1))
+        self.assertLess(rss, 200 * 1024, f"RSS {rss} KiB while flooding")
+        started = time.monotonic()
+        ide.keys(ide.ctrl("c"))
+        ide.type("printf 'FLOOD_%s\\n' STOPPED\r")
+        ide.until(b"FLOOD_STOPPED", timeout=15)
+        self.assertLess(time.monotonic() - started, 10, "Ctrl+C was not delivered promptly")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.panel("3")
+        self.quit(ide)
+
+    def test_release_smoke_workflow_c_project(self):
+        """v0.1.0 acceptance path: create, edit, save, build in the terminal and
+        with F5, read errors, scroll history, fix, rebuild, run, quit."""
+        if not (shutil.which("gcc") and shutil.which("make")):
+            self.skipTest("gcc and make are required")
+        project = self.root / "blink"
+        project.mkdir()
+        (project / "Makefile").write_text("hello: main.c\n\tgcc -Wall -o hello main.c\n")
+        self.env["SHELL"] = "/bin/sh"
+        ide = self.ide(cwd=project)
+        ide.until(b"> EXPLORER")
+        # 1-3. create a source file from the explorer
+        ide.type("n")
+        ide.until(b"Create file")
+        ide.type("main.c\r")
+        ide.until(b"NORMAL | main.c")
+        # 4-5. edit (with a deliberate error) and save
+        ide.type('i#include <stdio.h>\rint main(void) { puts("SMOKE_OK"); return 0 }')
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        # 6-8. integrated terminal: build, read the compiler error
+        ide.panel("3")
+        ide.until(b"> TERMINAL")
+        ide.type("seq -f 'FILL_%03g' 1 60; make\r")
+        ide.until(b"hello] Error 1")              # gcc colours "error:", make does not
+        # 9. scroll through history to the start of the output and back
+        ide.keys(b"\x1b[5;2~", b"\x1b[1;2H")         # Shift+PageUp, Shift+Home
+        ide.until(b"FILL_001")
+        ide.keys(b"\x1b[1;2F")
+        ide.until(b"keys go to the shell")
+        # 10. back to the editor, fix line 2, save, build with F5 in the IDE
+        ide.panel("3")
+        ide.until(b"\x1b[49mNORMAL | main.c")
+        ide.type(":2\r$i;")
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        ide.keys(F5)
+        ide.until(b"Finished: exit=Some(0)")
+        # run the program in the same shell session
+        ide.panel("3")
+        ide.until(b"> TERMINAL")
+        ide.type("./hello; echo RC_$?\r")
+        ide.until(b"SMOKE_OK")
+        ide.until(b"RC_0")
+        ide.keys(b"exit\r")
+        ide.until(b"shell ended")
+        ide.panel("3")
+        # 11-12. quit; quit() checks exit 0, screen/cursor restore, kitty pop,
+        # and finish() checks the terminal attributes are unchanged.
+        self.quit(ide)
+        self.assertIn('puts("SMOKE_OK"); return 0 ;}', (project / "main.c").read_text())
+
+    def test_release_smoke_workflow_rust_project(self):
+        if not shutil.which("cargo"):
+            self.skipTest("cargo not installed")
+        project = self.root / "rusty"
+        (project / "src").mkdir(parents=True)
+        (project / "Cargo.toml").write_text('[package]\nname = "rusty"\nversion = "0.1.0"\nedition = "2021"\n\n[workspace]\n')
+        (project / "src" / "main.rs").write_text('fn main() {\n    let x: u32 = "no";\n    println!("{x}");\n}\n')
+        ide = self.ide(cwd=project)
+        self.open_file(ide, "src/main.rs")
+        ide.until(b"| rust |")
+        ide.keys(F5)
+        ide.until(b"Failed / cancelled", timeout=120)
+        ide.keys(F3)
+        ide.until(b"PROBLEMS")
+        ide.keys(b"\r")
+        ide.until(b"Ln 2, Col")          # rustc: mismatched types on line 2
+        ide.keys(ide.esc)
+        ide.type(":2\rdd")
+        ide.type('Olet x: u32 = 7;')
+        ide.keys(ide.esc)
+        ide.type(":w\r")
+        ide.until(b"Saved")
+        ide.keys(F5)
+        ide.until(b"Finished: exit=Some(0)", timeout=120)
         self.quit(ide)
 
     # --- Panel chords ---------------------------------------------------------

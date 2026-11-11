@@ -36,7 +36,7 @@ class WorkspaceContracts(unittest.TestCase):
     def terminal(self):
         terminal = driver.Terminal(self.root, line=False, workspace=True)
         self.addCleanup(terminal.close)
-        terminal.until(b"EmbedIDE 2.0")
+        terminal.until(b"EmbedIDE 0.")
         return terminal
 
     def command(self, terminal, query):
@@ -168,7 +168,7 @@ def measure(binary):
             start = time.perf_counter_ns()
             terminal = driver.Terminal(root, line=False, workspace=True)
             try:
-                terminal.until(b"EmbedIDE 2.0")
+                terminal.until(b"EmbedIDE 0.")
                 samples.append((time.perf_counter_ns() - start) / 1e6)
                 terminal.send(b"\x11")
                 assert terminal.finish() == 0
@@ -176,7 +176,7 @@ def measure(binary):
                 terminal.close()
         terminal = driver.Terminal(root, line=False, workspace=True)
         try:
-            terminal.until(b"EmbedIDE 2.0")
+            terminal.until(b"EmbedIDE 0.")
             proc = Path(f"/proc/{terminal.process.pid}")
             before = proc.joinpath("stat").read_text().split()
             time.sleep(0.5)
