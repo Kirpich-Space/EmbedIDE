@@ -96,6 +96,32 @@ impl Default for IndentConfig {
         }
     }
 }
+/// HEX viewer / editor and disassembly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BinaryConfig {
+    /// Bytes per hex row: 8, 16 or 32.
+    pub bytes_per_row: usize,
+    /// Allow the explicit edit mode (`i`); false keeps every binary read-only.
+    pub allow_edit: bool,
+    /// x86 disassembly syntax: att or intel.
+    pub disasm_syntax: String,
+    /// GNU objdump to use (default: `objdump` on PATH).
+    pub objdump: Option<String>,
+    /// llvm-objdump to use for non-x86 binaries (default: on PATH).
+    pub llvm_objdump: Option<String>,
+}
+impl Default for BinaryConfig {
+    fn default() -> Self {
+        Self {
+            bytes_per_row: 16,
+            allow_edit: true,
+            disasm_syntax: "att".into(),
+            objdump: None,
+            llvm_objdump: None,
+        }
+    }
+}
 /// Assembly settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -224,6 +250,8 @@ pub struct NativeConfig {
     pub completion: CompletionConfig,
     /// Assembly dialect.
     pub asm: AsmConfig,
+    /// Binary files.
+    pub binary: BinaryConfig,
 }
 impl Default for NativeConfig {
     fn default() -> Self {
@@ -256,6 +284,7 @@ impl Default for NativeConfig {
             indent: IndentConfig::default(),
             completion: CompletionConfig::default(),
             asm: AsmConfig::default(),
+            binary: BinaryConfig::default(),
         }
     }
 }
@@ -336,6 +365,13 @@ impl NativeConfig {
         {
             return Err(Error(
                 "Expected asm.syntax=auto|nasm|gas-att|gas-intel|arm|aarch64|riscv".into(),
+            ));
+        }
+        if ![8, 16, 32].contains(&config.binary.bytes_per_row)
+            || !["att", "intel"].contains(&config.binary.disasm_syntax.as_str())
+        {
+            return Err(Error(
+                "Expected binary.bytes_per_row=8|16|32 and binary.disasm_syntax=att|intel".into(),
             ));
         }
         if !(1..=8).contains(&config.completion.min_chars) {

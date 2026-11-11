@@ -1,5 +1,6 @@
 //! Full-screen terminal adapter. All modal interpretation and file I/O stay in Editor.
 pub mod assistant;
+pub mod binview;
 mod guard;
 pub mod layout;
 pub mod popup;

@@ -1,8 +1,11 @@
 //! Headless application services shared by CLI and future native GUI.
 
+pub mod binary;
 pub mod config;
 pub mod debug;
 pub mod diagnostics;
+pub mod disasm;
+pub mod elf;
 pub mod explorer;
 pub mod hardware;
 pub mod lsp;

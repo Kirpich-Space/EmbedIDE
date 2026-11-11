@@ -1,4 +1,5 @@
 //! Project workspace adapter. Services and document mutations remain outside widgets.
+use super::binview;
 use super::popup::{self, Popup};
 use super::{
     assistant::{Assistant, EditorContext},
@@ -72,6 +73,16 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("lsp_restart", "Restart Language Servers (completion)"),
     ("labels", "Go to Label (assembly: labels of this file)"),
+    ("hex", "Open in HEX View (current file; :hex <path>)"),
+    (
+        "elf",
+        "Inspect ELF Headers, Sections, Symbols (:elf <path>)",
+    ),
+    (
+        "disasm",
+        "Disassemble Binary (objdump / llvm-objdump; :disasm <path>)",
+    ),
+    ("close_binary", "Close Binary View"),
     ("build", "Build Project"),
     ("check", "Check Project (Cargo)"),
     ("clean", "Clean Project"),
@@ -289,6 +300,8 @@ enum InputKind {
 enum Confirm {
     Delete(PathBuf),
     Close,
+    SaveBinary,
+    CloseBinary,
     Quit,
     Flash(BuildPlan),
     Debug,
@@ -373,6 +386,8 @@ pub struct Workspace {
     pub mouse: bool,
     /// Open completion popup.
     popup: Option<Popup>,
+    /// Binary file shown in the editor area (HEX / ELF / disassembly).
+    binary: Option<binview::BinaryView>,
     /// Language servers by command line (clangd serves C and C++).
     lsp: BTreeMap<String, LspSlot>,
     hits: Hits,
@@ -476,6 +491,7 @@ impl Workspace {
             held_panel: None,
             mouse,
             popup: None,
+            binary: None,
             lsp: BTreeMap::new(),
             hits: Hits::default(),
             user,
@@ -735,6 +751,11 @@ impl Workspace {
             "e" | "edit" | "open" if !arg.is_empty() => self.open_file(Path::new(arg)),
             "w" | "write" | "saveas" if !arg.is_empty() => self.save_as(Path::new(arg)),
             "label" | "l" => self.goto_label(arg),
+            "hex" | "elf" | "disasm" if !arg.is_empty() => {
+                self.open_binary(Path::new(arg))?;
+                self.binary_mode(name);
+                Ok(())
+            }
             line if !line.is_empty()
                 && line.bytes().all(|b| b.is_ascii_digit())
                 && arg.is_empty() =>
@@ -768,6 +789,88 @@ impl Workspace {
         self.notification = format!("Saved as {}", path.display());
         let _ = self.refresh();
         Ok(())
+    }
+    /// Show a file in the binary view (read-only until `i`).
+    fn open_binary(&mut self, path: &Path) -> Result<(), FrontendError> {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        if self.binary.as_ref().is_some_and(|b| b.file.is_modified()) {
+            return Err(service_error(
+                "The open binary has unsaved changes: w saves, q closes (asks first)",
+            ));
+        }
+        let b = &self.config.binary;
+        let settings = binview::Settings {
+            bytes_per_row: b.bytes_per_row,
+            allow_edit: b.allow_edit,
+            intel: b.disasm_syntax == "intel",
+            objdump: b.objdump.clone(),
+            llvm_objdump: b.llvm_objdump.clone(),
+        };
+        let view = binview::BinaryView::open(&path, settings).map_err(service_error)?;
+        self.notification = format!(
+            "Opened {} as binary ({} bytes, read-only): Tab/e/d ELF and disassembly, i edits, q closes",
+            path.display(),
+            view.file.len()
+        );
+        self.binary = Some(view);
+        self.popup = None;
+        self.focus = Focus::Editor;
+        Ok(())
+    }
+    /// Switch the open binary view to `hex`, `elf` or `disasm`.
+    fn binary_mode(&mut self, id: &str) {
+        if let Some(view) = &mut self.binary {
+            view.set_mode(match id {
+                "elf" => binview::Mode::Elf,
+                "disasm" => binview::Mode::Disasm,
+                _ => binview::Mode::Hex,
+            });
+            self.focus = Focus::Editor;
+        }
+    }
+    /// Close the binary view, asking first when it has unsaved edits.
+    fn close_binary(&mut self) {
+        match &self.binary {
+            Some(view) if view.file.is_modified() => {
+                self.dialog = Some(Dialog::Confirm {
+                    text: format!(
+                        "Discard {} changed bytes in {}? y discards; Esc cancels (w saves)",
+                        view.file.changed(),
+                        view.path().display()
+                    ),
+                    action: Confirm::CloseBinary,
+                })
+            }
+            _ => self.binary = None,
+        }
+    }
+    /// Keys for the binary view (after global shortcuts).
+    fn binary_key(&mut self, key: KeyEvent) -> Option<Result<(), FrontendError>> {
+        let view = self.binary.as_mut()?;
+        match view.key(key) {
+            binview::Outcome::Done => {}
+            binview::Outcome::Ignored => return None,
+            binview::Outcome::Close => self.close_binary(),
+            binview::Outcome::Save => {
+                if view.file.is_modified() {
+                    self.dialog = Some(Dialog::Confirm {
+                        text: format!(
+                            "Write {} changed bytes to {}? Same length; untouched bytes are kept. y writes; Esc cancels",
+                            view.file.changed(),
+                            view.path().display()
+                        ),
+                        action: Confirm::SaveBinary,
+                    });
+                } else {
+                    view.message = "No changes to write".into();
+                }
+            }
+        }
+        Some(Ok(()))
     }
     /// Assembly dialect of the active document, if it is assembly.
     fn asm_dialect(&self) -> Option<embedide_editor::asm::Dialect> {
@@ -867,6 +970,11 @@ impl Workspace {
             return Err(service_error("Symlink files are not opened"));
         }
         let path = path.canonicalize()?;
+        // Binary files never go through the text editor (no UTF-8 decoding,
+        // no normalisation): they open read-only in the binary view.
+        if embedide_core::binary::looks_binary(&path) {
+            return self.open_binary(&path);
+        }
         if let Some(index) = self
             .documents
             .iter()
@@ -1243,6 +1351,19 @@ impl Workspace {
             }
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
             "suggest" => self.suggest(true, None)?,
+            "hex" | "elf" | "disasm" => {
+                if self.binary.is_none() {
+                    let path = self
+                        .editor()
+                        .state()
+                        .path()
+                        .map(Path::to_path_buf)
+                        .ok_or_else(|| service_error("Open a file first, or :hex <path>"))?;
+                    self.open_binary(&path)?;
+                }
+                self.binary_mode(id);
+            }
+            "close_binary" => self.close_binary(),
             "labels" => {
                 self.dialog = Some(Dialog::Palette {
                     query: "label: ".into(),
@@ -1650,6 +1771,7 @@ impl Workspace {
                 .into()
             }
             "help" => self.show_panel(Panel::Help),
+            "close" if self.binary.is_some() => self.close_binary(),
             "close" => {
                 if self.editor().state().is_modified() {
                     self.dialog = Some(Dialog::Confirm {
@@ -1666,6 +1788,7 @@ impl Workspace {
                     .documents
                     .iter()
                     .any(|doc| doc.editor().state().is_modified())
+                    || self.binary.as_ref().is_some_and(|b| b.file.is_modified())
                 {
                     self.dialog = Some(Dialog::Confirm {
                         text: "Discard ALL unsaved documents and quit? y confirms; Esc cancels."
@@ -1910,6 +2033,17 @@ impl Workspace {
                 self.refresh().map_err(service_error)?;
             }
             Confirm::Close => self.close_document(),
+            Confirm::SaveBinary => {
+                if let Some(view) = &mut self.binary {
+                    let n = view.file.changed();
+                    view.file.save().map_err(service_error)?;
+                    view.editing = false;
+                    view.message =
+                        format!("Wrote {n} changed bytes; untouched bytes were copied unchanged");
+                    self.notification = format!("Saved {}", view.path().display());
+                }
+            }
+            Confirm::CloseBinary => self.binary = None,
             Confirm::Quit => self.closed = true,
             Confirm::Flash(plan) => {
                 // Revalidate the ELF and exact target at the moment of confirmation.
@@ -2635,6 +2769,11 @@ impl Workspace {
                         }
                         _ => {}
                     },
+                    Focus::Editor if self.binary.is_some() => {
+                        if let Some(result) = self.binary_key(key) {
+                            return result;
+                        }
+                    }
                     Focus::Editor => {
                         let doc = &self.documents[self.active];
                         let cursor = doc.editor().state().cursor();
@@ -2844,6 +2983,9 @@ impl Workspace {
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
         changed |= self.poll_lsp();
+        if let Some(view) = &mut self.binary {
+            changed |= view.tick();
+        }
         if let Some(t) = &mut self.terminal {
             changed |= t.poll();
         }
@@ -3289,6 +3431,9 @@ impl Workspace {
     }
     /// Mode | file | language | compiler | position | focus | message.
     fn status_line(&self) -> String {
+        if let (Some(view), Focus::Editor) = (&self.binary, self.focus) {
+            return format!("{} | Ctrl+K commands", view.status());
+        }
         let state = self.editor().state();
         let mode = match self.editor().input().mode() {
             Mode::Normal => "NORMAL",
@@ -3484,6 +3629,10 @@ impl Workspace {
                     ((editor_width + 1) as u16, editor_height as u16);
                 let mut frame = self.documents[self.active].frame()?;
                 self.ghost_text(&mut frame, editor_width);
+                if let Some(view) = &mut self.binary {
+                    frame.rows = view.rows(editor_width, editor_height);
+                    frame.cursor = None;
+                }
                 cursor = if self.focus == Focus::Editor {
                     frame.cursor.map(|(x, y)| (x + left as u16, y + 2))
                 } else {
@@ -4508,6 +4657,155 @@ mod tests {
         assert_eq!(shown(&ws), ["primary"]);
         assert!(!ws.popup.as_ref().unwrap().semantic);
         let _ = fs::remove_file(&log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn gcc_program(dir: &Path) -> Option<PathBuf> {
+        let src = dir.join("prog.c");
+        fs::write(
+            &src,
+            "int twice(int x) { return 2 * x; }\nint main(void) { return twice(0); }\n",
+        )
+        .ok()?;
+        let out = dir.join("prog");
+        std::process::Command::new("gcc")
+            .args(["-O0", "-o"])
+            .arg(&out)
+            .arg(&src)
+            .status()
+            .ok()?
+            .success()
+            .then_some(out)
+    }
+
+    fn screen_text(ws: &mut Workspace) -> String {
+        ws.frame()
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.runs.iter().map(|x| x.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn binary_files_open_in_hex_elf_and_disassembly_views_without_changes() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-bin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let Some(prog) = gcc_program(&dir) else {
+            return;
+        };
+        let original = fs::read(&prog).unwrap();
+        let mut ws = Workspace::open(&dir, 140, 40).unwrap();
+        ws.open_file(Path::new("prog")).unwrap();
+        assert!(ws.binary.is_some(), "binary files open in the binary view");
+        assert_eq!(ws.document_count(), 1, "not as a text document");
+        let screen = screen_text(&mut ws);
+        assert!(screen.contains("00000000  7F 45 4C 46"), "{screen}");
+        assert!(screen.contains(".ELF"));
+        assert!(ws.status_line().starts_with("HEX | prog"));
+        // Jump to an offset and search for bytes.
+        type_keys(&mut ws, "g0x10\r");
+        assert_eq!(ws.binary.as_ref().unwrap().cursor, 0x10);
+        type_keys(&mut ws, "/\"ELF\"\r");
+        assert_eq!(ws.binary.as_ref().unwrap().cursor, 1);
+        // ELF inspector: header, sections, symbols → main in the disassembly.
+        type_keys(&mut ws, "e");
+        let screen = screen_text(&mut ws);
+        assert!(
+            screen.contains("ELF64 LE") && screen.contains("Entry point"),
+            "{screen}"
+        );
+        type_keys(&mut ws, "3");
+        assert!(screen_text(&mut ws).contains(".text"));
+        type_keys(&mut ws, "4/main\r\r");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !screen_text(&mut ws).contains("<main>:") {
+            assert!(std::time::Instant::now() < deadline, "no disassembly");
+            ws.tick();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(ws.binary.as_ref().unwrap().mode, binview::Mode::Disasm);
+        let screen = screen_text(&mut ws);
+        assert!(screen.contains("<twice>:") || screen.contains("<main>:"));
+        // Enter on an instruction goes back to its bytes in the hex view.
+        type_keys(&mut ws, "j\r");
+        assert_eq!(ws.binary.as_ref().unwrap().mode, binview::Mode::Hex);
+        assert!(ws.binary.as_ref().unwrap().cursor > 0);
+        // Nothing was written by viewing.
+        type_keys(&mut ws, "q");
+        assert!(ws.binary.is_none());
+        assert_eq!(fs::read(&prog).unwrap(), original);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hex_editing_is_explicit_undoable_confirmed_and_byte_exact() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-hexedit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let data: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        let path = dir.join("blob.bin");
+        fs::write(&path, &data).unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.open_file(Path::new("blob.bin")).unwrap();
+        // Navigation mode: hex digits do nothing.
+        type_keys(&mut ws, "ab");
+        assert!(!ws.binary.as_ref().unwrap().file.is_modified());
+        // Edit mode: two digits per byte, the cursor advances.
+        type_keys(&mut ws, "g0x10\riaa55");
+        let view = ws.binary.as_mut().unwrap();
+        assert_eq!(
+            (view.file.byte(0x10).unwrap(), view.file.byte(0x11).unwrap()),
+            (Some(0xaa), Some(0x55))
+        );
+        assert_eq!(fs::read(&path).unwrap(), data, "not written yet");
+        assert!(
+            ws.status_line().contains("[+2 bytes changed]"),
+            "{}",
+            ws.status_line()
+        );
+        // Undo / redo (navigation mode).
+        type_keys(&mut ws, "\x1bu");
+        assert_eq!(
+            ws.binary.as_mut().unwrap().file.byte(0x11).unwrap(),
+            Some(data[0x11])
+        );
+        ws.handle(Event::Key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(
+            ws.binary.as_mut().unwrap().file.byte(0x11).unwrap(),
+            Some(0x55)
+        );
+        // Closing with changes asks; Esc keeps them.
+        type_keys(&mut ws, "q");
+        assert!(ws.dialog.is_some());
+        type_keys(&mut ws, "\x1b");
+        assert!(ws.binary.is_some());
+        // w asks, y writes exactly the two bytes.
+        type_keys(&mut ws, "w");
+        assert!(matches!(ws.dialog, Some(Dialog::Confirm { .. })));
+        type_keys(&mut ws, "y");
+        let mut expected = data.clone();
+        expected[0x10] = 0xaa;
+        expected[0x11] = 0x55;
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        assert!(!ws.binary.as_ref().unwrap().file.is_modified());
+        type_keys(&mut ws, "q");
+        assert!(ws.binary.is_none());
+        // Read-only configuration: no edit mode.
+        fs::write(
+            dir.join("embedide.json"),
+            r#"{"native": {"binary": {"allow_edit": false}}}"#,
+        )
+        .unwrap();
+        let mut ws = Workspace::open(&dir, 120, 40).unwrap();
+        ws.open_file(Path::new("blob.bin")).unwrap();
+        type_keys(&mut ws, "i00");
+        assert!(!ws.binary.as_ref().unwrap().file.is_modified());
         let _ = fs::remove_dir_all(&dir);
     }
 

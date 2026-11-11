@@ -272,6 +272,52 @@ Override detection in `embedide.json` → `native.asm.syntax` (`auto`, `nasm`, `
 * **Building:** use a Makefile (see `examples/asm`, with NASM, AT&T and Intel GNU as programs and
   AArch64/RISC-V sources) or `embedide.toml` with `[toolchain] asm = "nasm"` or a GNU as driver.
 
+## Binary files: HEX, ELF and disassembly
+
+A file with a NUL byte or invalid UTF-8 in its first 8 KiB opens in the **binary view** instead of the
+text editor (`embed prog`, `:e prog`, the explorer); `:hex [path]`, `:elf [path]`, `:disasm [path]`
+(or Ctrl+K) open any file there. The bytes are never decoded or normalised as text, and **viewing never
+writes**. The file is read in 64 KiB pages, so large images open instantly; offsets are 64-bit.
+
+```text
+OFFSET    HEX BYTES                                         ASCII
+00000000  7F 45 4C 46 02 01 01 00  00 00 00 00 00 00 00 00  .ELF............
+```
+
+| Key (HEX) | Action |
+|---|---|
+| arrows / `h j k l`, PgUp/PgDn, `0` / `$`, `G` | Move the byte cursor |
+| `g` | Go to offset (`0x1f00`, `1f00h` or decimal) |
+| `/` then `n` | Search bytes (`7f 45 4c`, `0x7f454c`) or text in quotes (`"ELF"`, `\x00` escapes); wraps |
+| `+` / `-` | 8, 16 or 32 bytes per row |
+| `i` | **Edit mode**: two hex digits replace one byte (the first shows as `A_`), the cursor advances; Esc returns to navigation |
+| `u` / Ctrl+R | Undo / redo one byte |
+| `w` (Ctrl+S) | Write the changes — asks first and names the number of bytes |
+| `q` (Ctrl+W) | Close the view (asks first when there are unsaved changes) |
+| Tab, `x` / `e` / `d` | HEX / ELF / disassembly |
+
+Edited bytes are coloured and counted in the status bar (`[+2 bytes changed]`); quitting the IDE with
+changes asks for confirmation. **Saving** replaces bytes only — the length never changes, untouched
+bytes are copied unchanged — and refuses if the file changed on disk since it was opened. The new
+content is written to a temporary file next to the original, flushed, and renamed over it (atomic on
+POSIX filesystems); permissions are kept, but ownership, extended attributes, ACLs and hard links are not.
+`native.binary.allow_edit = false` makes every binary read-only.
+
+**ELF inspector** (`e`): ELF32/ELF64, little and big endian. `1` header (class, endianness, machine,
+type, entry point), `2` program headers, `3` sections (name, type, flags, address, offset, size), `4`
+symbols (`.symtab` and `.dynsym`). `/` finds a name (an exact match first). Enter opens a segment or data
+section in HEX, and an executable section or function symbol in the disassembly. Truncated or malformed
+files show what could be read, with notes; nothing is executed. The reader is EmbedIDE's own
+bounds-checked parser (no extra dependency).
+
+**Disassembly** (`d`): runs `objdump -d -w` (GNU binutils) for x86 binaries and `llvm-objdump -d` for
+other architectures (AArch64, RISC-V, ARM, …), each falling back to the other; the program is never run.
+Each line shows address, instruction bytes and the instruction; symbols (`<main>:`) and sections are
+headers. `g` goes to an address (hex), `/` searches instructions or `<symbol>`, `n` repeats, `m` jumps to
+`main`, `[` / `]` previous / next section, `s` toggles Intel / AT&T syntax on x86, Enter shows the bytes in
+HEX. Stripped binaries have no symbols; no source mapping is invented. Settings: `native.binary`
+(`bytes_per_row`, `allow_edit`, `disasm_syntax` = `att`/`intel`, `objdump`, `llvm_objdump`).
+
 ## Build and diagnostics
 
 F5 builds the project with the same engine as `embed build`:

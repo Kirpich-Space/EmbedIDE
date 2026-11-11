@@ -968,6 +968,70 @@ class EmbedContracts(unittest.TestCase):
                 raise AssertionError(f"missing {text!r}; screen:\n{ide.screen()}")
             ide.pump(0.1)
 
+    # --- Binary files ---------------------------------------------------------
+
+    def test_build_c_then_inspect_hex_elf_symbols_and_disassembly(self):
+        if not (shutil.which("gcc") and shutil.which("make") and shutil.which("objdump")):
+            self.skipTest("gcc, make and objdump are required")
+        project = self.root / "bin"
+        project.mkdir()
+        (project / "Makefile").write_text("prog: main.c\n\tgcc -O0 -g -o prog main.c\n")
+        (project / "main.c").write_text("int twice(int x) { return 2 * x; }\nint main(void) { return twice(0); }\n")
+        ide = self.ide(cwd=project, args=["main.c"])
+        ide.until(b"NORMAL | main.c")
+        ide.keys(F5)
+        ide.until(b"Finished: exit=Some(0)", timeout=60)
+        before = (project / "prog").read_bytes()
+        ide.type(":e prog\r")
+        self.until_panel_text(ide, "00000000  7F 45 4C 46")  # screen text: the cursor byte is highlighted
+        ide.until(b"HEX | prog")
+        ide.type("e")
+        ide.until(b"ELF64 LE")
+        ide.type("4/main\r\r")
+        ide.until(b"<main>:", timeout=60)
+        ide.until(b"DISASM | prog")
+        # Go to an instruction address, then back to its bytes.
+        main = int(subprocess.run(["nm", str(project / "prog")], capture_output=True, text=True).stdout
+                   .split(" T main")[0].split("\n")[-1], 16)
+        ide.type(f"g{main + 1:x}\r")
+        ide.type("\r")
+        ide.until(b"HEX | prog")
+        ide.type("q")
+        ide.until(b"NORMAL | main.c")
+        self.quit(ide)
+        self.assertEqual((project / "prog").read_bytes(), before, "viewing changed the binary")
+
+    def test_hex_edit_save_reopen_undo_and_unsaved_protection(self):
+        fixture = bytes(range(256)) * 4
+        path = self.root / "fixture.bin"
+        path.write_bytes(fixture)
+        ide = self.ide(args=["fixture.bin"])
+        ide.until(b"HEX | fixture.bin")
+        ide.type("g0x20\r")
+        ide.type("ide ad")             # d e a d (the space is ignored)
+        ide.keys(ide.esc)
+        ide.until(b"[+2 bytes changed]")
+        self.assertEqual(path.read_bytes(), fixture, "written before w")
+        ide.type("u")
+        ide.until(b"[+1 bytes changed]")
+        ide.keys(ide.ctrl("r"))
+        ide.until(b"[+2 bytes changed]")
+        # Quitting with changes asks first; Esc keeps them.
+        ide.keys(ide.ctrl("q"))
+        ide.until(b"Discard ALL unsaved")
+        ide.keys(ide.esc)
+        ide.type("w")
+        ide.until(b"Write 2 changed bytes")
+        ide.keys(b"y")
+        ide.until(b"Wrote 2 changed bytes")
+        expected = bytearray(fixture)
+        expected[0x20:0x22] = b"\xde\xad"
+        self.assertEqual(path.read_bytes(), bytes(expected))
+        ide.type("q")
+        ide.type(":e fixture.bin\r")
+        ide.until(b"00000020  DE AD 22 23")
+        self.quit(ide)
+
     # --- Panel chords ---------------------------------------------------------
 
     def test_held_digit_delete_hides_panels_and_reopening_restores_state(self):
