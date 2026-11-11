@@ -156,6 +156,8 @@ The CLI backends were tested with a mock CLI (streaming, structured and plain mo
 errors, crashes, broken pipes, oversized output, ANSI/Unicode, timeouts, cancellation of the process
 group, concurrent requests, edit/diff/apply, quitting during a request) and, on 2026-11-11, with the
 real installed **Claude Code 2.1.322** (logged in via claude.ai, Pro) and **Codex CLI 0.163.0** (logged
-in via ChatGPT) through the IDE: status detection, an attached file, a short streamed answer from each,
-and `/cancel` of a running Codex request. These real requests used the user's subscription (a few
-short prompts).
+in via ChatGPT) through the release binary in a pseudo-terminal: status detection, an attached file, a
+real answer from each (`PONG` in about 5 s from Claude Code and 6 s from Codex), and `/cancel` of a
+running Codex request, after which the Node launcher and the native `codex` process (tracked as
+descendants of `embed`) were gone within about 0.3 s. These real requests used the user's subscription
+(a few short prompts). No manual test in a terminal emulator was made.
