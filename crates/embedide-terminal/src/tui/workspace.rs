@@ -48,17 +48,14 @@ use unicode_width::UnicodeWidthStr;
 
 const OUTPUT_LINES: usize = 2000;
 const COMMANDS: &[(&str, &str)] = &[
-    ("focus_explorer", "Explorer Panel (Ctrl+Alt+1)"),
-    ("focus_assistant", "AI Assistant Panel (Ctrl+Alt+2)"),
-    ("focus_terminal", "Terminal Panel (Ctrl+Alt+3)"),
-    ("hide_explorer", "Hide Explorer Panel (Ctrl+Alt+1+Delete)"),
-    (
-        "hide_assistant",
-        "Hide AI Assistant Panel (Ctrl+Alt+2+Delete)",
-    ),
+    ("focus_explorer", "Explorer Panel (Alt+1)"),
+    ("focus_assistant", "AI Assistant Panel (Alt+2)"),
+    ("focus_terminal", "Terminal Panel (Alt+3)"),
+    ("hide_explorer", "Hide Explorer Panel (Alt+1+Delete)"),
+    ("hide_assistant", "Hide AI Assistant Panel (Alt+2+Delete)"),
     (
         "hide_terminal",
-        "Hide Terminal Panel, shell keeps running (Ctrl+Alt+3+Delete)",
+        "Hide Terminal Panel, shell keeps running (Alt+3+Delete)",
     ),
     ("assistant", "Show / Hide AI Panel"),
     ("terminal_restart", "Restart Terminal Shell"),
@@ -681,12 +678,13 @@ impl Workspace {
         self.keyboard_enhanced = enhanced;
         self.held_panel = None;
     }
-    /// Ctrl+Alt+1/2/3 open a panel (again: back to the editor). With the digit
+    /// Alt+1/2/3 (or Ctrl+Alt+1/2/3) open a panel (again: back to the editor). With the digit
     /// still held, Delete hides that panel. "Held" is known only from kitty
     /// keyboard release events, so the hide chord is never inferred from a
     /// sequence of separate presses. Returns None when the key is not a chord.
     fn panel_chord(&mut self, key: KeyEvent) -> Option<Result<(), FrontendError>> {
-        let chord = key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let chord = key.modifiers == KeyModifiers::ALT
+            || key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT;
         if chord && matches!(key.code, KeyCode::Char('0'..='9')) {
             let id = self.shortcut(key).filter(|id| id.starts_with("focus_"));
             match key.kind {
@@ -2204,13 +2202,13 @@ impl Workspace {
         } else {
             return None;
         };
-        // Without the kitty keyboard protocol a terminal cannot report
-        // Ctrl+Alt+<digit>: most send ESC <digit>, which is exactly Alt+<digit>
-        // (xterm-style terminals send ESC plus a control byte for 2..8). There,
-        // Alt+<digit> stands in for the Ctrl+Alt+<digit> bindings.
+        // Alt+<digit> and Ctrl+Alt+<digit> are the same panel keys: every
+        // terminal can send Alt+<digit> (ESC <digit>), while Ctrl+Alt+<digit>
+        // needs the kitty keyboard protocol. A ctrl+alt+N binding answers to
+        // Alt+N as well.
         let legacy = binding
             .strip_prefix("alt+")
-            .filter(|d| !self.keyboard_enhanced && d.len() == 1 && d.as_bytes()[0].is_ascii_digit())
+            .filter(|d| d.len() == 1 && d.as_bytes()[0].is_ascii_digit())
             .map(|d| format!("ctrl+alt+{d}"));
         let candidates = [Some(binding.as_str()), legacy.as_deref()];
         let mut candidates = candidates.iter().flatten().copied();
@@ -2662,11 +2660,7 @@ impl Workspace {
     }
     /// How the focus chord for panel `digit` is typed in this terminal.
     fn panel_key(&self, digit: char) -> String {
-        if self.keyboard_enhanced {
-            format!("Ctrl+Alt+{digit}")
-        } else {
-            format!("Alt+{digit}")
-        }
+        format!("Alt+{digit}")
     }
     /// Route terminal input with dialogs before global keys, then focused content.
     pub fn handle(&mut self, event: Event) -> bool {
@@ -4144,17 +4138,17 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
 
 fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<String> {
     let mode: &[&str] = if keyboard_enhanced {
-        &["        Kitty keyboard protocol active. Ctrl+Alt+Delete may be taken by the desktop or console first"]
+        &["        Kitty keyboard protocol active: a held digit is seen, so Alt+digit+Delete hides panels"]
     } else {
         &[
-            "        This terminal does not speak the kitty keyboard protocol, so it cannot report Ctrl+Alt+<digit>",
-            "        or a held digit: use Alt+1/2/3 to switch, and :hide_explorer :hide_assistant :hide_terminal",
-            "        (or bind them in embedide.json \"native\": {\"keys\": {\"hide_terminal\": \"alt+6\"}}) to hide",
+            "        This terminal cannot report a held key, so the Delete chord is unavailable: use",
+            "        :hide_explorer :hide_assistant :hide_terminal (or bind them in embedide.json",
+            "        \"native\": {\"keys\": {\"hide_terminal\": \"alt+6\"}}) to hide a panel",
         ]
     };
     let mut lines: Vec<String> = [
-        "PANELS  Ctrl+Alt+1 explorer | Ctrl+Alt+2 AI assistant | Ctrl+Alt+3 terminal (press again to return to the editor)",
-        "        Hold the digit and press Delete (Ctrl+Alt+1+Delete …) to hide that panel; its state is kept",
+        "PANELS  Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal (press again to return to the editor; Ctrl+Alt works too)",
+        "        Hold Alt and the digit and press Delete (Alt+1+Delete …) to hide that panel; its state is kept",
     ]
     .iter()
     .chain(mode)
@@ -4175,12 +4169,13 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
         "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
-        "TERMINAL Ctrl+Alt+3: your shell in a real pseudo-terminal; all keys go to it except the panel keys",
+        "TERMINAL Alt+3: your shell in a real pseudo-terminal; all keys go to it except the panel keys (Alt+1/2/3)",
         "        History: Shift+PageUp scrolls back; then Shift+PageUp/PageDown page, Shift+Up/Down line,",
         "        Shift+Home oldest, Shift+End (or typing) back to live. Full-screen programs keep these keys",
         "MOUSE   Off by default; :mouse toggles it (or \"mouse\": true in embedide.json native). Click focuses a panel,",
         "        places the cursor, selects / opens explorer rows; the wheel scrolls. Shift+drag still selects text",
-        "AI      Ctrl+Alt+2, type a message, Enter sends (only then). /file /sel /explain /edit <instr> /apply /reject",
+        "AI      Alt+2, then /provider claude-code or /provider codex-cli; type a message, Enter sends (only then)",
+        "        /file /selection /explain /edit what to change /diff /apply /reject /cancel /help",
         "        /complete or :complete shows a suggestion at the cursor: Tab accepts, Esc rejects. /help in the panel",
         "        AI is optional: without a provider the IDE works fully offline. EMBEDIDE_AI_OFFLINE=1 blocks requests",
         "EXPLORER j/k move, Enter/Right open or expand, Left collapse, n new file, Delete delete, r refresh, Esc editor",
@@ -5069,11 +5064,11 @@ mod tests {
         let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
         let save = KeyEvent::new(KeyCode::Char('s'), ctrl_alt);
         assert_eq!(ws.shortcut(save).as_deref(), Some("save"));
-        // With the kitty protocol, Alt+digit is its own key again.
+        // With the kitty protocol Alt+digit switches panels too.
         ws.set_keyboard_enhanced(true);
         assert_eq!(ws.shortcut(save).as_deref(), Some("save"));
         ws.handle(alt('1'));
-        assert_eq!(ws.focus(), Focus::Editor);
+        assert_eq!(ws.focus(), Focus::Explorer);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5100,11 +5095,37 @@ mod tests {
         assert_eq!(ws.focus(), Focus::Explorer);
         ws.handle(chord('1'));
         assert_eq!(ws.focus(), Focus::Editor);
-        // With the kitty protocol Alt+digit is a distinct key and switches nothing.
-        ws.handle(Event::Key(KeyEvent::new(
-            KeyCode::Char('2'),
+        // Alt+digit is the primary panel key in every terminal.
+        let alt = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
+        ws.handle(alt('2'));
+        assert_eq!(ws.focus(), Focus::Assistant);
+        ws.handle(alt('2'));
+        assert_eq!(ws.focus(), Focus::Editor);
+        // Held Alt+1 (kitty press/repeat) and Delete hides the explorer.
+        ws.handle(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('1'),
             KeyModifiers::ALT,
+            KeyEventKind::Press,
         )));
+        ws.handle(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('1'),
+            KeyModifiers::ALT,
+            KeyEventKind::Repeat,
+        )));
+        ws.handle(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Delete,
+            KeyModifiers::ALT,
+            KeyEventKind::Press,
+        )));
+        assert!(!ws.explorer_visible);
+        ws.handle(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('1'),
+            KeyModifiers::ALT,
+            KeyEventKind::Release,
+        )));
+        ws.handle(alt('1'));
+        assert!(ws.explorer_visible);
+        ws.handle(alt('1'));
         assert_eq!(ws.focus(), Focus::Editor);
         for ch in ":e a.c".chars() {
             ws.handle(Event::Key(KeyEvent::new(

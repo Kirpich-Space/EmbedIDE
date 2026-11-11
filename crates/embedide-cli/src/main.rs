@@ -23,9 +23,9 @@ use std::{
     about = "EmbedIDE — engineering IDE for firmware, drivers, kernels and systems code",
     long_about = "EmbedIDE terminal edition.\n\nRun `embed` to open the full-screen, keyboard-driven IDE in the current directory, \
 `embed <directory>` to open that directory, or `embed <file>` to open a file (a missing file in an existing directory \
-becomes a new buffer, written only on :w). The IDE has an explorer (Ctrl+Alt+1), editor with Vim modes and syntax \
-highlighting, AI assistant (Ctrl+Alt+2), interactive terminal (Ctrl+Alt+3; Alt+1/2/3 in terminals without the kitty \
-keyboard protocol), build output and diagnostics. :help inside the IDE lists every key. \
+becomes a new buffer, written only on :w). The IDE has an explorer (Alt+1), editor with Vim modes and syntax \
+highlighting, AI assistant (Alt+2: Claude Code, Codex CLI or an API provider), interactive terminal (Alt+3), \
+HEX/ELF/disassembly views for binaries, build output and diagnostics. :help inside the IDE lists every key. \
 Subcommand names win over same-named files: use `embed ./build` for a file called build.\n\n\
 The subcommands below are for scripts and automation.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran, cross GCCs) and builds with exactly what you select. \

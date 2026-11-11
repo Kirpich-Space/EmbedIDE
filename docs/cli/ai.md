@@ -117,7 +117,7 @@ Common options: `--provider`, `--model`, `--auth api-key|subscription`, `--max-t
 
 ## In the `embed` IDE
 
-The AI panel (Ctrl+Alt+2) uses the same configuration, credentials and safeguards. Nothing is sent
+The AI panel (Alt+2) uses the same configuration, credentials and safeguards. Nothing is sent
 until you press Enter.
 
 | Command | Action |

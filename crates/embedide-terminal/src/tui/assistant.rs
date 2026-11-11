@@ -7,7 +7,9 @@ use embedide_ai::{
     cli::{self, CliKind},
     complete, context, edit, AuthMode, Backend, Cancel, Message, ProviderId,
 };
+use embedide_editor::syntax::Highlight;
 use embedide_workspace::config::AiConfig;
+use std::time::Instant;
 use std::{
     path::PathBuf,
     sync::{mpsc, Arc},
@@ -46,6 +48,10 @@ enum Kind {
     Info,
     Error,
     Diff,
+    /// Who speaks next ("You", "Codex CLI", …).
+    Header,
+    /// Quiet line under an answer (time, tokens).
+    Meta,
 }
 
 /// A completion ready to be accepted in the editor.
@@ -80,6 +86,10 @@ struct Job {
     handle: Option<thread::JoinHandle<()>>,
     /// Transcript entry the answer streams into (other notes may follow it).
     slot: Option<usize>,
+    /// When the request started (spinner timer, answer time).
+    started: Instant,
+    /// Who answers (shown in the header and the summary line).
+    who: String,
 }
 
 /// The panel's state.
@@ -96,6 +106,8 @@ pub struct Assistant {
     job: Option<Job>,
     /// Backend status checks run beside requests (they never block chat).
     checks: Option<Job>,
+    /// Animation frame last drawn (spinner, blinking caret).
+    anim: u128,
     proposal: Option<(PathBuf, edit::Proposal)>,
     /// Completion awaiting Tab (accept) or Esc (reject).
     pub suggestion: Option<Suggestion>,
@@ -144,15 +156,24 @@ impl Assistant {
             attachments: Vec::new(),
             job: None,
             checks: None,
+            anim: 0,
             proposal: None,
             suggestion: None,
             engine: None,
             scroll: 0,
         };
+        let start = match a.cli_backend() {
+            Some(kind) => format!("Backend {} ({}). Type a message and press Enter; /help lists commands.", kind.id(), kind.name()),
+            None if a.provider.is_some() => format!("Backend {}. Type a message and press Enter; /help lists commands.", a.provider_label()),
+            None => "Choose a backend: /provider claude-code or /provider codex-cli (your logged-in CLI, no API key), \
+or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands."
+                .into(),
+        };
         a.note(
             Kind::Info,
-            "AI is optional; editing and builds never use it. ".to_string() + HELP,
+            "AI is optional: editing and builds never need it.",
         );
+        a.note(Kind::Info, start);
         a
     }
 
@@ -197,6 +218,28 @@ impl Assistant {
         (self.auth == AuthMode::Subscription)
             .then_some(self.provider?)
             .and_then(CliKind::for_provider)
+    }
+
+    /// Name shown above answers.
+    fn speaker(&self) -> String {
+        match (self.cli_backend(), &self.provider) {
+            (Some(kind), _) => kind.name().to_string(),
+            (None, Some(p)) => match &self.model {
+                Some(m) => format!("{} · {m}", p.info().name),
+                None => p.info().name.to_string(),
+            },
+            (None, None) => "AI".into(),
+        }
+    }
+
+    /// Animated activity for the panel title: a spinner and the elapsed time.
+    fn activity(&self) -> Option<String> {
+        const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let job = self.job.as_ref()?;
+        let elapsed = job.started.elapsed();
+        let spin = SPIN[(elapsed.as_millis() / 100) as usize % SPIN.len()];
+        let what = if job.streaming { "writing" } else { "thinking" };
+        Some(format!("{spin} {what} {}s", elapsed.as_secs()))
     }
 
     fn state(&self) -> &'static str {
@@ -536,13 +579,14 @@ impl Assistant {
             temperature: None,
             stream: true,
         };
+        let who = self.speaker();
+        self.note(Kind::Header, "You");
         self.note(Kind::User, text.to_string());
         self.note(
-            Kind::Info,
+            Kind::Meta,
             format!(
-                "→ {} bytes to {}{}",
+                "sent {} bytes{}",
                 content.len() + chat::SYSTEM.len(),
-                backend.label(),
                 if labels.is_empty() {
                     String::new()
                 } else {
@@ -551,6 +595,7 @@ impl Assistant {
             ),
         );
         self.history.push(Message::user(content));
+        self.note(Kind::Header, who.clone());
         self.note(Kind::Assistant, String::new());
         let slot = Some(self.transcript.len() - 1);
         let cancel = Cancel::default();
@@ -569,6 +614,8 @@ impl Assistant {
             streaming: false,
             handle: Some(handle),
             slot,
+            started: Instant::now(),
+            who,
         });
     }
 
@@ -615,6 +662,8 @@ impl Assistant {
             streaming: false,
             handle: Some(handle),
             slot: None,
+            started: Instant::now(),
+            who: String::new(),
         });
     }
 
@@ -656,6 +705,8 @@ impl Assistant {
             streaming: false,
             handle: Some(handle),
             slot: None,
+            started: Instant::now(),
+            who: String::new(),
         });
     }
 
@@ -754,6 +805,8 @@ impl Assistant {
             streaming: false,
             handle: Some(handle),
             slot: None,
+            started: Instant::now(),
+            who: String::new(),
         });
     }
 
@@ -818,6 +871,15 @@ impl Assistant {
     /// Poll worker results. Returns whether the panel changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        // Spinner and caret advance every 100 ms while a request runs; the
+        // screen diff sends only the cells that changed.
+        if let Some(job) = &self.job {
+            let frame = job.started.elapsed().as_millis() / 100;
+            if frame != self.anim {
+                self.anim = frame;
+                changed = true;
+            }
+        }
         if let Some(checks) = &self.checks {
             match checks.rx.try_recv() {
                 Ok(JobEvent::Info(lines)) => {
@@ -874,7 +936,10 @@ impl Assistant {
             }
         }
         if let Some(ev) = finished {
-            let slot = self.job.take().and_then(|j| j.slot);
+            let (slot, started, who) = match self.job.take() {
+                Some(j) => (j.slot, j.started, j.who),
+                None => (None, Instant::now(), String::new()),
+            };
             changed = true;
             match ev {
                 JobEvent::Chat(Ok(r)) => {
@@ -886,9 +951,14 @@ impl Assistant {
                         }
                     }
                     self.history.push(Message::assistant(r.text));
-                    if let (Some(i), Some(o)) = (r.usage.input_tokens, r.usage.output_tokens) {
-                        self.note(Kind::Info, format!("tokens: {i} in, {o} out"));
-                    }
+                    let tokens = match (r.usage.input_tokens, r.usage.output_tokens) {
+                        (Some(i), Some(o)) => format!(" · tokens {i} in, {o} out"),
+                        _ => String::new(),
+                    };
+                    self.note(
+                        Kind::Meta,
+                        format!("{who} · {:.1} s{tokens}", started.elapsed().as_secs_f32()),
+                    );
                 }
                 JobEvent::Chat(Err(e)) => {
                     if let Some(i) = slot.filter(|&i| {
@@ -952,63 +1022,51 @@ impl Assistant {
         if height == 0 || width < 4 {
             return (rows, None);
         }
+        let who = match self.cli_backend() {
+            Some(kind) => kind.id().to_string(),
+            None => self.provider_label(),
+        };
+        let state = self.activity().unwrap_or_else(|| self.state().to_string());
         rows.push(layout::label(
-            &format!("{}AI · {}", if focused { "> " } else { "" }, self.status()),
+            &format!("{}AI · {who} · {state}", if focused { "> " } else { "" }),
             width,
             true,
         ));
-        let mut lines: Vec<String> = Vec::new();
-        for (kind, text) in &self.transcript {
-            let prefix = match kind {
-                Kind::User => "you: ",
-                Kind::Assistant => "ai: ",
-                Kind::Info => "· ",
-                Kind::Error => "! ",
-                Kind::Diff => "",
-            };
-            let body = if *kind == Kind::Assistant && text.is_empty() {
-                "…"
-            } else {
-                text.as_str()
-            };
-            for (i, raw) in body.lines().enumerate() {
-                let first = if i == 0 {
-                    prefix
-                } else if *kind == Kind::Diff {
-                    ""
-                } else {
-                    "  "
-                };
-                wrap(&format!("{first}{raw}"), width, &mut lines);
-            }
-            if body.is_empty() {
-                lines.push(prefix.to_string());
-            }
-        }
-        if !self.attachments.is_empty() {
-            lines.push(format!(
-                "· attached for next message: {}",
-                self.attachments
-                    .iter()
-                    .map(|(l, _)| l.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
+        let lines = self.transcript_lines(width);
         let body_h = height.saturating_sub(2);
         let end = lines.len().saturating_sub(self.scroll.min(lines.len()));
         let start = end.saturating_sub(body_h);
-        for l in &lines[start..end] {
-            rows.push(layout::label(l, width, false));
+        for line in &lines[start..end] {
+            let mut row = Row::default();
+            for (text, style) in line {
+                row.push_styled(text, false, *style);
+            }
+            rows.push(row);
         }
         rows.resize_with(height.saturating_sub(1), Row::default);
+        // Input line: a prompt, the text (its tail when long), or a hint.
         let visible: String = {
             let chars: Vec<char> = self.input.chars().collect();
             let max = width.saturating_sub(3);
             let skip = chars.len().saturating_sub(max);
             chars[skip..].iter().collect()
         };
-        rows.push(layout::label(&format!("> {visible}"), width, focused));
+        let mut input = Row::default();
+        input.push_styled("› ", false, Some(Highlight::Keyword));
+        if visible.is_empty() {
+            let hint = if self.job.is_some() {
+                "/cancel stops the answer".to_string()
+            } else if self.provider.is_none() {
+                "/provider claude-code  or  /provider codex-cli".to_string()
+            } else {
+                format!("Message {who} · Enter sends · /help")
+            };
+            let hint: String = hint.chars().take(width.saturating_sub(2)).collect();
+            input.push_styled(&hint, false, Some(Highlight::Comment));
+        } else {
+            input.push(&visible, false);
+        }
+        rows.push(input);
         let cursor = focused.then(|| {
             (
                 (2 + visible
@@ -1021,27 +1079,270 @@ impl Assistant {
         });
         (rows, cursor)
     }
+
+    /// The conversation as styled, wrapped lines: a header per speaker,
+    /// indented bodies, code blocks and diffs coloured, quiet notes.
+    fn transcript_lines(&self, width: usize) -> Vec<Line> {
+        let mut out: Vec<Line> = Vec::new();
+        let streaming = self.job.as_ref().and_then(|j| j.slot);
+        let blink = self
+            .job
+            .as_ref()
+            .is_some_and(|j| j.started.elapsed().as_millis() / 450 % 2 == 0);
+        for (index, (kind, text)) in self.transcript.iter().enumerate() {
+            match kind {
+                Kind::Header => {
+                    if !out.is_empty() {
+                        out.push(Vec::new());
+                    }
+                    let style = if text == "You" {
+                        Highlight::Keyword
+                    } else {
+                        Highlight::Function
+                    };
+                    out.push(vec![("▍".into(), Some(style)), (text.clone(), Some(style))]);
+                }
+                Kind::User => {
+                    for raw in text.lines() {
+                        wrap_into(&mut out, "  ", raw, None, width);
+                    }
+                }
+                Kind::Assistant if text.is_empty() => {
+                    if streaming == Some(index) {
+                        let spin = self.activity().unwrap_or_default();
+                        out.push(vec![(format!("  {spin}"), Some(Highlight::Comment))]);
+                    } else {
+                        out.push(vec![("  (no answer)".into(), Some(Highlight::Comment))]);
+                    }
+                }
+                Kind::Assistant => {
+                    let mut code = false;
+                    for raw in text.lines() {
+                        let fence = raw.trim_start().strip_prefix("```");
+                        if let Some(lang) = fence {
+                            code = !code;
+                            let mark = if code {
+                                format!(
+                                    "  ╭─ {}",
+                                    if lang.trim().is_empty() {
+                                        "code"
+                                    } else {
+                                        lang.trim()
+                                    }
+                                )
+                            } else {
+                                "  ╰─".to_string()
+                            };
+                            out.push(vec![(mark, Some(Highlight::Comment))]);
+                        } else if code {
+                            wrap_into(&mut out, "  │ ", raw, Some(Highlight::String), width);
+                        } else if raw.trim_start().starts_with('#') {
+                            wrap_into(
+                                &mut out,
+                                "  ",
+                                raw.trim_start_matches('#').trim(),
+                                Some(Highlight::Type),
+                                width,
+                            );
+                        } else {
+                            wrap_into(&mut out, "  ", raw, None, width);
+                        }
+                    }
+                    if streaming == Some(index) && blink {
+                        if let Some(last) = out.last_mut() {
+                            last.push(("▍".into(), Some(Highlight::Function)));
+                        }
+                    }
+                }
+                Kind::Info => wrap_into(&mut out, "  · ", text, Some(Highlight::Comment), width),
+                Kind::Meta => wrap_into(&mut out, "  ", text, Some(Highlight::Comment), width),
+                Kind::Error => wrap_into(&mut out, "  ✗ ", text, Some(Highlight::Constant), width),
+                Kind::Diff => {
+                    for raw in text.lines() {
+                        let style = match raw.as_bytes().first() {
+                            Some(b'+') if !raw.starts_with("+++") => Highlight::String,
+                            Some(b'-') if !raw.starts_with("---") => Highlight::Constant,
+                            Some(b'@') => Highlight::Preprocessor,
+                            _ => Highlight::Comment,
+                        };
+                        wrap_into(&mut out, "", raw, Some(style), width);
+                    }
+                }
+            }
+        }
+        if !self.attachments.is_empty() {
+            let names: Vec<&str> = self.attachments.iter().map(|(l, _)| l.as_str()).collect();
+            wrap_into(
+                &mut out,
+                "  + ",
+                &format!("attached for the next message: {}", names.join(", ")),
+                Some(Highlight::Comment),
+                width,
+            );
+        }
+        out
+    }
 }
 
-fn wrap(text: &str, width: usize, out: &mut Vec<String>) {
+/// One display line: styled pieces.
+type Line = Vec<(String, Option<Highlight>)>;
+
+/// Wrap `text` to `width` cells at spaces (a word longer than the line is
+/// split); continuation lines are indented like the first.
+fn wrap_into(
+    out: &mut Vec<Line>,
+    indent: &str,
+    text: &str,
+    style: Option<Highlight>,
+    width: usize,
+) {
+    let cells = |t: &str| t.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
+    let indent_w = cells(indent);
+    let room = width.saturating_sub(indent_w).max(1);
+    let lead_style = if indent.trim().is_empty() {
+        None
+    } else {
+        style
+    };
+    let mut first = true;
+    let mut push = |line: String, out: &mut Vec<Line>| {
+        let lead = if first {
+            indent.to_string()
+        } else {
+            " ".repeat(indent_w)
+        };
+        out.push(vec![(lead, lead_style), (line, style)]);
+        first = false;
+    };
     let mut line = String::new();
-    let mut w = 0;
-    for ch in text.chars() {
-        let cw = ch.width().unwrap_or(0);
-        if w + cw > width && !line.is_empty() {
-            out.push(std::mem::take(&mut line));
-            w = 0;
+    for word in text.split_inclusive(' ') {
+        if cells(&line) + cells(word.trim_end()) > room && !line.trim().is_empty() {
+            push(std::mem::take(&mut line).trim_end().to_string(), out);
         }
-        line.push(ch);
-        w += cw;
+        let mut word = word;
+        // A word that does not fit on a line of its own is split.
+        while cells(word.trim_end()) > room {
+            let mut cut = 0;
+            let mut used = 0;
+            for (i, c) in word.char_indices() {
+                let w = c.width().unwrap_or(0);
+                if used + w > room {
+                    break;
+                }
+                used += w;
+                cut = i + c.len_utf8();
+            }
+            if !line.is_empty() {
+                push(std::mem::take(&mut line).trim_end().to_string(), out);
+            }
+            push(word[..cut].to_string(), out);
+            word = &word[cut..];
+        }
+        line.push_str(word);
     }
-    out.push(line);
+    push(line.trim_end().to_string(), out);
 }
 
 #[cfg(test)]
 mod usage_tests {
     use super::*;
     use embedide_workspace::config::ProviderConfig;
+    use unicode_width::UnicodeWidthStr;
+
+    fn text(rows: &[Row]) -> Vec<String> {
+        rows.iter()
+            .map(|r| r.runs.iter().map(|x| x.text.as_str()).collect::<String>())
+            .collect()
+    }
+
+    #[test]
+    fn the_chat_shows_speakers_code_blocks_diffs_and_wraps_at_words() {
+        let mut a = Assistant::new(AiConfig::default());
+        a.transcript.clear();
+        a.note(Kind::Header, "You");
+        a.note(Kind::User, "explain the loop please");
+        a.note(Kind::Header, "Codex CLI");
+        a.note(Kind::Assistant, "Sure:\n```c\nfor (;;) {}\n```\n# Summary\nIt never ends and keeps the processor busy forever");
+        a.note(Kind::Meta, "Codex CLI · 1.2 s");
+        a.note(Kind::Diff, "--- a/x.c\n+++ b/x.c\n-old\n+new");
+        let (rows, _) = a.rows(40, 30, true);
+        let lines = text(&rows);
+        assert!(
+            lines.contains(&"▍You".to_string()) && lines.contains(&"▍Codex CLI".to_string()),
+            "{lines:#?}"
+        );
+        assert!(
+            lines.contains(&"  ╭─ c".to_string()) && lines.contains(&"  │ for (;;) {}".to_string())
+        );
+        assert!(lines.contains(&"  Summary".to_string()));
+        assert!(
+            lines
+                .iter()
+                .all(|l| UnicodeWidthStr::width(l.as_str()) <= 40),
+            "{lines:#?}"
+        );
+        // Wrapped at a space, never inside a word.
+        assert!(
+            lines.contains(&"  It never ends and keeps the processor".to_string()),
+            "{lines:#?}"
+        );
+        assert!(lines.contains(&"  busy forever".to_string()));
+        // Styles: code green, diff + green and - red, notes grey.
+        let style_of = |needle: &str| {
+            rows.iter()
+                .flat_map(|r| r.runs.iter())
+                .find(|x| x.text.contains(needle))
+                .and_then(|x| x.style)
+        };
+        assert_eq!(style_of("for (;;)"), Some(Highlight::String));
+        assert_eq!(style_of("+new"), Some(Highlight::String));
+        assert_eq!(style_of("-old"), Some(Highlight::Constant));
+        assert_eq!(style_of("1.2 s"), Some(Highlight::Comment));
+        // The empty input shows a hint.
+        assert!(lines.last().unwrap().starts_with("› "));
+    }
+
+    #[test]
+    fn a_running_request_animates_a_spinner_timer_and_caret() {
+        let mut a = Assistant::new(AiConfig::default());
+        a.note(Kind::Header, "Codex CLI");
+        a.note(Kind::Assistant, String::new());
+        let index = a.transcript.len() - 1;
+        let slot = Some(index);
+        let (_tx, rx) = mpsc::channel();
+        a.job = Some(Job {
+            rx,
+            cancel: Cancel::default(),
+            streaming: false,
+            handle: None,
+            slot,
+            started: Instant::now() - Duration::from_millis(2_050),
+            who: "Codex CLI".into(),
+        });
+        let (rows, _) = a.rows(60, 20, false);
+        let lines = text(&rows);
+        assert!(lines[0].contains("thinking 2s"), "{}", lines[0]);
+        assert!(
+            lines.iter().any(|l| l.trim_start().contains("thinking 2s")),
+            "spinner in the answer slot"
+        );
+        let first = a.anim;
+        assert!(a.tick(), "a new frame is drawn");
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(a.tick() && a.anim != first, "frames advance every 100 ms");
+        // Streaming text gets a blinking caret.
+        a.job.as_mut().unwrap().streaming = true;
+        a.transcript[index].1 = "Hello".into();
+        let shows_caret = (0..12).any(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            text(&a.rows(60, 20, false).0)
+                .iter()
+                .any(|l| l == "  Hello▍")
+        });
+        assert!(shows_caret);
+        assert!(a.rows(60, 20, false).0.len() == 20);
+        assert!(text(&a.rows(60, 20, false).0)[0].contains("writing"));
+    }
 
     #[test]
     fn provider_names_copied_with_angle_brackets_still_work() {

@@ -1,6 +1,6 @@
 //! Interactive terminal panel: the user's shell in a real pseudo-terminal,
 //! rendered through a VT100/xterm screen model. Input goes to the shell
-//! unchanged except for the workspace's panel keys (Ctrl+Alt+1/2/3).
+//! unchanged except for the workspace's panel keys (Alt+1/2/3).
 //!
 //! The screen model only draws; it never talks back. Interactive shells do:
 //! fish 4 sends Primary Device Attributes (`CSI c`) and cursor position

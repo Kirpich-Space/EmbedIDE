@@ -38,10 +38,11 @@ Global (work in every panel except where noted):
 
 | Key | Action |
 |---|---|
-| **Ctrl+Alt+1** | Explorer — press again to return to the editor |
-| **Ctrl+Alt+2** | AI assistant — press again to return to the editor |
-| **Ctrl+Alt+3** | Terminal — press again to return to the editor |
-| **Ctrl+Alt+1/2/3 + Delete** | Hold the digit, press Delete: hide that panel (its state and shell are kept) |
+| **Alt+1** | Explorer — press again to return to the editor |
+| **Alt+2** | AI assistant — press again to return to the editor |
+| **Alt+3** | Terminal — press again to return to the editor |
+| **Alt+1/2/3 + Delete** | Hold Alt and the digit, press Delete: hide that panel (its state and shell are kept; kitty keyboard protocol) |
+| Ctrl+Alt+1/2/3 | Same as Alt+1/2/3 |
 | Ctrl+K | Command palette (every command below, plus targets, profiles, tasks and files) |
 | Ctrl+P | Find a file among loaded explorer entries |
 | Ctrl+S | Save the active document |
@@ -56,7 +57,8 @@ Global (work in every panel except where noted):
 
 ### What terminals can report
 
-`Ctrl+Alt+<digit>` and "digit still held" exist only with the
+Alt+1/2/3 work in every terminal (they arrive as `ESC 1`…). Ctrl+Alt+digit and "digit still held"
+exist only with the
 [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) (for example kitty, foot,
 WezTerm, Ghostty, Alacritty 0.13+). `embed` asks the terminal at startup and enables
 it only when the terminal answers; `EMBEDIDE_KEYBOARD=legacy` turns it off.
@@ -66,18 +68,18 @@ is active) the terminal cannot report these chords at all: Ctrl+Alt+1 arrives as
 bytes as **Alt+1** — and xterm-style terminals send Ctrl+Alt+3 as `ESC ESC` (indistinguishable from
 two Esc presses). There:
 
-* **Alt+1 / Alt+2 / Alt+3** switch panels (and `ESC <digit>` from Ctrl+Alt+1 works as well);
+* **Alt+1 / Alt+2 / Alt+3** switch panels as everywhere (`ESC <digit>` from Ctrl+Alt+1 works as well);
 * the hide chord is never guessed from separate presses; use `:hide_explorer`, `:hide_assistant`,
   `:hide_terminal` (also in Ctrl+K), or bind them, e.g. in `embedide.json`:
   `{"native": {"keys": {"hide_terminal": "alt+6", "hide_explorer": "f12"}}}`. Bindings may be
-  F1–F12, `ctrl+a`…`ctrl+z`, `alt+0`…`alt+9` or `ctrl+alt+0`…`ctrl+alt+9` (in a legacy terminal a
-  `ctrl+alt+N` binding answers to Alt+N).
+  F1–F12, `ctrl+a`…`ctrl+z`, `ctrl+space`, `alt+0`…`alt+9` or `ctrl+alt+0`…`ctrl+alt+9` (a
+  `ctrl+alt+N` binding answers to Alt+N as well).
 
 Ctrl+Alt+Delete is a system shortcut on many desktops and on the Linux console (it may reboot); such
 a system takes it before any terminal program sees it, so prefer a bound key there.
 
 In the **terminal** every key — Ctrl+C, Ctrl+D, Ctrl+K, Tab, Esc, F-keys, arrows — goes to your
-shell; only the panel keys (Ctrl+Alt+1/2/3, Alt+1/2/3 without the kitty protocol) and keys you bound
+shell; only the panel keys (Alt+1/2/3, Ctrl+Alt+1/2/3) and keys you bound
 to `hide_*` commands are taken by the IDE. Colours and attributes (bold, underline, inverse) of the
 program's output are kept. Paste is forwarded as bracketed paste when the program asks for it. When the shell exits, Enter starts a new one; `:terminal_restart` restarts it.
 
@@ -138,6 +140,7 @@ unknown command id is reported at startup (`:settings`). The table lives in one 
 **Keys that work in every xterm-compatible terminal** (no kitty protocol needed): Alt+1/2/3, F1–F12,
 Ctrl+letter, Shift+PageUp/PageDown/Home/End/Up/Down, arrows, Esc, Enter, Tab, Backspace, Delete,
 bracketed paste. Ctrl+Alt+digit and the held-digit hide chords need the kitty keyboard protocol.
+Alt+1/2/3 therefore never reach programs in the integrated terminal.
 
 ## Indentation
 
@@ -367,26 +370,35 @@ path = "/opt/vendor sdk/bin/gcc"
 them; `:compilers` (and the Settings panel) shows which compiler each language uses and why.
 EmbedIDE detects and reuses installed toolchains; it never installs or downloads one.
 
-## AI assistant (Ctrl+Alt+2)
+## AI assistant (Alt+2)
 
 Optional. Without a provider, or with `EMBEDIDE_AI_OFFLINE=1`, the IDE works fully offline and the
 panel only explains what is missing. Providers, models and keys are configured exactly as for
 `embed ai` ([AI subsystem](ai.md)); four providers: Anthropic (Claude), OpenAI (GPT/Codex),
 Moonshot (Kimi), xAI (Grok), via API key or, for Anthropic/OpenAI, the official subscription CLI.
 
-Nothing is sent until you press Enter. Before every request the panel shows how many bytes go to
-which provider and which files are attached.
+The panel is the right column; Alt+2 moves the cursor to its input line (`›`). **Commands typed in
+the editor are Vim commands** (`/` searches the file), so type AI commands in the panel. Start with
+`/provider claude-code` or `/provider codex-cli` (your logged-in CLI, no API key) or an API provider.
+
+Nothing is sent until you press Enter. The conversation is laid out as messages: a coloured header per
+speaker (`▍You`, `▍Codex CLI`), indented text wrapped at word boundaries, code blocks framed and in a
+code colour (`╭─ c` … `╰─`), headings highlighted, diffs in green/red, and quiet grey notes (bytes sent,
+attachments, answer time and tokens). While a request runs, the panel title and the answer show an
+animated spinner with the elapsed time (`⠙ thinking 3s`); streamed text ends in a blinking caret.
+The empty input line shows what to type next.
 
 | Input | Action |
 |---|---|
 | text + Enter | Chat (history kept until `/clear`), streamed |
-| `/file` | Attach the current buffer (project `[ai] exclude` and secret patterns apply) |
-| `/sel` | Attach the Visual selection |
+| `/file`, `/file a.c b.h` | Attach the current buffer or named project files (project `[ai] exclude` and secret patterns apply) |
+| `/selection` (`/sel`) | Attach the Visual selection |
 | `/explain [question]` | Explain the selection or the current file |
 | `/edit <instruction>` | Propose a new version of the current file; the unified diff is shown |
 | `/apply` / `/reject` | Put the proposal into the editor buffer (undo with `u`, save with `:w`) / discard it |
 | `/complete` | Completion at the editor cursor |
-| `/provider <id>`, `/model <id>`, `/auth api-key\|subscription` | Switch for this session |
+| `/providers`; `/provider claude-code`, `codex-cli`, `anthropic`, …; `/model name`; `/auth api-key\|subscription` | List and switch backends for this session |
+| `/diff`, `/history` | Show the pending diff again; recent conversation |
 | `/cancel`, `/clear`, `/status`, `/help` | |
 | Up/Down, PgUp/PgDn | Scroll the transcript |
 | Esc | Back to the editor |

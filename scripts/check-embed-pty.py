@@ -453,9 +453,11 @@ class EmbedContracts(unittest.TestCase):
     def until_panel(self, ide, text, timeout=20):
         """Wait for `text` in the AI column, ignoring where the panel wraps it."""
         deadline = time.monotonic() + timeout
+        flat = " ".join(text.split())
         while True:
-            column = "".join(line.split("|")[-1] for line in ide.screen().splitlines() if "|" in line)
-            if text in column:
+            # Panel lines joined with single spaces: wrapping and indentation do not matter.
+            column = " ".join(" ".join(line.split("|")[-1].split()) for line in ide.screen().splitlines() if "|" in line)
+            if flat in column:
                 return
             if ide.process.poll() is not None or time.monotonic() >= deadline:
                 raise AssertionError(f"missing {text!r} in the AI panel:\n{column}")
@@ -540,10 +542,10 @@ class EmbedContracts(unittest.TestCase):
         ide.panel("2")
         ide.until(b"claude-code")
         self.say(ide, "Interleaved question")
-        self.until_panel(ide, "ai: Привет")             # streaming has started
+        self.until_panel(ide, "Привет")                  # streaming has started
         self.say(ide, "/status")                         # notes arrive mid-stream
         self.until_panel(ide, "logged in via claude.ai")
-        self.until_panel(ide, "ai: Привет red 猫 answer for Interleaved question")
+        self.until_panel(ide, "Привет red 猫 answer for Interleaved question")
         ide.keys(ide.esc)
         ide.panel("2")
         self.quit(ide)
@@ -582,7 +584,7 @@ class EmbedContracts(unittest.TestCase):
         for ch in ":help":
             ide.keys(ch.encode())
         ide.keys(b"\r")
-        ide.until(b"Ctrl+Alt+1 explorer | Ctrl+Alt+2 AI assistant | Ctrl+Alt+3 terminal")
+        ide.until(b"Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal")
         ide.keys(ide.esc)
         for ch in ":e notes.txt":
             ide.keys(ch.encode())
@@ -1061,7 +1063,7 @@ class EmbedContracts(unittest.TestCase):
         ide.hide("2")
         ide.until(b"AI panel hidden, chat kept")
         ide.panel("2")
-        ide.until(b"> unsent draft")
+        self.until_panel(ide, "› unsent draft")
         ide.keys(ide.esc)
         ide.panel("3")
         ide.until(b"> TERMINAL")

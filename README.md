@@ -34,10 +34,10 @@ A plain `cargo install` puts the binary in `~/.cargo/bin`, which is often not on
 **New here? Read [Getting started](docs/cli/getting-started.md)** — install, a first project, keys,
 the embedded workflow and known limitations of 0.1.0.
 
-Panels: **Ctrl+Alt+1** explorer, **Ctrl+Alt+2** AI assistant, **Ctrl+Alt+3** terminal (press again to
-return to the editor); hold the digit and press Delete to hide a panel. These chords need a terminal with
-the kitty keyboard protocol; elsewhere **Alt+1/2/3** switch panels and `:hide_*` commands (or your own
-bindings) hide them — see [what terminals can report](docs/cli/tui.md#what-terminals-can-report). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
+Panels: **Alt+1** explorer, **Alt+2** AI assistant, **Alt+3** terminal (press again to return to the
+editor; Ctrl+Alt+1/2/3 work too). Holding Alt and the digit and pressing Delete hides a panel in terminals
+with the kitty keyboard protocol; elsewhere use `:hide_*` commands or your own bindings — see
+[what terminals can report](docs/cli/tui.md#what-terminals-can-report). F5 builds, F3 shows problems (Enter jumps to the source line), F8 cancels, Ctrl+K opens the
 command palette, `:help` lists every key. In the integrated terminal Shift+PageUp/PageDown/Home/End
 scroll through history; `:mouse` turns on mouse support. Enter indents by language, and a completion
 popup appears while you type (rust-analyzer, clangd and zls when installed, otherwise words of the

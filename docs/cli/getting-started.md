@@ -71,7 +71,7 @@ embed
    The tab bar shows `main.c*` and the status bar `[+]` while there are unsaved changes.
 3. **F5** builds (here: `make`). Output appears in BUILD OUTPUT; the header shows Running / Ready /
    Failed. **F8** cancels. Errors go to **F3** PROBLEMS: `j`/`k` select, Enter jumps to the line.
-4. **Ctrl+Alt+3** (or **Alt+3**, see below) opens your shell in the project. Run `make`, `./hello`,
+4. **Alt+3** opens your shell in the project. Run `make`, `./hello`,
    `git status` — anything. **Shift+PageUp** scrolls back through the output, **Shift+End** returns.
 5. Press the same panel key again to return to the editor. `:2` jumps to line 2, `/text` searches,
    `n`/`N` repeat the search.
@@ -87,7 +87,7 @@ compilers and flags, create an `embedide.toml` (`embed project init`, see the
 
 | Key | Action |
 |---|---|
-| Ctrl+Alt+1 / 2 / 3 (Alt+1 / 2 / 3 without the kitty keyboard protocol) | explorer / AI / terminal; again returns to the editor |
+| Alt+1 / 2 / 3 (Ctrl+Alt+1 / 2 / 3 work too) | explorer / AI / terminal; again returns to the editor |
 | F1 or `:help` | every key in the IDE |
 | Ctrl+K | command palette (all commands, files, targets, profiles, tasks) |
 | Ctrl+P | find a file |
@@ -100,8 +100,8 @@ compilers and flags, create an `embedide.toml` (`embed project init`, see the
 | typing in Insert mode | completion popup: Down/Ctrl+N select, Tab/Enter accept, Esc close; Ctrl+Space asks explicitly |
 
 Which keys a terminal can deliver is explained in
-[the TUI guide](tui.md#what-terminals-can-report). In short: Ctrl+Alt+digit and "hold a digit, press
-Delete" (hide a panel) exist only with the kitty keyboard protocol; everything in the table above
+[the TUI guide](tui.md#what-terminals-can-report). In short: "hold Alt+digit, press Delete" (hide a
+panel) needs the kitty keyboard protocol; everything in the table above
 except those works in any xterm-compatible terminal, tmux and over SSH.
 
 Enter indents after `{` in Rust/C/C++/Zig and a typed `}` aligns itself. For semantic completion install
@@ -141,7 +141,7 @@ Hardware paths were tested with virtual serial ports and fake tools only; see [s
 
 If `claude` (Claude Code) or `codex` (Codex CLI) is installed and logged in, nothing else is needed:
 
-1. Ctrl+Alt+2 (or Alt+2) opens the AI panel.
+1. Alt+2 opens the AI panel (the right column; the input line is at its bottom).
 2. `/provider claude-code` (or `/provider codex-cli`) — the panel checks the CLI and shows e.g.
    `Claude Code 2.1.322 … ready, logged in via claude.ai (pro)`.
 3. `/file` attaches the current file; type a question and press Enter. `/cancel` stops a request.
