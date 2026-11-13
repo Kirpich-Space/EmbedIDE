@@ -101,13 +101,16 @@ fn missing_configuration_uses_defaults_and_key_bindings_are_validated() {
     let f = Fixture::new();
     let config = NativeConfig::load(&f.0).unwrap();
     assert_eq!((config.theme.as_str(), config.tab_width), ("dark", 4));
-    assert!(!config.mouse && config.keys.is_empty());
+    assert!(
+        config.mouse && config.keys.is_empty(),
+        "mouse is captured by default"
+    );
     f.write(
         "embedide.local.json",
-        r#"{"mouse":true,"keys":{"hide_terminal":"alt+6","build":"F12","palette":"ctrl+alt+7","quit":"Ctrl+Q"}}"#,
+        r#"{"mouse":false,"keys":{"hide_terminal":"alt+6","build":"F12","palette":"ctrl+alt+7","quit":"Ctrl+Q"}}"#,
     );
     let config = NativeConfig::load(&f.0).unwrap();
-    assert!(config.mouse);
+    assert!(!config.mouse, "mouse can be turned off");
     assert_eq!(config.keys["build"], "F12");
     for bad in [
         r#"{"keys":{"build":"f13"}}"#,

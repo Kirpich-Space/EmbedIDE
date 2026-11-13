@@ -98,7 +98,7 @@ While scrolled back the title shows `HISTORY n/m lines up` and new output does n
 the live screen only Shift+PageUp is taken (Shift+Up/Down/Home/End still reach the shell). Full-screen
 programs (`less`, `vim`, `htop` — the alternate screen) have no history of their own here; these keys go
 to the program. If your terminal emulator keeps Shift+PageUp for its own scrollback (the
-key then never reaches `embed`), turn on `:mouse` and use the wheel.
+key then never reaches `embed`), use the wheel (mouse support is on by default).
 
 A program that floods output (`yes`) cannot freeze the IDE or grow its memory: output is applied in
 bounded slices between frames, and the reader waits for the screen instead of buffering without limit.
@@ -126,11 +126,7 @@ the save fails with an error and the buffer stays.
 **Bottom panels:** `j`/`k`, PgUp/PgDn, End follows output, `/` filters, Tab next panel, Enter in
 Problems jumps to the file, line and column, Esc editor.
 
-**Mouse** (off by default, because capturing the mouse takes text selection away from your terminal):
-`:mouse` toggles it for the session, `"mouse": true` in `embedide.json` → `native` turns it on at start.
-A click focuses the panel under it, places the editor cursor, selects an explorer row (a second click
-opens or expands it); the wheel scrolls the editor, explorer, AI chat, output panels and terminal
-history. With the mouse on, most terminals still select text with Shift+drag.
+**Mouse** (on by default; `:mouse` toggles it for the session, `"mouse": false` in `embedide.json` → `native` turns it off at start): click focuses a panel, places the cursor, selects or opens explorer rows; the wheel scrolls. A drag inside the AI panel selects only that panel's text (not the editor or explorer beside it) and copies it to the clipboard through the terminal (OSC 52: kitty, foot, WezTerm, Alacritty, iTerm2, xterm with `allowWindowOps`, tmux with `set-clipboard on`). While the mouse is captured, your terminal's own selection needs Shift+drag and then selects whole screen rows; turn the mouse off with `:mouse` if you prefer that.
 
 Global bindings can be changed per project in `embedide.json` → `native.keys`
 (`{"build": "f12", "focus_terminal": "alt+9"}`; F1–F12, `ctrl+a`–`ctrl+z`, `alt+0`–`alt+9`,
@@ -406,7 +402,10 @@ The empty input line shows what to type next.
 | `/providers`; `/provider claude-code`, `codex-cli`, `anthropic`, …; `/model name`; `/auth api-key\|subscription` | List and switch backends for this session |
 | `/diff`, `/history` | Show the pending diff again; recent conversation |
 | `/cancel`, `/clear`, `/status`, `/help` | |
-| Up/Down, PgUp/PgDn | Scroll the transcript |
+| ←/→, Home/End, Delete, Backspace | Edit anywhere in the input line (Ctrl/Alt+←/→ by word, Ctrl+Backspace/Delete erase a word, Ctrl+A/E start/end, Ctrl+U erase to the start); a click in the line places the cursor; paste goes in at the cursor |
+| ↑/↓ | Recall earlier inputs (your unfinished text is restored after the last one) |
+| PgUp/PgDn, Shift+↑/↓, wheel | Scroll the transcript |
+| drag with the left button | Select text **inside the panel only** and copy it (OSC 52) when released; dragging past the top or bottom edge scrolls |
 | Esc | Back to the editor |
 
 **Agent tasks** are shown separately from chat: a `▍Agent · Codex CLI · workspace-write` header,

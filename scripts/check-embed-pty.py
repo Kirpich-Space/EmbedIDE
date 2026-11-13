@@ -491,15 +491,12 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(ide.esc, b"u", b":", b"q", b"!", b"\r")
         self.assertEqual(ide.finish(), 0)
 
-    def test_mouse_is_opt_in_and_clicks_open_files(self):
+    def test_mouse_is_captured_clicks_open_files_and_can_be_turned_off(self):
         (self.root / "clicked.c").write_text("int clicked;\n")
         ide = self.ide()
+        self.assertIn(b"\x1b[?1000h", ide.output, "the IDE owns the mouse, so a drag cannot select across panels")
         ide.keys(ide.esc)
         ide.until(b"mNORMAL | [untitled]")
-        self.assertNotIn(b"\x1b[?1000h", ide.output, "mouse must be off by default")
-        ide.type(":mouse\r")
-        ide.until(b"\x1b[?1000h")
-        ide.until(b"Mouse on")
         # SGR mouse, 1-based: row 4 is the first explorer entry (src/), row 5
         # clicked.c. A click selects; a second click opens.
         ide.keys(b"\x1b[<0;3;5M", b"\x1b[<0;3;5m")
@@ -513,9 +510,40 @@ class EmbedContracts(unittest.TestCase):
         ide.until(b"clicked.c [+]")
         ide.type(":w\r")
         ide.until(b"Saved")
+        ide.type(":mouse\r")
+        ide.until(b"Mouse off")
         self.quit(ide)
         self.assertEqual((self.root / "clicked.c").read_text(), "int clickedx;\n")
         self.assertIn(b"\x1b[?1000l", ide.output, "mouse capture was not released")
+
+    def test_ai_panel_keeps_a_cursor_and_a_drag_selects_only_its_own_text(self):
+        slow, _ = self.mock_cli("claude", "ok")
+        (self.config / "config.toml").write_text(
+            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
+        ide = self.ide()
+        self.open_file(ide, "src/main.c")
+        ide.panel("2")
+        # Edit in the middle of the line with the arrow keys: `/hexlp` -> `/help`.
+        ide.type("/hexlp")
+        ide.keys(b"\x1b[D", b"\x1b[D", b"\x1b[D")   # Left x3: before `xlp`
+        ide.keys(b"\x1b[3~")                          # Delete removes the `x`
+        ide.keys(b"\x1b[H", b"\x1b[F")               # Home, End
+        ide.keys(b"\x1b[D", b"\x1b[D", b"\x1b[D")   # Left x3: between `/he` and `lp`
+        ide.keys(b"\r")                               # Enter sends the whole line
+        self.until_panel(ide, "Start with: /provider claude-code")
+        # Up recalls the previous input.
+        ide.keys(b"\x1b[A")
+        ide.until(b"/help")
+        ide.keys(ide.ctrl("u"))
+        # A drag inside the AI column selects (and copies, via OSC 52) only that column's text.
+        screen = ide.screen().splitlines()
+        row = next(i for i, l in enumerate(screen) if "Type here" in l.split("|")[-1])
+        col = screen[row].rindex("|") + 2
+        ide.keys(f"\x1b[<0;{col};{row + 1}M".encode(), f"\x1b[<32;{col + 9};{row + 1}M".encode(),
+                 f"\x1b[<0;{col + 9};{row + 1}m".encode())
+        ide.until(b"\x1b]52;c;")
+        self.assertEqual(ide.latest(rb"Copied (\d+) chars from AI").group(1), b"6")  # "Type h": the "  · " lead is not copied
+        self.quit(ide)
 
     def mock_cli(self, kind, mode):
         """An executable `claude`/`codex` running the repository's mock CLI."""

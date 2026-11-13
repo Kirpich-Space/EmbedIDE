@@ -2,7 +2,7 @@
 use super::binview;
 use super::popup::{self, Popup};
 use super::{
-    assistant::{Assistant, EditorContext},
+    assistant::{osc52, Assistant, EditorContext},
     guard,
     layout::{self, Frame, Row},
     screen::{Screen, Theme},
@@ -385,6 +385,8 @@ pub struct Workspace {
     held_panel: Option<String>,
     /// Mouse capture requested (config `mouse` or `:mouse`).
     pub mouse: bool,
+    /// Text to hand to the terminal clipboard (OSC 52) after this event.
+    clipboard: Option<String>,
     /// Open completion popup.
     popup: Option<Popup>,
     /// Binary file shown in the editor area (HEX / ELF / disassembly).
@@ -491,6 +493,7 @@ impl Workspace {
             keyboard_enhanced: false,
             held_panel: None,
             mouse,
+            clipboard: None,
             popup: None,
             binary: None,
             lsp: BTreeMap::new(),
@@ -773,7 +776,7 @@ impl Workspace {
             "e" | "edit" | "open" => self.command("open"),
             "ai" if !arg.is_empty() => {
                 self.assistant_visible = true;
-                self.assistant.input = arg.to_string();
+                self.assistant.set_input(arg);
                 let ctx = self.editor_context();
                 self.assistant.submit(&ctx);
                 Ok(())
@@ -962,6 +965,10 @@ impl Workspace {
     /// Accepted workspace quit, after dirty-buffer protection.
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+    /// Text the user selected, to copy to the terminal clipboard.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
     /// Current status/error text.
     pub fn notification(&self) -> &str {
@@ -1430,7 +1437,7 @@ impl Workspace {
             }
             "explain" => {
                 self.assistant_visible = true;
-                self.assistant.input = "/explain".into();
+                self.assistant.set_input("/explain");
                 let ctx = self.editor_context();
                 self.assistant.submit(&ctx);
             }
@@ -2283,6 +2290,33 @@ impl Workspace {
         let (x, y) = (mouse.column, mouse.row);
         let hits = self.hits;
         let inside = |area: Option<Area>| area.filter(|a| a.contains(x, y));
+        // A drag that started in the AI panel keeps selecting its text, even
+        // when the pointer leaves the panel; the release copies it.
+        if self.assistant.selecting() {
+            if let Some(area) = hits.assistant {
+                let (width, height) = (usize::from(area.width), usize::from(area.height));
+                match mouse.kind {
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        self.assistant.mouse_drag(
+                            i32::from(x) as isize - i32::from(area.x) as isize,
+                            i32::from(y) as isize - i32::from(area.y) as isize,
+                            width,
+                            height,
+                        );
+                        return Ok(());
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if let Some(text) = self.assistant.mouse_up(width) {
+                            self.notification =
+                                format!("Copied {} chars from AI panel", text.chars().count());
+                            self.clipboard = Some(text);
+                        }
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        }
         let wheel = match mouse.kind {
             MouseEventKind::ScrollUp => -3isize,
             MouseEventKind::ScrollDown => 3,
@@ -2324,12 +2358,18 @@ impl Workspace {
                 doc.session.editor.set_cursor(byte)?;
                 self.focus = Focus::Editor;
             }
-        } else if let Some(_area) = inside(hits.assistant) {
+        } else if let Some(area) = inside(hits.assistant) {
             if wheel != 0 {
                 self.assistant.scroll(-wheel);
             } else {
                 self.assistant_visible = true;
                 self.focus = Focus::Assistant;
+                self.assistant.mouse_down(
+                    usize::from(x - area.x),
+                    usize::from(y - area.y),
+                    usize::from(area.width),
+                    usize::from(area.height),
+                );
             }
         } else if let Some(_area) = inside(hits.bottom) {
             if self.panel == Panel::Terminal {
@@ -2792,11 +2832,11 @@ impl Workspace {
                         KeyCode::Esc => self.focus = Focus::Editor,
                         KeyCode::Enter => match self.assistant.input.trim() {
                             "/apply" => {
-                                self.assistant.input.clear();
+                                self.assistant.clear_input();
                                 self.apply_proposal()?;
                             }
                             "/reject" => {
-                                self.assistant.input.clear();
+                                self.assistant.clear_input();
                                 self.assistant.take_proposal_if(false);
                             }
                             _ => {
@@ -2804,11 +2844,6 @@ impl Workspace {
                                 self.assistant.submit(&ctx);
                             }
                         },
-                        KeyCode::Backspace => {
-                            self.assistant.input.pop();
-                        }
-                        KeyCode::Up => self.assistant.scroll(1),
-                        KeyCode::Down => self.assistant.scroll(-1),
                         KeyCode::PageUp => self.assistant.scroll(10),
                         KeyCode::PageDown => self.assistant.scroll(-10),
                         // One key answers an agent approval: y allow, a allow similar, n deny
@@ -2825,16 +2860,10 @@ impl Workspace {
                                 _ => embedide_ai::agent::Decision::Deny(String::new()),
                             });
                         }
-                        KeyCode::Char(ch)
-                            if !key
-                                .modifiers
-                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                                && !ch.is_control()
-                                && self.assistant.input.len() < 16384 =>
-                        {
-                            self.assistant.input.push(ch)
+                        // Arrows, Home/End, Delete, words, history, typing
+                        _ => {
+                            self.assistant.edit_key(key);
                         }
-                        _ => {}
                     },
                     Focus::Editor if self.binary.is_some() => {
                         if let Some(result) = self.binary_key(key) {
@@ -2967,6 +2996,8 @@ impl Workspace {
                         }
                         input.push(ch);
                     }
+                } else if self.dialog.is_none() && self.focus == Focus::Assistant {
+                    self.assistant.insert_text(&text);
                 } else if self.dialog.is_none() && self.focus == Focus::Editor {
                     self.documents[self.active].handle(Event::Paste(text));
                     self.after_editor_input();
@@ -4028,6 +4059,13 @@ pub fn run_with(
         };
         if event::poll(Duration::from_millis(interval))? {
             dirty |= app.handle(event::read()?);
+            if let Some(text) = app.take_clipboard() {
+                use std::io::Write;
+                // OSC 52 asks the terminal to put the text on the clipboard.
+                let mut out = io::stdout();
+                out.write_all(osc52(&text.chars().take(100_000).collect::<String>()).as_bytes())?;
+                out.flush()?;
+            }
         }
     }
     // Drop service owners while the terminal guard is still active.
@@ -4346,8 +4384,9 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "TERMINAL Alt+3: your shell in a real pseudo-terminal; all keys go to it except the panel keys (Alt+1/2/3)",
         "        History: Shift+PageUp scrolls back; then Shift+PageUp/PageDown page, Shift+Up/Down line,",
         "        Shift+Home oldest, Shift+End (or typing) back to live. Full-screen programs keep these keys",
-        "MOUSE   Off by default; :mouse toggles it (or \"mouse\": true in embedide.json native). Click focuses a panel,",
-        "        places the cursor, selects / opens explorer rows; the wheel scrolls. Shift+drag still selects text",
+        "MOUSE   On by default; :mouse toggles it (or \"mouse\": false in embedide.json native). Click focuses a panel,",
+        "        places the cursor, selects / opens explorer rows; the wheel scrolls. Drag in the AI panel selects and copies",
+        "        only its text; Shift+drag is the terminal's own selection. AI input: arrows, Home/End, Delete, Up/Down history",
         "AI      Alt+2, then /provider claude-code or /provider codex-cli; type a message, Enter sends (only then)",
         "        /file /selection /explain /edit what to change /diff /apply /reject /cancel /help",
         "        Alt+\\ (Insert mode), :complete or /complete: AI suggestion at the cursor; Tab accepts, Esc rejects",
@@ -4606,7 +4645,9 @@ mod tests {
             })
         };
         ws.frame().unwrap();
-        // Off by default: clicks are ignored.
+        // With capture off, clicks are ignored.
+        assert!(ws.mouse, "on by default");
+        ws.command("mouse").unwrap();
         assert!(!ws.mouse);
         ws.handle(click(2, 3));
         assert_eq!(ws.selected, 0);

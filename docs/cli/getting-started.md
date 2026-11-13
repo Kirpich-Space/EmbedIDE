@@ -95,7 +95,7 @@ compilers and flags, create an `embedide.toml` (`embed project init`, see the
 | Ctrl+W / F10 | close document / next document |
 | F2 / F4 / F6 | toggle explorer / cycle bottom panels / cycle focus |
 | Shift+PageUp, Shift+PageDown, Shift+Home, Shift+End | terminal history |
-| `:mouse` | turn mouse support on/off (off by default) |
+| `:mouse` | turn mouse support on/off (on by default) |
 | Tab / Shift+Tab | indent / dedent (Insert: the current line; Normal/Visual: line or selection) |
 | typing in Insert mode | completion popup: Down/Ctrl+N select, Tab/Enter accept, Esc close; Ctrl+Space asks explicitly |
 
@@ -180,7 +180,7 @@ applies changes.
 
 * Verified on Linux only; Windows/macOS are untested.
 * One shell session in the terminal panel; 5000 lines of history.
-* Mouse support is basic (focus, cursor placement, explorer rows, wheel) and opt-in; no drag selection.
+* Mouse support (on by default): focus, cursor placement, explorer rows, wheel, and drag selection with copy in the AI panel; no drag selection in the editor.
 * Real hardware (probes, boards, USB serial adapters) was not used in testing.
 * Fortran builds were not run (no Fortran compiler on the test machine).
 * Builds use the files on disk: save before F5.

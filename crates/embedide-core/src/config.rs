@@ -241,8 +241,9 @@ pub struct NativeConfig {
     /// Global command bindings; documented command IDs mapped to F1..F12, ctrl+letter or alt+digit.
     pub keys: BTreeMap<String, String>,
     /// Capture the mouse in the IDE (click to focus/place the cursor, wheel to
-    /// scroll). Off by default: while captured, the terminal's own text
-    /// selection usually needs Shift+drag.
+    /// scroll, drag in the AI panel to select and copy its text). On by
+    /// default; while captured, the terminal's own text selection needs
+    /// Shift+drag. `:mouse` toggles it.
     pub mouse: bool,
     /// Automatic indentation.
     pub indent: IndentConfig,
@@ -280,7 +281,7 @@ impl Default for NativeConfig {
             debug: DebugConfig::default(),
             tasks: BTreeMap::new(),
             keys: BTreeMap::new(),
-            mouse: false,
+            mouse: true,
             indent: IndentConfig::default(),
             completion: CompletionConfig::default(),
             asm: AsmConfig::default(),

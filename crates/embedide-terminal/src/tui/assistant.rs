@@ -15,6 +15,9 @@ use unicode_width::UnicodeWidthChar;
 
 mod agent;
 mod inline;
+mod input;
+
+pub use input::osc52;
 
 /// What the editor shares with the assistant for one action.
 #[derive(Debug, Clone, Default)]
@@ -123,6 +126,16 @@ pub struct Assistant {
     history: Vec<Message>,
     /// Text being typed in the panel's input line.
     pub input: String,
+    /// Cursor in `input`, in characters.
+    cursor: usize,
+    /// Earlier inputs (Up/Down) and the position in them.
+    history_inputs: Vec<String>,
+    hist_pos: Option<usize>,
+    draft: String,
+    /// Mouse selection in the transcript.
+    sel: Option<input::Selection>,
+    /// Text to copy to the terminal clipboard (OSC 52).
+    clipboard: Option<String>,
     attachments: Vec<(String, String)>,
     job: Option<Job>,
     /// Backend status checks run beside requests (they never block chat).
@@ -202,6 +215,12 @@ impl Assistant {
             transcript: Vec::new(),
             history: Vec::new(),
             input: String::new(),
+            cursor: 0,
+            history_inputs: Vec::new(),
+            hist_pos: None,
+            draft: String::new(),
+            sel: None,
+            clipboard: None,
             attachments: Vec::new(),
             job: None,
             checks: None,
@@ -244,6 +263,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     fn note(&mut self, kind: Kind, text: impl Into<String>) {
         self.transcript.push((kind, text.into()));
         if self.transcript.len() > 2000 {
+            self.sel = None;
             self.transcript.drain(..200);
             if let Some(job) = &mut self.job {
                 job.slot = job.slot.and_then(|i| i.checked_sub(200));
@@ -254,6 +274,11 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             }
         }
         self.scroll = 0;
+    }
+
+    /// Text the user selected with the mouse, once, for the terminal clipboard.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     /// One-line state for headers and the status bar.
@@ -381,10 +406,13 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     /// Handle Enter in the input line.
     pub fn submit(&mut self, ctx: &EditorContext) {
         let line = std::mem::take(&mut self.input);
+        self.cursor = 0;
+        self.sel = None;
         let line = line.trim().to_string();
         if line.is_empty() {
             return;
         }
+        self.remember_input(&line);
         let (cmd, arg) = line
             .split_once(' ')
             .map(|(c, a)| (c, a.trim()))
@@ -453,7 +481,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 self.check_backends(vec![kind]);
             }
             "/selection" => {
-                self.input = "/sel".into();
+                self.set_input("/sel");
                 self.submit(ctx);
             }
             "/file" if !arg.is_empty() => {
@@ -610,7 +638,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             },
             "/explain" => {
                 if ctx.selection.as_deref().is_some_and(|s| !s.is_empty()) {
-                    self.input = "/sel".into();
+                    self.set_input("/sel");
                     self.submit(ctx);
                 } else if self.attachments.is_empty() {
                     if let Ok((label, text)) = self.gather(ctx) {
@@ -1048,21 +1076,14 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         let body_h = height.saturating_sub(2);
         let end = lines.len().saturating_sub(self.scroll.min(lines.len()));
         let start = end.saturating_sub(body_h);
-        for line in &lines[start..end] {
-            let mut row = Row::default();
-            for (text, style) in line {
-                row.push_styled(text, false, *style);
-            }
-            rows.push(row);
+        for (i, line) in lines[start..end].iter().enumerate() {
+            rows.push(self.selected_row(start + i, line));
         }
         rows.resize_with(height.saturating_sub(1), Row::default);
         // Input line: a prompt, the text (its tail when long), or a hint.
-        let visible: String = {
-            let chars: Vec<char> = self.input.chars().collect();
-            let max = width.saturating_sub(3);
-            let skip = chars.len().saturating_sub(max);
-            chars[skip..].iter().collect()
-        };
+        let (first, last, cur) = self.input_window(width);
+        let chars: Vec<char> = self.input.chars().collect();
+        let visible: String = chars[first..last].iter().collect();
         let mut input = Row::default();
         input.push_styled("› ", false, Some(Highlight::Keyword));
         if visible.is_empty() {
@@ -1087,8 +1108,8 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         rows.push(input);
         let cursor = focused.then(|| {
             (
-                (2 + visible
-                    .chars()
+                (2 + chars[first..cur]
+                    .iter()
                     .map(|c| c.width().unwrap_or(1))
                     .sum::<usize>())
                 .min(width - 1) as u16,
