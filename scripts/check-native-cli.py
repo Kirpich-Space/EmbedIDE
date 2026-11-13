@@ -131,37 +131,6 @@ class NativeCliContracts(unittest.TestCase):
         self.assertIn(b"EXPECTED_COMPILER_FAILURE", result.stderr)
         self.assertFalse((self.project / "main.o").exists())
 
-    @unittest.skipUnless(shutil.which("node"), "Node.js required for legacy migration contracts")
-    def test_catalog_matches_legacy_source_exactly(self):
-        result = subprocess.run(
-            ["node", "-e", 'process.stdout.write(JSON.stringify(require("./electron/boards").BOARDS))'],
-            cwd=ROOT, capture_output=True, check=True, timeout=10,
-        )
-        value, _ = self.cli("targets")
-        self.assertEqual(value["data"]["targets"], json.loads(result.stdout))
-
-    @unittest.skipUnless(shutil.which("node"), "Node.js required for legacy migration contracts")
-    def test_every_legacy_template_opens_without_modification(self):
-        script = """
-const p = require('./electron/project');
-const root = process.argv[1];
-const paths = p.getTemplateList().map(t => p.createProject(root, t.id, t.id));
-process.stdout.write(JSON.stringify(paths));
-"""
-        result = subprocess.run(
-            ["node", "-e", script, str(self.project)],
-            cwd=ROOT, capture_output=True, check=True, timeout=10,
-        )
-        paths = json.loads(result.stdout)
-        self.assertEqual(len(paths), 19)
-        for path in map(Path, paths):
-            with self.subTest(template=path.name):
-                before = {str(p): p.read_bytes() for p in path.rglob("*") if p.is_file()}
-                value, _ = self.cli("open", str(path))
-                self.assertEqual(value["data"]["metadata"]["type"], path.name)
-                after = {str(p): p.read_bytes() for p in path.rglob("*") if p.is_file()}
-                self.assertEqual(before, after)
-
 
 def main():
     global BINARY

@@ -73,8 +73,7 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 - Fortran module dependencies are not scanned (compile order = directory order).
 - `ai login` reads the key with echo when typed interactively; piping is recommended.
 - Credentials are stored in a 0600 file, not in the OS keychain.
-- The Electron app (`electron/`, `src/`) is deprecated. The only change: its serial service now looks for
-  the `embed` binary (the CLI was renamed from `embedide`).
+- The former Electron app was removed from the repository (see the git history).
 - Terminal panel: one shell session; 5000 lines of history; programs cannot receive mouse events
   (the IDE's mouse mode is for the IDE itself); the history of a full-screen program is its own.
 - Completion: plain-text insertion of snippets, no automatic-import edits, no signature help, hover or

@@ -1,3 +1,5 @@
+> **Historical.** The Electron application discussed here has since been removed from the repository.
+
 # План миграции
 
 Этап считается завершённым только после проверок его исходников. Наличие
