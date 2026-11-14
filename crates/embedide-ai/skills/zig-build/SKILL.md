@@ -1,7 +1,7 @@
 ---
 name: zig-build
 description: Working on Zig projects with build.zig. Use when editing Zig code, build.zig or Zig tests.
-license: MIT
+license: GPL-3.0-only
 ---
 # Zig
 

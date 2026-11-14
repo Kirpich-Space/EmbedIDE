@@ -1,7 +1,7 @@
 ---
 name: embedded-bringup
 description: Board bring-up and debugging for microcontroller projects (STM32, nRF, RP2040, ESP32, AVR). Use when a task touches clocks, pins, peripherals, linker scripts, startup code or flashing.
-license: MIT
+license: GPL-3.0-only
 ---
 # Embedded bring-up
 

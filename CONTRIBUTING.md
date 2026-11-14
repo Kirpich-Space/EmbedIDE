@@ -47,6 +47,11 @@ clangd, …) skip themselves. Report blocked checks explicitly in your PR.
   checks), links issues, and includes screenshots for UI changes.
 - Update `CHANGELOG.md` and the relevant guide in `docs/cli/` with the change.
 
+## License
+
+EmbedIDE is GPL-3.0-only. By contributing you agree that your contribution is licensed under the same
+terms.
+
 ## Security
 
 Do not open public issues for vulnerabilities: see [SECURITY.md](SECURITY.md).

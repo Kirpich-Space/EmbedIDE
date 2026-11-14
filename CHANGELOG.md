@@ -19,6 +19,12 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
   terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
 
+### License
+- EmbedIDE is now licensed under the **GNU GPL v3.0 only** (was MIT). All workspace crates, the built-in
+  skills and the documentation follow. Earlier published copies (up to `0.1.0-alpha.1`) stay MIT. All
+  third-party dependencies are GPL-3.0-compatible (MIT, Apache-2.0, BSD, ISC, Unicode, MPL-2.0, Zlib,
+  Unlicense).
+
 ### Distribution
 - Static `x86_64-unknown-linux-musl` archive (any Linux distribution, no glibc requirement) next to the
   glibc one; `install.sh` (checksum-verified, user-local); issue templates for bug reports.

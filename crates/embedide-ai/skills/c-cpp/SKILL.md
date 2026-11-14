@@ -1,7 +1,7 @@
 ---
 name: c-cpp
 description: Writing, building and debugging C and C++ on the host (GCC, Clang, Make, CMake). Use for any C or C++ source in the project.
-license: MIT
+license: GPL-3.0-only
 ---
 # C and C++
 

@@ -1,7 +1,7 @@
 ---
 name: embedide-agent
 description: How to work as a coding agent inside EmbedIDE. Always active in agent mode.
-license: MIT
+license: GPL-3.0-only
 ---
 # Working inside EmbedIDE
 

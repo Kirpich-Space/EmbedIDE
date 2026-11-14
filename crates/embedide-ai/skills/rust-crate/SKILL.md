@@ -1,7 +1,7 @@
 ---
 name: rust-crate
 description: Conventions for Rust crates and workspaces. Use when editing Rust code, Cargo manifests or tests.
-license: MIT
+license: GPL-3.0-only
 ---
 # Rust crate
 

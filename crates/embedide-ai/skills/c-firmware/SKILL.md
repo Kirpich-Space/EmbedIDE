@@ -1,7 +1,7 @@
 ---
 name: c-firmware
 description: Rules for bare-metal and RTOS C firmware (C99/C11). Use when writing or changing C code for microcontrollers, drivers, interrupt handlers or startup code.
-license: MIT
+license: GPL-3.0-only
 ---
 # C firmware
 

@@ -1,7 +1,7 @@
 ---
 name: asm-review
 description: Writing and reviewing assembly (x86-64 NASM/GAS, AArch64, RISC-V). Use when editing .asm/.s/.S files or inline assembly.
-license: MIT
+license: GPL-3.0-only
 ---
 # Assembly
 
