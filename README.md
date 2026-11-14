@@ -240,6 +240,17 @@ See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills
   commands. See [what terminals can report](docs/cli/tui.md#what-terminals-can-report).
 - **Build ignores the latest edit** — builds use files on disk; save (`:w`) before F5.
 
+## Videos
+
+Official Kirpich Space videos of the real program (version 0.1.0-alpha.1; recordings are real, animations
+and time-lapses are labelled). English narration and subtitles (`.en.srt`):
+
+- [Overview, ~3 min](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.mp4) — what it is, architecture, editor, binary view, AI agents, install
+- [Technical demonstration, ~3.5 min](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.mp4) — edit, build error, fix, terminal, Codex agent, review, permission prompt
+- [Short, 37 s](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.mp4)
+
+The pipeline that records and renders them from the real binary is in [marketing/video](marketing/video).
+
 ## Roadmap
 
 Honest and short; nothing here is promised for a date.

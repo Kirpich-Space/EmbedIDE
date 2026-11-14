@@ -68,10 +68,12 @@ mascot, no claims beyond the chip row. (A browser upload is required; the GitHub
 
 ## Demo video
 
-No public demo video URL was available when this file was written. Put it here once it exists and
-link it from the README and every post that allows a link:
+Official videos (real recordings of 0.1.0-alpha.1, English narration and subtitles) are release assets of
+`v0.1.0-alpha.1`:
 
-`DEMO_VIDEO_URL = <to be filled in by the owner>`
+- Overview (2:57): https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.mp4
+- Technical demonstration (3:26): https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.mp4
+- Short (0:37, 1080x1920): https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.mp4
 
-A 60–90 s recording works best: `embed` → open `main.c` → F5 build → error → jump → fix → build →
-`:hex` / ELF symbols / disassembly → `/provider codex-cli` → one agent task with a visible approval.
+Upload-ready YouTube metadata (titles, descriptions, tags, chapters, subtitles, thumbnails) is in
+`marketing/video/metadata/`. A YouTube link replaces these once the videos are uploaded there.

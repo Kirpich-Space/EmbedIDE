@@ -12,7 +12,7 @@ Tick items as you go. "Owner" = needs your decision or your account.
 - [ ] License is GPL-3.0-only everywhere (`LICENSE`, `Cargo.toml`, README).
 - [ ] Repo About, topics and (owner) **social preview image** set; Issues enabled; Discussions enabled (owner).
 - [ ] `SECURITY.md` private reporting works: Settings → Code security → "Private vulnerability reporting" is on (owner).
-- [ ] **Demo video recorded and linked** in README + `product-description.md` (owner).
+- [x] Demo videos recorded and linked (release assets); upload them to YouTube (owner account).
 - [ ] Every claim in the posts matches `docs/cli/status.md` (platform, hardware, FreeBSD, AI).
 - [ ] Good-first-issue list created (`contributor-outreach.md`).
 - [ ] You can spend the first 3 hours after each post answering comments.

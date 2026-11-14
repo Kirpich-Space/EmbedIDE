@@ -32,6 +32,8 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   `embed ai`, `terminal`, `config set` and `toolchain add` still ask.
 
 ### Distribution
+- Three official videos (overview, technical demonstration, vertical short) as release assets, produced by the
+  reproducible pipeline in `marketing/video/` from recordings of the real binary.
 - Static `x86_64-unknown-linux-musl` archive (any Linux distribution, no glibc requirement) next to the
   glibc one; `install.sh` (checksum-verified, user-local); issue templates for bug reports.
 
