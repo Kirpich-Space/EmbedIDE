@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in `embed` does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the alpha. Vulnerabilities go to a private report (see SECURITY.md), not here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `embed --version`
+      placeholder: embed 0.1.0-alpha.1
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Environment
+      description: Output of `embed doctor`, your terminal emulator (and `tmux`/`ssh` if used), and `echo $TERM $COLORTERM`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Keys pressed or commands typed, from starting `embed`. A tiny project that shows it is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Editor, Terminal panel, Build / diagnostics, AI agent, AI chat / suggestions, Skills, Binary view, Configuration, Install, FreeBSD, Other]
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Config files involved (remove secrets), screenshots, logs.

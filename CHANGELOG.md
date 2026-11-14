@@ -19,6 +19,10 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
   terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
 
+### Distribution
+- Static `x86_64-unknown-linux-musl` archive (any Linux distribution, no glibc requirement) next to the
+  glibc one; `install.sh` (checksum-verified, user-local); issue templates for bug reports.
+
 ### Platforms
 - Supported systems are **Linux and FreeBSD**. Windows and macOS are not supported: Windows-specific code
   (`.exe`, `COMSPEC`, `%APPDATA%`, `taskkill`, `winget`, the crossterm `windows` feature) and macOS paths

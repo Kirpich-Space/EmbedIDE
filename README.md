@@ -144,9 +144,28 @@ cargo test --workspace --locked
 python3 scripts/check-embed-pty.py --binary target/release/embed
 ```
 
+## Try it (alpha testers)
+
+Linux x86_64, no root, nothing installed system-wide (the static build runs on any distribution):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install.sh | sh
+embed doctor      # what EmbedIDE found on your machine
+embed             # open the IDE in the current directory (Ctrl+K: commands, F1: help, Ctrl+Q: quit)
+```
+
+(or download `install.sh` first and read it; it verifies the SHA-256 checksum of the download.) FreeBSD:
+build from source, see below. Start with the [tutorials](docs/cli/tutorials.md).
+
+**Found a problem?** Please [open an issue](https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose)
+with `embed --version`, the output of `embed doctor`, your terminal and the steps to reproduce.
+Crashes, wrong colours or keys in your terminal, FreeBSD build errors, agent behaviour you did not
+expect and unclear documentation are all useful. Security problems: [SECURITY.md](SECURITY.md).
+
 ## Install a release archive
 
-Release archives are named `embed-<version>-<target>.tar.gz` and come with `SHA256SUMS`:
+Release archives are named `embed-<version>-<target>.tar.gz` and come with `SHA256SUMS`. The `-musl` archive is
+static and runs on any Linux x86_64; the `-gnu` archive is dynamic (glibc 2.39+):
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing          # verify the download

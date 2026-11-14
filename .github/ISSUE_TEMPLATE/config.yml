@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability (private)
+    url: https://github.com/Kirpich-Space/EmbedIDE/security/advisories/new
+    about: Please do not open a public issue for security problems.
