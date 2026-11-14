@@ -22,12 +22,14 @@ out/                  recordings, WAVs and the rendered MP4s (git-ignored; MP4s 
 
 ## Requirements
 
-Linux, `ffmpeg` (libx264, aac), `rsvg-convert`, Python 3.11+ with `pyte pillow numpy scipy kokoro-onnx piper-tts`
-(`pip install …` in a virtualenv), fonts DejaVu Sans Mono / DejaVu Sans / Noto Sans. Voices run **locally**
-(no cloud, no API): English narration is Kokoro-82M (Apache-2.0, voice `af_heart`); the Russian dub is a Piper
-voice (`ru_RU-denis-medium`, CC0 dataset). Models go to `~/.cache/embedide-video/`: Kokoro files
-`kokoro-v1.0.onnx` and `voices-v1.0.bin` from the kokoro-onnx GitHub release `model-files-v1.0`, and the Piper
-files `ru_RU-denis-medium.onnx(.json)` from `rhasspy/piper-voices` on Hugging Face (`ru/ru_RU/denis/medium`).
+Linux, `ffmpeg` (libx264, aac), `rsvg-convert`, Python 3.11+ with `pyte pillow numpy scipy`, fonts DejaVu Sans Mono /
+DejaVu Sans / Noto Sans. Narration runs **locally** (no cloud, no API) and uses **one voice for every language**:
+Chatterbox Multilingual (MIT) cloned from a single reference clip, `~/.cache/embedide-video/ref_voice.wav`
+(a short Kokoro-82M sample, Apache-2.0). It needs a separate Python with torch (CUDA), `chatterbox-tts` and
+`faster-whisper`; a GPU with 8 GB is enough. Run `python3 prefill_voice.py --tts-python /path/to/that/python`
+once: it queues every line of all storyboards, synthesises them sentence by sentence and re-takes any sentence
+that Whisper does not read back correctly. The compose scripts then only read the cache.
+`finalize.sh` copies the finished renders into `../../videos/`.
 
 The agent recordings need the **Codex CLI** and **Claude Code** installed and logged in (they use your
 subscriptions: a few short tasks per run). `install.sh` is run for real against GitHub.

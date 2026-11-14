@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install
 Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd EmbedIDE && cargo build --release --locked
 Found a bug? https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
-Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.
+Voice: AI-synthesised, one voice for every language (Chatterbox Multilingual, MIT). Music: original, synthesised for this video.
 
 0:00 What is EmbedIDE
 0:37 Architecture

@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install
 Сборка из исходников: git clone https://github.com/Kirpich-Space/EmbedIDE && cd EmbedIDE && cargo build --release --locked
 Нашли ошибку? https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
-Голос (дубляж): Piper, голос Denis (датасет CC0). Музыка: оригинальная, синтезирована для ролика.
+Голос: синтезирован ИИ, один голос на все языки (Chatterbox Multilingual, MIT). Музыка: оригинальная, синтезирована для ролика.
 
 0:00 Что такое EmbedIDE
 0:36 Архитектура

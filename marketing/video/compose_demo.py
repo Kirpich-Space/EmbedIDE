@@ -182,7 +182,7 @@ Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd Emb
 Bugs and feedback: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 The AI agents use the Claude Code / Codex CLI you are logged in with; EmbedIDE needs no API key.
-Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.""",
+Voice: AI-synthesised, one voice for every language (Chatterbox Multilingual, MIT). Music: original, synthesised for this video.""",
           """Настоящая сессия разработки в EmbedIDE (`embed`) — нативной терминальной IDE на Rust для встраиваемой и системной работы. Каждая записанная часть — настоящая программа версии 0.1.0-alpha.1; ожидание ускорено и подписано. Ничего не имитируется.
 
 Что происходит: открываем проект на Си, собираем GCC, читаем диагностику и переходим к ошибке, исправляем, пользуемся встроенным терминалом, затем агент Codex CLI добавляет функцию, собирает и запускает её — со сводкой, дифф-просмотром и откатом. Потом запрос Claude Code на удаление каталога останавливается запросом разрешения, а скомпилированная программа изучается в просмотре ELF/HEX/дизассемблера.
@@ -195,7 +195,7 @@ Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.""",
 Ошибки и отзывы: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 ИИ-агенты используют Claude Code / Codex CLI, в которых вы вошли; ключ API EmbedIDE не нужен.
-Голос (дубляж): Piper, голос Denis (датасет CC0). Музыка: оригинальная.""")
+Голос: синтезирован ИИ, один голос на все языки (Chatterbox Multilingual, MIT). Музыка: оригинальная.""")
 TAGS = ["EmbedIDE", "Rust", "terminal IDE", "TUI", "embedded", "C programming", "GCC", "AI coding agent",
         "Claude Code", "Codex CLI", "ELF", "disassembly", "open source", "Linux", "FreeBSD"]
 

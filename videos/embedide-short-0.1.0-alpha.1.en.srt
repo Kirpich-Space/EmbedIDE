@@ -1,0 +1,47 @@
+1
+00:00:00,450 --> 00:00:01,309
+Edit.
+
+2
+00:00:01,359 --> 00:00:02,288
+Build.
+
+3
+00:00:02,338 --> 00:00:03,478
+Delegate.
+
+4
+00:00:03,528 --> 00:00:08,305
+A native Rust IDE for embedded development, in your terminal.
+
+5
+00:00:09,505 --> 00:00:13,331
+Build with GCC, and the error is one keypress away.
+
+6
+00:00:14,969 --> 00:00:16,585
+Fix it, and build again.
+
+7
+00:00:18,131 --> 00:00:20,412
+Then hand a task to an AI agent.
+
+8
+00:00:20,462 --> 00:00:24,434
+EmbedIDE drives the Claude Code or Codex CLI you already use.
+
+9
+00:00:25,634 --> 00:00:30,699
+It edits files, builds, and runs your program, and every step is visible.
+
+10
+00:00:33,904 --> 00:00:36,108
+Review every change, or revert it.
+
+11
+00:00:37,608 --> 00:00:40,375
+EmbedIDE is open source and in alpha.
+
+12
+00:00:40,425 --> 00:00:42,879
+Try it, and tell us what breaks.

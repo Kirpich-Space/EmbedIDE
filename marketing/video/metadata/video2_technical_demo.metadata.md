@@ -18,7 +18,7 @@ Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd Emb
 Bugs and feedback: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 The AI agents use the Claude Code / Codex CLI you are logged in with; EmbedIDE needs no API key.
-Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.
+Voice: AI-synthesised, one voice for every language (Chatterbox Multilingual, MIT). Music: original, synthesised for this video.
 
 0:00 Introduction
 0:21 Open a project

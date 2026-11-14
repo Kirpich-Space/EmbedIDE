@@ -204,7 +204,7 @@ curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install
 Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd EmbedIDE && cargo build --release --locked
 Found a bug? https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
-Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.""",
+Voice: AI-synthesised, one voice for every language (Chatterbox Multilingual, MIT). Music: original, synthesised for this video.""",
           """EmbedIDE (`embed`) — нативная IDE на Rust для встраиваемой и системной разработки, которая работает в терминале: редактор в стиле Vim, проводник, встроенный терминал, сборка с переходом к ошибке, просмотр ELF/HEX/дизассемблера собранных программ и необязательные ИИ-агенты, которые работают в вашем проекте через уже установленные Claude Code или Codex CLI — с политикой прав, которую вы контролируете, и диффами, которые можно просмотреть и откатить.
 
 Официальный ролик Kirpich Space / EmbedIDE. Записанные части — настоящая программа (0.1.0-alpha.1); схема архитектуры — анимация, и это подписано на экране. Ожидание ускорено и помечено. Русский дубляж; оригинал на английском.
@@ -217,7 +217,7 @@ curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install
 Сборка из исходников: git clone https://github.com/Kirpich-Space/EmbedIDE && cd EmbedIDE && cargo build --release --locked
 Нашли ошибку? https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
-Голос (дубляж): Piper, голос Denis (датасет CC0). Музыка: оригинальная, синтезирована для ролика.""")
+Голос: синтезирован ИИ, один голос на все языки (Chatterbox Multilingual, MIT). Музыка: оригинальная, синтезирована для ролика.""")
 TAGS = ["EmbedIDE", "Rust", "embedded", "IDE", "terminal", "TUI", "firmware", "systems programming", "open source",
         "Claude Code", "Codex CLI", "FreeBSD", "Linux"]
 

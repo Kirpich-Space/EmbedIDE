@@ -18,7 +18,7 @@ EmbedIDE: техническая демонстрация — правка, сб
 Ошибки и отзывы: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 ИИ-агенты используют Claude Code / Codex CLI, в которых вы вошли; ключ API EmbedIDE не нужен.
-Голос (дубляж): Piper, голос Denis (датасет CC0). Музыка: оригинальная.
+Голос: синтезирован ИИ, один голос на все языки (Chatterbox Multilingual, MIT). Музыка: оригинальная.
 
 0:00 Введение
 0:22 Открываем проект

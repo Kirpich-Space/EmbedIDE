@@ -1,4 +1,4 @@
-"""Narration (Piper TTS, voice: LibriTTS-R, CC BY 4.0) and original synthesised music."""
+"""Narration (one cloned voice for all languages, Chatterbox Multilingual, MIT) and original synthesised music."""
 import hashlib, json, os, re, subprocess, wave
 from pathlib import Path
 
@@ -6,14 +6,9 @@ import numpy as np
 
 SR = 48000
 VOICE_DIR = Path(os.environ.get("EMBEDIDE_VOICE_DIR", Path.home() / ".cache" / "embedide-video"))
-VOICE = VOICE_DIR / "en_US-libritts_r-medium.onnx"
-SPEAKER = 6
 CACHE = VOICE_DIR / "narration"
 
-_piper = {}
-_kokoro = None
-KOKORO_VOICE = "af_heart"      # Kokoro-82M (Apache-2.0), best-rated English voice
-PIPER_RU = VOICE_DIR / "ru_RU-denis-medium.onnx"   # Piper, CC0 dataset
+VOICE_ID = "chatterbox-mtl-ref1"   # bump to invalidate the narration cache
 
 
 def _resample(a, sr_from):
@@ -73,32 +68,25 @@ def spoken_ru(text):
     return text
 
 
+def _key(text, lang):
+    return hashlib.sha1(f"{lang}|{VOICE_ID}|{text}".encode()).hexdigest()[:16]
+
+
 def narrate(text, lang="en"):
-    """Mono float32 audio at SR for `text`, cached on disk. English: Kokoro-82M; Russian: Piper (CC0 voice)."""
-    global _kokoro
+    """Mono float32 audio at SR for `text`. One voice for every language (Chatterbox Multilingual cloned from
+    one reference clip, see lib/tts_worker.py). Audio comes from the cache; on a miss the text is queued in
+    $CACHE/jobs.jsonl and silence is returned so a dry run can collect every line (see `prefill`)."""
     CACHE.mkdir(parents=True, exist_ok=True)
     spoken_text = spoken(text) if lang == "en" else spoken_ru(text)
-    key = hashlib.sha1(f"{lang}|{KOKORO_VOICE}|{spoken_text}".encode()).hexdigest()[:16]
+    key = _key(spoken_text, lang)
     f = CACHE / f"{key}.npy"
     if f.exists():
         return np.load(f)
-    if lang == "en":
-        from kokoro_onnx import Kokoro
-        if _kokoro is None:
-            _kokoro = Kokoro(str(VOICE_DIR / "kokoro-v1.0.onnx"), str(VOICE_DIR / "voices-v1.0.bin"))
-        a, sr = _kokoro.create(spoken_text, voice=KOKORO_VOICE, speed=1.02, lang="en-us")
-        a = _resample(np.asarray(a, dtype=np.float32), sr)
-    else:
-        from piper import PiperVoice, SynthesisConfig
-        if "ru" not in _piper:
-            _piper["ru"] = PiperVoice.load(str(PIPER_RU))
-        cfg = SynthesisConfig(length_scale=1.05, noise_scale=0.6, noise_w_scale=0.7)
-        chunks = [c.audio_int16_array for c in _piper["ru"].synthesize(spoken_text, syn_config=cfg)]
-        a = _resample(np.concatenate(chunks).astype(np.float32) / 32768.0, 22050)
-    a = _tail_trim(a)
-    a = a / max(1e-6, np.abs(a).max()) * 0.85
-    np.save(f, a)
-    return a
+    with open(CACHE / "jobs.jsonl", "a", encoding="utf-8") as jobs:
+        jobs.write(json.dumps({"key": key, "lang": lang, "text": spoken_text}, ensure_ascii=False) + "\n")
+    if os.environ.get("EMBEDIDE_TTS_DRYRUN"):
+        return np.zeros(int(max(2.0, len(spoken_text) / 14) * SR), np.float32)
+    raise SystemExit(f"narration for {text[:50]!r} is not synthesised yet: run `python3 prefill_voice.py`")
 
 
 def sentences(text):
