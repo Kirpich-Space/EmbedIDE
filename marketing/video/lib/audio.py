@@ -116,6 +116,8 @@ def fit_durations(film, pad=1.0, lead=0.45):
     for s, _ in film.scenes:
         if s.narration:
             s.narr = narrate(s.narration, film.lang)
+            if hasattr(s, "fit_to"):
+                s.fit_to(len(s.narr) / SR + lead + pad)
             s.duration = max(s.duration, len(s.narr) / SR + lead + pad)
 
 

@@ -345,6 +345,20 @@ class Clip(Scene):
         self.timelapse_note = timelapse_note
         self.focus = list(focus)     # (t0, t1, (col0, row0, col1, row1)) zoom targets in terminal cells
 
+    def fit_to(self, target, max_slow=2.4):
+        """Retime the recording so it lasts about `target` s (slow motion up to `max_slow`x) instead of freezing
+        on the last frame while the narration talks on. Zoom windows and labels are scaled with it."""
+        base = sum((b - a) / sp for a, b, sp in self.segments)
+        if getattr(self, "_fitted", False) or target <= base + 0.3:
+            return
+        f = min(max_slow, target / base)
+        self._fitted = True
+        self.segments = [(a, b, sp / f) for a, b, sp in self.segments]
+        self.focus = [(a * f, b * f, box) for a, b, box in self.focus]
+        self.labels = [(a * f, b * f, *rest) for a, b, *rest in self.labels]
+        self.clip_dur = base * f + self.freeze_tail
+        self.duration = max(self.duration, self.clip_dur)
+
     def src_time(self, t):
         acc = 0.0
         for a, b, s in self.segments:
