@@ -6,7 +6,7 @@ directory when the file is inside it). A missing file in an existing directory b
 is written only on `:w`. Subcommand names win over same-named files: use `embed ./build`. It needs an interactive terminal (`TERM` other than `dumb`); no GUI, Electron or Node.js.
 
 ```
-EmbedIDE 0.1.0 | Ready | project | target | profile            ← build status, project, target, profile
+EmbedIDE 0.1.0-alpha.1 | Ready | project | target | profile            ← build status, project, target, profile
 >main.c  uart.c*                                                ← open documents (* = unsaved)
 EXPLORER │ editor (Vim modes)                    │ AI · provider/model · state
 > src    │  1 int main(void) {                   │ you: …

@@ -1,4 +1,4 @@
-# CLI status — verified vs. unverified (2026-11-12, `embed` 0.2.0-dev)
+# CLI status — verified vs. unverified (2026-11-14, `embed` 0.1.0-alpha.1)
 
 Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test --workspace`,
 `crates/embedide-cli/tests/workflows.rs` (real compilers), `crates/embedide-cli/tests/ai.rs` and
@@ -36,6 +36,21 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | Assembly: dialect detection (incl. the example files), per-dialect comments/registers, branch highlighting, labels, `:label`, completion of labels/mnemonics, NASM and GNU as errors in PROBLEMS with jump, F5 build of `examples/asm` and running the program; AT&T/Intel programs built and run; AArch64/RISC-V assembled to objects | nasm 3.02, GNU as/ld 2.47, llvm-mc |
 | Binary files: paged HEX view, goto/search, edit mode with byte undo/redo, confirmed byte-exact save, refusal when changed on disk, permissions kept; ELF64 from GCC, ELF32 and big-endian (PowerPC64) objects, truncated/garbage files without panics; objdump listing agreeing with the ELF reader; GCC build → HEX → ELF → `main` → disassembly → address → bytes, file unchanged | gcc 16.2.1, objdump 2.47, llvm-objdump |
 | LSP protocol: initialize, UTF-8/UTF-16 negotiation and conversion, didOpen/didChange/didClose, server requests answered, superseded requests cancelled and stale answers ignored, crash/garbage handling, process-group cleanup; local word fallback, selection rules, Unicode, Esc/Insert interaction | scripted mock server; workspace unit tests |
+
+## Release check 0.1.0-alpha.1 (2026-11-14, Linux x86_64, glibc)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace` | pass (see CHANGELOG for the two racy tests fixed) |
+| `scripts/check-embed-pty.py` (real `embed` in a PTY) | 33 pass, 4 skipped: nasm, clangd, rust-analyzer, zls not installed |
+| `scripts/check-tui-pty.py` (standalone and `--cli`), `check-terminal-pty.py`, `check-workspace-pty.py` | pass |
+| `embed project init` + `embed build` for `c`, `cpp`, `rust`, `asm` templates with gcc 16 / g++ / cargo 1.99 / GNU as; the C program ran; a syntax error gave a parsed diagnostic (file, line 5, column 13) | pass |
+| **Live agent, Claude Code 2.1.322**: `embed ai agent --provider claude-code "Create … analyze.py … run it"` created `analyze.py`, ran it (3 rows, sum 6) and reported the change | pass |
+| **Live agent, Codex CLI 0.167.2**: the local Codex install lacks `codex-code-mode-host`; `codex exec` alone fails the same way, so no file was written. Not an EmbedIDE fault; Codex agent mode is verified with the mock CLI only | blocked |
+| Plain text (no `/agent`) after `/provider codex-cli` runs an agent task and writes a file | mock Codex CLI (unit test) |
+
+Not available on this machine: clang, zig, nasm, gfortran, cross GCCs, OpenOCD, probes, boards — the
+rows below for those tools come from earlier verification runs.
 
 ## Verified only with mocks / fakes
 

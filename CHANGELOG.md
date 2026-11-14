@@ -1,8 +1,16 @@
 # Changelog
 
-## `embed` 0.2.0 — in development (`0.2.0-dev`, not released)
+## `embed` 0.1.0-alpha.1 — 2026-11-14 (first public alpha, pre-release)
+
+Version note: development builds were called `0.2.0-dev` and an earlier `0.1.0` release candidate was
+never published; `0.1.0-alpha.1` is the first published version of the Rust `embed`. Older
+experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the history.
 
 ### Changed
+- **Agent mode is the default with a CLI backend**: after `/provider codex-cli` or
+  `/provider claude-code`, an ordinary request is a task the agent carries out in the project —
+  no `/agent` needed. `ai.agent.mode` defaults to `agent`; `/mode chat` gives read-only answers; API
+  backends always chat. The provider note shows the mode and policy.
 - Official EmbedIDE theme (`Desige/embedide-palette.json`) in one module,
   `crates/embedide-terminal/src/tui/theme.rs`: Carbon (dark) and Bone (light) tokens, syntax colours
   (`syn-*`: rust keywords, ink code, ceramic jumps) and semantic UI roles — errors red, warnings amber,
@@ -10,6 +18,16 @@
   Carbon `#1C1C20`. Build output and PROBLEMS lines are coloured by severity; AI inline suggestions
   are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
   terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
+
+### Fixed (release preparation)
+- Test `cancel_and_timeout_stop_the_whole_process_group` was flaky: `pgrep -f` matched the mock
+  directory `…-1` as a prefix of concurrent mocks `…-10`…`…-19`. Pattern anchored.
+- Test `terminal_scrollback_…` waited for `DONE`, which the shell echoes with the typed command, before
+  any output existed.
+- PTY end-to-end checks read files after a stale "Saved" (the status row redraws the previous
+  message) and expected English `make` messages under any locale; 4 checks failed before this release.
+- UI colours reused syntax categories (errors drawn in the constant colour, diffs in string/constant
+  colours); they now have semantic roles.
 
 ### Added
 - Agent mode (`/agent`, `/mode agent`, `embed ai agent`): Claude Code (Agent SDK host protocol,

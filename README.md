@@ -8,12 +8,25 @@ Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, R
 > crates, used by the **`embed`** terminal IDE. The earlier Electron/React desktop application has been
 > removed (it remains in the git history before the commit "Remove the legacy Electron application").
 
+## 0.1.0-alpha.1 — first public alpha
+
+An **alpha**: usable for real work in the terminal, with rough edges. What was checked, and how, is in
+[Verified and unverified functionality](docs/cli/status.md).
+
+| Status | What |
+|---|---|
+| **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, explorer, search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo) and C + GNU assembly with GCC; ELF inspector, HEX viewer/editor, disassembly (objdump); AI panel with Claude Code as agent (run live) and chat; skills; official Carbon/Bone theme |
+| **Experimental** (implemented, verified only with mocks or not at all) | Codex CLI as agent (mock CLI; the live run was blocked by a broken local Codex install); API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig and Fortran builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (clangd, rust-analyzer, zls); macOS, Windows, FreeBSD, musl |
+| **Planned** | Native Rust GUI (not started — the TUI is the interface of this release); DWARF source mapping in the binary view; warm completion sessions |
+
+Hardware is never touched automatically: flashing and debugging need an explicit target and command.
+
 ## `embed` — the terminal IDE (Rust)
 
 `embed` opens a full-screen, keyboard-driven IDE in your terminal:
 
 ```
-┌ EmbedIDE 0.1.0 | build status | project | target | profile ──────────────────────────────┐
+┌ EmbedIDE 0.1.0-alpha.1 | build status | project | target | profile ──────────────────────────────┐
 │ EXPLORER (C-A-1) │ editor tabs, Vim modes, syntax highlighting           │ AI (C-A-2)    │
 │                  │                                                        │ chat, context │
 │                  │                                                        │ edits, review │
@@ -23,7 +36,7 @@ Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, R
 
 ```sh
 cargo install --path crates/embedide-cli --locked --root ~/.local   # → ~/.local/bin/embed
-command -v embed && embed --version                                  # → embed 0.1.0
+command -v embed && embed --version                                  # → embed 0.1.0-alpha.1
 cd my-project && embed                     # or: embed path/to/project, embed src/main.c
 ```
 
@@ -31,7 +44,7 @@ If your shell says `Unknown command: embed`, `~/.local/bin` is not on `PATH` (fi
 `fish_add_path ~/.local/bin`; bash/zsh: add `export PATH="$HOME/.local/bin:$PATH"` to the rc file).
 A plain `cargo install` puts the binary in `~/.cargo/bin`, which is often not on `PATH` either.
 **New here? Read [Getting started](docs/cli/getting-started.md)** — install, a first project, keys,
-the embedded workflow and known limitations of 0.1.0.
+the embedded workflow and known limitations of this alpha.
 
 Panels: **Alt+1** explorer, **Alt+2** AI assistant, **Alt+3** terminal (press again to return to the
 editor; Ctrl+Alt+1/2/3 work too). Holding Alt and the digit and pressing Delete hides a panel in terminals
@@ -42,7 +55,7 @@ scroll through history; the mouse works (click to focus, wheel, drag in the AI p
 popup appears while you type (rust-analyzer, clangd and zls when installed, otherwise words of the
 file). See [the TUI guide](docs/cli/tui.md).
 
-**Development version 0.2.0-dev** adds:
+**AI, binaries and assembly** in this alpha:
 
 - **Claude Code and Codex CLI as AI backends** — `/provider claude-code` or `/provider codex-cli` in the
   AI panel uses your installed, already logged-in official CLI (your subscription, no API key, no second
@@ -127,6 +140,59 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/check-embed-pty.py --binary target/release/embed
 ```
+
+## Install a release archive
+
+Release archives are named `embed-<version>-<target>.tar.gz` and come with `SHA256SUMS`:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing          # verify the download
+tar -xzf embed-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz
+install -m 0755 embed-0.1.0-alpha.1-x86_64-unknown-linux-gnu/embed ~/.local/bin/embed
+embed --version                                    # → embed 0.1.0-alpha.1
+embed doctor
+```
+
+The `x86_64-unknown-linux-gnu` archive needs glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+, Fedora
+40+, Arch). Only targets that were built and run are published; on musl systems (Void musl, Alpine),
+FreeBSD, macOS and Windows, build from source (above).
+
+## AI providers
+
+AI is optional. In the AI panel (Alt+2):
+
+- `/provider codex-cli` or `/provider claude-code` — your installed, logged-in official CLI (no API
+  key). **Plain text is then a task for the agent**: "fix the compilation errors", "make me a script
+  that …" — it reads, creates and edits files in the project, runs builds and tests, and reports what
+  changed. `/mode chat` switches to read-only answers; `/policy` chooses `read-only`,
+  `workspace-write` (default) or `approval-required`; `/review`, `/revert`, `/cancel` work on every task.
+- `/provider anthropic | openai | moonshot | xai` with an API key (`embed ai login <provider>`): chat,
+  `/edit` diffs and inline completion; API backends never edit files by themselves.
+
+See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills](docs/cli/skills.md).
+
+## Troubleshooting
+
+- **`Unknown command: embed`** — `~/.local/bin` is not on `PATH` (see above).
+- **Colours look wrong** — set `COLORTERM=truecolor` if your terminal supports 24-bit colour; otherwise
+  the nearest 256 colours are used. `theme = "mono"` uses only your terminal's colours.
+- **Agent does nothing / "tool host failed to start"** — run the same task with the CLI alone
+  (`codex exec "…"`, `claude -p "…"`); if that fails too, reinstall or log in to that CLI. Codex
+  0.167 installs that lack `codex-code-mode-host` cannot run tools at all.
+- **Plain text only chats** — the backend is an API provider, or `/mode chat` is set (`/mode agent`).
+- **Keys like Alt+digit+Delete do nothing** — your terminal does not report them; use `:hide_*`
+  commands. See [what terminals can report](docs/cli/tui.md#what-terminals-can-report).
+- **Build ignores the latest edit** — builds use files on disk; save (`:w`) before F5.
+
+## Known alpha limitations
+
+See [docs/cli/status.md](docs/cli/status.md#known-limitations). In short: Linux is the only verified
+platform; no native GUI; hardware workflows (flash, debug, serial) are untested on real devices; native
+compiles run sequentially; Codex agents have plan-level rather than per-command approval.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## Project layout
 

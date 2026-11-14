@@ -1,4 +1,4 @@
-# Getting started with `embed` 0.1.0
+# Getting started with `embed` 0.1.0-alpha.1
 
 `embed` is the terminal edition of EmbedIDE: a keyboard-first IDE (editor with Vim modes, explorer,
 integrated terminal, builds with diagnostics, serial monitor, optional AI) in one binary. It runs in
@@ -27,7 +27,7 @@ install -Dm755 target/release/embed ~/.local/bin/embed
 Check that your shell finds it:
 
 ```sh
-command -v embed && embed --version      # → embed 0.1.0
+command -v embed && embed --version      # → embed 0.1.0-alpha.1
 ```
 
 `fish: Unknown command: embed` (or bash `command not found`) means the install directory is not on
