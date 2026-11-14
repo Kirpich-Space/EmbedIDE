@@ -211,6 +211,9 @@ class EmbedContracts(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("DISPLAY", "WAYLAND_DISPLAY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
                                  "MOONSHOT_API_KEY", "XAI_API_KEY", "EMBEDIDE_AI_OFFLINE", "CARGO_TARGET_DIR")}
+        # Tool messages (make, gcc) in English whatever the user's locale; UTF-8 stays.
+        self.env.pop("LC_ALL", None)
+        self.env.update({"LC_MESSAGES": "C", "LANGUAGE": "C"})
         self.env.update({"TERM": "xterm-256color", "SHELL": "/bin/sh", "EMBEDIDE_CONFIG_DIR": str(self.config),
                          "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"})
 
@@ -223,6 +226,18 @@ class EmbedContracts(unittest.TestCase):
             '[build]\nsystem = "native"\nsources = ["src"]\n'
             '[toolchain]\nc = "gcc"\n[profiles.debug]\nflags = ["-O0", "-g"]\n'
             f'[profiles.release]\nflags = ["-O2"]\n{extra}')
+
+    def on_disk(self, path, done, timeout=10):
+        """Wait until a save reached the disk (`done(text)`), and return the text.
+
+        "Saved" alone is no proof: the status row keeps the previous "Saved"
+        and redraws it when the cursor moves, before the new save ran."""
+        deadline = time.monotonic() + timeout
+        while True:
+            text = path.read_text()
+            if done(text) or time.monotonic() >= deadline:
+                return text
+            time.sleep(0.05)
 
     def ide(self, size=(40, 120), args=(), keyboard="kitty", cwd=None):
         ide = Ide(cwd or self.root, self.env, size, args, keyboard)
@@ -397,9 +412,10 @@ class EmbedContracts(unittest.TestCase):
         self.assertIn("return 42;", (self.root / "src" / "main.c").read_text())
         self.assertEqual(len(MockProvider.requests), 3)
         # Reject path: a new suggestion dismissed with Esc changes nothing.
+        prior = (self.root / "src" / "main.c").read_text()
         ide.keys(b"o", ide.esc, b":", b"w", b"\r")
         ide.until(b"Saved")
-        before = (self.root / "src" / "main.c").read_text()
+        before = self.on_disk(self.root / "src" / "main.c", lambda t: t != prior)
         for ch in ":complete":
             ide.keys(ch.encode())
         ide.keys(b"\r")
@@ -453,14 +469,14 @@ class EmbedContracts(unittest.TestCase):
         accepted = (self.root / "src" / "sum.c").read_text()
         ide.keys(b"u", b":", b"w", b"\r")
         ide.until(b"Saved")
-        self.assertEqual((self.root / "src" / "sum.c").read_text(), source)
+        self.assertEqual(self.on_disk(self.root / "src" / "sum.c", lambda t: t == source), source)
         ide.keys(ide.ctrl("r"), b":", b"w", b"\r")
         ide.until(b"Saved")
-        self.assertEqual((self.root / "src" / "sum.c").read_text(), accepted)
+        self.assertEqual(self.on_disk(self.root / "src" / "sum.c", lambda t: t == accepted), accepted)
         # Without a suggestion Tab still indents.
         ide.keys(b"o", b"\t", b"x", ide.esc, b":", b"w", b"\r")
         ide.until(b"Saved")
-        self.assertIn("\n        x\n", (self.root / "src" / "sum.c").read_text())
+        self.assertIn("\n        x\n", self.on_disk(self.root / "src" / "sum.c", lambda t: "x\n" in t))
         self.assertEqual(len(MockProvider.requests), 1)
         self.quit(ide)
 
@@ -519,7 +535,7 @@ class EmbedContracts(unittest.TestCase):
     def test_ai_panel_keeps_a_cursor_and_a_drag_selects_only_its_own_text(self):
         slow, _ = self.mock_cli("claude", "ok")
         (self.config / "config.toml").write_text(
-            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
+            f'[ai]\nprovider = "claude-code"\n[ai.agent]\nmode = "chat"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
         ide = self.ide()
         self.open_file(ide, "src/main.c")
         ide.panel("2")
@@ -537,7 +553,9 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(ide.ctrl("u"))
         # A drag inside the AI column selects (and copies, via OSC 52) only that column's text.
         screen = ide.screen().splitlines()
-        row = next(i for i, l in enumerate(screen) if "Type here" in l.split("|")[-1])
+        # Any visible note line of the help text (it may scroll): "  · " lead + text.
+        row = next(i for i, l in enumerate(screen)
+                   if l.split("|")[-1].lstrip().startswith("· ") and len(l.split("|")[-1].strip()) > 12)
         col = screen[row].rindex("|") + 2
         ide.keys(f"\x1b[<0;{col};{row + 1}M".encode(), f"\x1b[<32;{col + 9};{row + 1}M".encode(),
                  f"\x1b[<0;{col + 9};{row + 1}m".encode())
@@ -584,7 +602,7 @@ class EmbedContracts(unittest.TestCase):
         codex, _ = self.mock_cli("codex", "ok")
         hang, hang_log = self.mock_cli("codex", "child")
         (self.config / "config.toml").write_text(
-            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{claude}"\n'
+            f'[ai]\nprovider = "claude-code"\n[ai.agent]\nmode = "chat"\n[ai.providers.claude-code]\ncli = "{claude}"\n'
             f'[ai.providers.codex-cli]\ncli = "{codex}"\n')
         self.env["ANTHROPIC_API_KEY"] = "sk-ant-must-not-reach-the-cli"
         ide = self.ide()
@@ -619,7 +637,7 @@ class EmbedContracts(unittest.TestCase):
         self.until_panel(ide, "codex answer for hello codex")
         # A request that never ends: /cancel stops the CLI and its children.
         (self.config / "config.toml").write_text(
-            f'[ai]\nprovider = "codex-cli"\n[ai.providers.codex-cli]\ncli = "{hang}"\n')
+            f'[ai]\nprovider = "codex-cli"\n[ai.agent]\nmode = "chat"\n[ai.providers.codex-cli]\ncli = "{hang}"\n')
         ide.keys(ide.esc)
         self.say(ide, ":reload")
         ide.panel("2")
@@ -760,7 +778,7 @@ class EmbedContracts(unittest.TestCase):
     def test_streamed_answer_survives_notes_arriving_meanwhile(self):
         slow, _ = self.mock_cli("claude", "slow")
         (self.config / "config.toml").write_text(
-            f'[ai]\nprovider = "claude-code"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
+            f'[ai]\nprovider = "claude-code"\n[ai.agent]\nmode = "chat"\n[ai.providers.claude-code]\ncli = "{slow}"\n')
         ide = self.ide()
         ide.keys(ide.esc)
         ide.panel("2")
@@ -1113,10 +1131,12 @@ class EmbedContracts(unittest.TestCase):
         ide.keys(b"\t")
         ide.type(":w\r")
         ide.until(b"Saved")
-        self.assertTrue((self.root / "src" / "lib.rs").read_text().startswith("    fn main() {"))
+        self.assertTrue(self.on_disk(self.root / "src" / "lib.rs",
+                                     lambda t: t.startswith("    fn main() {")).startswith("    fn main() {"))
         ide.type("u:w\r")
         ide.until(b"Saved")
-        self.assertTrue((self.root / "src" / "lib.rs").read_text().startswith("fn main() {"))
+        self.assertTrue(self.on_disk(self.root / "src" / "lib.rs",
+                                     lambda t: t.startswith("fn main() {")).startswith("fn main() {"))
         self.quit(ide)
 
     def lsp_completion(self, server, files, path, line, typed, expect_label, expect_text):
