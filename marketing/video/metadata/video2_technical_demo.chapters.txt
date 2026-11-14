@@ -1,0 +1,14 @@
+0:00 Introduction
+0:17 Open a project
+0:33 Build, error, jump
+0:47 Fix and rebuild
+0:56 Integrated terminal
+1:09 Skills and policies
+1:25 AI agent: the task
+1:40 The agent works
+1:54 Review and revert
+2:06 Run the result
+2:15 Permission prompts
+2:38 Binary view
+2:55 Summary
+3:18 Install

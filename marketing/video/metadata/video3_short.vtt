@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:03.216
+A native Rust IDE for embedded development, in your terminal.
+
+00:00:04.416 --> 00:00:07.344
+Build with GCC, and the error is one keypress away.
+
+00:00:09.880 --> 00:00:11.215
+Fix it, and build again.
+
+00:00:13.042 --> 00:00:15.127
+Then hand a task to an AI agent.
+
+00:00:15.177 --> 00:00:18.809
+EmbedIDE drives the Claude Code or Codex CLI you already use.
+
+00:00:20.009 --> 00:00:23.485
+It edits files, builds, and runs your program, and every step is visible.
+
+00:00:28.279 --> 00:00:30.016
+Review every change, or revert it.
+
+00:00:31.516 --> 00:00:33.603
+EmbedIDE is open source and in alpha.
+
+00:00:33.653 --> 00:00:35.501
+Try it, and tell us what breaks.

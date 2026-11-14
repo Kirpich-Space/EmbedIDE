@@ -1,0 +1,10 @@
+0:00 What is EmbedIDE
+0:19 Architecture
+0:41 Editor and builds
+0:52 Integrated terminal
+1:03 Binary view
+1:16 Claude and Codex
+1:33 AI agent edits files
+2:12 Status
+2:23 Install
+2:41 Build from source

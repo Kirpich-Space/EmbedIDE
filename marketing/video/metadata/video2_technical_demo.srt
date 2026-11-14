@@ -1,0 +1,223 @@
+1
+00:00:00,450 --> 00:00:04,234
+This is a technical demonstration of EmbedIDE, version 0.1.0-alpha.1.
+
+2
+00:00:04,284 --> 00:00:08,119
+Everything in the recorded sections is the real program, not a mockup.
+
+3
+00:00:08,169 --> 00:00:11,057
+Waiting time is sped up, and it is always labelled.
+
+4
+00:00:11,107 --> 00:00:14,842
+The project is a small C ring buffer, and we will edit it, build it,
+
+5
+00:00:14,892 --> 00:00:16,983
+and then let an AI agent extend it.
+
+6
+00:00:18,083 --> 00:00:20,760
+We start EmbedIDE inside the project directory.
+
+7
+00:00:20,810 --> 00:00:25,372
+The explorer is on the left, the editor in the middle, and the AI panel on the right.
+
+8
+00:00:25,422 --> 00:00:27,901
+I expand the source folder and open ring.c.
+
+9
+00:00:27,951 --> 00:00:32,662
+Nothing has been sent anywhere, and nothing will be until I press Enter in the AI panel.
+
+10
+00:00:33,762 --> 00:00:36,661
+Press F5 to build with the project's compiler, here GCC.
+
+11
+00:00:36,711 --> 00:00:38,734
+The build fails: a missing semicolon.
+
+12
+00:00:38,784 --> 00:00:42,558
+The problems list shows the error and a warning with file, line and column,
+
+13
+00:00:42,608 --> 00:00:44,401
+parsed from the compiler output.
+
+14
+00:00:44,451 --> 00:00:46,935
+Enter jumps straight to the line in the editor.
+
+15
+00:00:48,035 --> 00:00:51,033
+I append the semicolon, press Escape, and save with colon w.
+
+16
+00:00:51,083 --> 00:00:53,722
+Builds use the files on disk, so saving comes first.
+
+17
+00:00:53,772 --> 00:00:56,008
+F5 again, and this time the build succeeds.
+
+18
+00:00:57,108 --> 00:01:01,024
+Alt+3 opens the integrated terminal: a real shell in a pseudo-terminal,
+
+19
+00:01:01,074 --> 00:01:03,082
+started in the project directory.
+
+20
+00:01:03,132 --> 00:01:06,847
+The program runs and prints the values popped from the ring buffer.
+
+21
+00:01:06,897 --> 00:01:08,955
+Alt+3 again returns to the editor.
+
+22
+00:01:10,055 --> 00:01:11,228
+Now the AI side.
+
+23
+00:01:11,278 --> 00:01:16,530
+In the AI panel, slash skills lists what agents get: EmbedIDE's own working instructions and the
+
+24
+00:01:16,580 --> 00:01:19,639
+skills that match this project, chosen automatically.
+
+25
+00:01:19,689 --> 00:01:25,144
+Slash policy shows the three permission policies: read-only, workspace-write, and approval-required.
+
+26
+00:01:26,244 --> 00:01:28,337
+I select the Codex CLI backend.
+
+27
+00:01:28,387 --> 00:01:33,172
+EmbedIDE needs no API key: it runs the Codex CLI you are already logged in with.
+
+28
+00:01:33,222 --> 00:01:35,590
+In agent mode, plain text is a task.
+
+29
+00:01:35,640 --> 00:01:39,546
+I ask for a peek function, a call from main, a build, and a run.
+
+30
+00:01:40,646 --> 00:01:43,886
+The agent reads the files, edits them, builds and runs the program.
+
+31
+00:01:43,936 --> 00:01:47,527
+Every command with its output and every file change is shown as it happens.
+
+32
+00:01:47,577 --> 00:01:49,238
+Codex works in its own sandbox.
+
+33
+00:01:49,288 --> 00:01:50,511
+This part is sped up.
+
+34
+00:01:54,614 --> 00:01:59,115
+When it finishes, EmbedIDE shows a summary: files changed on disk, commands run, and time.
+
+35
+00:01:59,165 --> 00:02:02,831
+Slash review shows the diff, and slash revert would undo the whole task.
+
+36
+00:02:02,881 --> 00:02:05,617
+Files open in the editor are reloaded automatically.
+
+37
+00:02:06,517 --> 00:02:10,490
+Back in the editor, the build is already up to date, because the agent built it.
+
+38
+00:02:10,540 --> 00:02:14,741
+Running the program shows the new function at work: it prints the peeked value first.
+
+39
+00:02:16,011 --> 00:02:17,794
+Permissions are the other half.
+
+40
+00:02:17,844 --> 00:02:20,660
+Here I ask Claude Code to delete the build directory.
+
+41
+00:02:20,710 --> 00:02:24,514
+Deleting data is not something the workspace-write policy allows silently,
+
+42
+00:02:24,564 --> 00:02:26,158
+so EmbedIDE stops and asks.
+
+43
+00:02:26,208 --> 00:02:29,448
+The request shows the exact command and why it needs approval.
+
+44
+00:02:29,498 --> 00:02:30,293
+I press n.
+
+45
+00:02:30,343 --> 00:02:33,818
+The agent is told it was refused, and the directory is still there.
+
+46
+00:02:39,058 --> 00:02:42,482
+And what you build can be inspected without leaving the IDE.
+
+47
+00:02:42,532 --> 00:02:47,283
+This is the compiled program in the hex view, then the ELF inspector with its symbols,
+
+48
+00:02:47,333 --> 00:02:50,451
+then the disassembly of ring_pop, produced by objdump.
+
+49
+00:02:50,501 --> 00:02:55,303
+The file is only read; editing bytes is an explicit mode with a confirmed, atomic save.
+
+50
+00:02:56,203 --> 00:03:00,873
+That was one real session: editing, compiler diagnostics, an integrated terminal,
+
+51
+00:03:00,923 --> 00:03:06,070
+an AI agent that edited files and built the project with a diff you can review and revert,
+
+52
+00:03:06,120 --> 00:03:10,472
+a permission prompt for a risky action, and a view of the compiled program.
+
+53
+00:03:10,522 --> 00:03:12,009
+EmbedIDE is an alpha.
+
+54
+00:03:12,059 --> 00:03:17,259
+Linux is verified, FreeBSD builds but has not been run, and the native GUI is only planned.
+
+55
+00:03:18,759 --> 00:03:20,436
+Try it, and tell us what breaks.
+
+56
+00:03:20,486 --> 00:03:23,673
+The repository link and the install command are in the description.

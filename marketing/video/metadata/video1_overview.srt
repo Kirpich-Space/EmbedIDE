@@ -1,0 +1,179 @@
+1
+00:00:00,450 --> 00:00:03,557
+EmbedIDE is a native Rust IDE for embedded and systems development.
+
+2
+00:00:03,607 --> 00:00:04,988
+It lives in your terminal.
+
+3
+00:00:06,850 --> 00:00:10,748
+It combines a Vim-style editor, an explorer, an integrated terminal,
+
+4
+00:00:10,798 --> 00:00:16,360
+builds with jump-to-source diagnostics, a view for the binaries you produce, and optional AI agents.
+
+5
+00:00:16,410 --> 00:00:19,322
+One Rust binary, with no Electron and no browser.
+
+6
+00:00:20,222 --> 00:00:23,100
+Under the hood it is a Cargo workspace of nine crates.
+
+7
+00:00:23,150 --> 00:00:27,681
+The editor engine has no I/O and no terminal types, so a native GUI could reuse it later.
+
+8
+00:00:27,731 --> 00:00:31,602
+The build engine makes a reviewable plan and then runs it, without a shell.
+
+9
+00:00:31,652 --> 00:00:35,285
+There is no unsafe code, processes are launched with argument vectors,
+
+10
+00:00:35,335 --> 00:00:37,222
+and files are written atomically.
+
+11
+00:00:37,272 --> 00:00:41,236
+The GUI itself is planned, not started: this alpha is a terminal application.
+
+12
+00:00:42,236 --> 00:00:43,915
+This is the real program.
+
+13
+00:00:43,965 --> 00:00:49,362
+Open a file from the explorer, press F5, and GCC's error appears in the problems list with file,
+
+14
+00:00:49,412 --> 00:00:50,619
+line and column.
+
+15
+00:00:50,669 --> 00:00:51,981
+Enter jumps to it.
+
+16
+00:00:53,218 --> 00:00:58,706
+Fix, build again, and use the integrated terminal: a real shell in a pseudo-terminal, one key away.
+
+17
+00:01:03,989 --> 00:01:05,796
+Open the program you just built.
+
+18
+00:01:05,846 --> 00:01:09,323
+A hex viewer and editor, an ELF inspector with sections and symbols,
+
+19
+00:01:09,373 --> 00:01:11,597
+and a disassembly view that runs objdump.
+
+20
+00:01:11,647 --> 00:01:15,542
+The file is only read, unless you explicitly edit bytes and confirm the save.
+
+21
+00:01:16,542 --> 00:01:21,801
+AI integration uses the Claude Code and Codex command-line tools you already have installed and
+
+22
+00:01:21,851 --> 00:01:22,729
+logged in.
+
+23
+00:01:22,779 --> 00:01:26,079
+EmbedIDE needs no API key, never reads their credentials,
+
+24
+00:01:26,129 --> 00:01:29,223
+and removes API key variables from their environment,
+
+25
+00:01:29,273 --> 00:01:33,191
+so a subscription request can never silently become billed API usage.
+
+26
+00:01:34,191 --> 00:01:36,583
+In agent mode, a plain message is a task.
+
+27
+00:01:36,633 --> 00:01:39,572
+Here Claude Code adds a function, edits three files,
+
+28
+00:01:39,622 --> 00:01:42,761
+builds with the project's compiler and runs the program.
+
+29
+00:01:42,811 --> 00:01:47,943
+EmbedIDE answers each permission request from a policy: edits and builds inside the project run,
+
+30
+00:01:47,993 --> 00:01:53,125
+while deleting files, network access, hardware tools and anything outside the project ask first.
+
+31
+00:01:54,025 --> 00:01:58,759
+You choose the compilers: GCC, Clang, zig cc, a cross GCC for Cortex-M, NASM.
+
+32
+00:01:58,809 --> 00:02:03,994
+EmbedIDE detects what is installed and never installs or flashes anything on its own.
+
+33
+00:02:04,044 --> 00:02:09,003
+Debugging with GDB and OpenOCD, and a serial monitor, exist as explicit commands,
+
+34
+00:02:09,053 --> 00:02:12,098
+but they are not yet verified on real hardware.
+
+35
+00:02:12,998 --> 00:02:14,226
+This is an alpha.
+
+36
+00:02:14,276 --> 00:02:16,219
+Linux is the verified platform.
+
+37
+00:02:16,269 --> 00:02:18,773
+FreeBSD compiles but has not been run yet.
+
+38
+00:02:18,823 --> 00:02:23,270
+Windows and macOS are not supported, and the native GUI is planned, not started.
+
+39
+00:02:24,270 --> 00:02:28,976
+To try it, one command downloads a static build into your home directory and verifies its checksum.
+
+40
+00:02:29,026 --> 00:02:31,998
+Then embed doctor shows what EmbedIDE found on your machine.
+
+41
+00:02:41,747 --> 00:02:45,088
+To build from source you need Rust one point eighty-five or newer.
+
+42
+00:02:45,138 --> 00:02:48,984
+Clone the repository, run cargo build with the release flag, and start embed.
+
+43
+00:02:50,747 --> 00:02:52,675
+EmbedIDE is open source under the GPL.
+
+44
+00:02:52,725 --> 00:02:54,395
+Try it, and tell us what breaks.
+
+45
+00:02:54,445 --> 00:02:56,072
+The link is in the description.
