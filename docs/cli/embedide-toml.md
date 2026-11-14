@@ -17,7 +17,7 @@ system = "native"             # native | make | cmake | cargo | zig
 sources = ["src"]             # scanned recursively (hidden dirs, target/, zig-out/ skipped)
 include = ["include"]
 output = "build"              # artifacts in build/<profile>/, objects in build/<profile>/obj/
-artifact = "sensor-node.elf"  # default: project name (+ .exe for Windows host builds)
+artifact = "sensor-node.elf"  # default: the project name
 defines = ["BOARD_REV=2"]
 flags = ["-Wall", "-Wextra"]  # every C/C++/ASM/Fortran compile
 link_flags = []

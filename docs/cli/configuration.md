@@ -10,8 +10,7 @@ credentials file (`embed ai login`), never in these files.
 | Project manifest | `embedide.toml` in the project root | one project (build) | TOML |
 | IDE settings | `embedide.json` → `"native"` and `embedide.local.json` in the project root | one project (IDE behaviour) | JSON |
 
-The configuration directory is `$XDG_CONFIG_HOME/embedide` or `~/.config/embedide` on Linux,
-`~/Library/Application Support/EmbedIDE` on macOS and `%APPDATA%\EmbedIDE` on Windows.
+The configuration directory is `$XDG_CONFIG_HOME/embedide` or `~/.config/embedide` (Linux and FreeBSD).
 `EMBEDIDE_CONFIG_DIR` overrides it. `embed config path` prints the locations; in the IDE
 `:edit_user_config` / `:edit_project_config` (Ctrl+K) open the files and `:reload` applies changes.
 

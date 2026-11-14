@@ -178,14 +178,11 @@ pub(crate) fn prepare(
     let output_root = root.join(&m.build.output);
     let triple = m.target.triple.as_deref();
     let lang = m.language()?;
-    let host = triple.is_none() && m.target.flags.is_empty();
-    let default_name = m.build.artifact.clone().unwrap_or_else(|| {
-        if host && cfg!(windows) {
-            format!("{}.exe", m.project.name)
-        } else {
-            m.project.name.clone()
-        }
-    });
+    let default_name = m
+        .build
+        .artifact
+        .clone()
+        .unwrap_or_else(|| m.project.name.clone());
     let artifact = out.join(&default_name);
 
     // Single-invocation languages
@@ -330,11 +327,7 @@ pub(crate) fn prepare(
         let uses_dep;
         match (kind, t.family) {
             (SourceKind::Nasm, _) => {
-                let fmt = match std::env::consts::OS {
-                    "windows" => "win64",
-                    "macos" => "macho64",
-                    _ => "elf64",
-                };
+                let fmt = "elf64";
                 args.extend([
                     "-f".into(),
                     fmt.into(),

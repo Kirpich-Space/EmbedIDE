@@ -16,7 +16,8 @@ apply: make the change yourself. Only if a tool call was actually refused, say s
    about. The user's message may name the file open in their editor and the cursor line; start there.
 2. Find the build system, in this order:
    - `embedide.toml` → `embed build .` (profiles: `embed build . --profile release`)
-   - `Makefile` / `makefile` / `GNUmakefile` → `make` (look for `test`, `check`, `run` targets)
+   - `Makefile` / `makefile` / `GNUmakefile` → `make` (look for `test`, `check`, `run` targets); on
+     FreeBSD and other BSDs `make` is BSD make, so use `gmake` for GNU Makefiles
    - `CMakeLists.txt` → `cmake -S . -B build && cmake --build build`, tests: `ctest --test-dir build`
    - `Cargo.toml` → `cargo build`, `cargo test` (add `--offline` if the network is unavailable)
    - `build.zig` → `zig build`, `zig build test`

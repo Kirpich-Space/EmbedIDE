@@ -1,5 +1,10 @@
 //! Headless application services shared by CLI and future native GUI.
 
+#[cfg(not(unix))]
+compile_error!(
+    "EmbedIDE supports Linux and FreeBSD only (Unix systems); Windows is not supported."
+);
+
 pub mod binary;
 pub mod config;
 pub mod debug;
@@ -13,7 +18,7 @@ pub mod process;
 
 pub use embedide_editor as editor;
 pub use embedide_editor::{Editor, EditorError, EditorState, Effect};
-pub use embedide_project::{init, BuildSystem, Error, Project, Result};
+pub use embedide_project::{init, make_program, BuildSystem, Error, Project, Result};
 use serde::Serialize;
 use std::{
     env,
@@ -82,7 +87,7 @@ pub fn plan_build(project: &Project, options: &BuildOptions) -> Result<BuildPlan
             if options.release {
                 return Err(Error("Make configuration is project-defined; --release is supported for cargo, cmake and zig".into()));
             }
-            vec![step("make", strings(&["-j", &jobs]))]
+            vec![step(make_program(), strings(&["-j", &jobs]))]
         }
         BuildSystem::Cmake => vec![
             step(
@@ -183,6 +188,7 @@ pub fn toolchains() -> Vec<ToolStatus> {
         "zig",
         "cmake",
         "make",
+        "gmake",
         "arm-none-eabi-gcc",
         "arm-none-eabi-gdb",
         "gdb",
@@ -200,9 +206,6 @@ pub fn toolchains() -> Vec<ToolStatus> {
 
 fn find_executable(name: &str, path: &OsStr) -> Option<PathBuf> {
     for directory in env::split_paths(path).filter(|p| p.is_absolute()) {
-        #[cfg(windows)]
-        let candidate = directory.join(format!("{name}.exe"));
-        #[cfg(not(windows))]
         let candidate = directory.join(name);
         if !candidate.is_file() {
             continue;

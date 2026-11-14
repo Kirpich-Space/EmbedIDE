@@ -128,8 +128,8 @@ fn default_check(root: &Path, configured: Option<&str>) -> Result<Vec<String>, S
         }
     }
     for (file, argv) in [
-        ("Makefile", &["make"][..]),
-        ("makefile", &["make"][..]),
+        ("Makefile", &[embedide_core::make_program()][..]),
+        ("makefile", &[embedide_core::make_program()][..]),
         ("Cargo.toml", &["cargo", "build"][..]),
         ("build.zig", &["zig", "build"][..]),
     ] {

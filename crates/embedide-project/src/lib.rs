@@ -204,3 +204,42 @@ pub fn init(path: &Path, build_system: Option<BuildSystem>) -> Result<Project> {
     file.sync_all()?;
     Project::open(&root)
 }
+
+/// The GNU make program. On the BSDs `make` is BSD make, which cannot read
+/// GNU Makefiles; GNU make is installed as `gmake` (`pkg install gmake`).
+/// Everywhere else (and on a BSD without `gmake`) this is `make`.
+pub fn make_program() -> &'static str {
+    use std::sync::OnceLock;
+    static PROGRAM: OnceLock<&'static str> = OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        let bsd = cfg!(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ));
+        let have_gmake = std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path)
+                .filter(|p| p.is_absolute())
+                .any(|p| p.join("gmake").is_file())
+        });
+        if bsd && have_gmake {
+            "gmake"
+        } else {
+            "make"
+        }
+    })
+}
+
+#[cfg(test)]
+mod make_program_tests {
+    #[test]
+    fn linux_uses_make_and_the_answer_is_stable() {
+        let program = super::make_program();
+        if cfg!(target_os = "linux") {
+            assert_eq!(program, "make");
+        }
+        assert!(["make", "gmake"].contains(&program));
+        assert_eq!(super::make_program(), program);
+    }
+}

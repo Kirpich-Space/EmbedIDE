@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -50,18 +50,11 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo build -p embedide-cli --locked
       - run: cargo build -p embedide-terminal --locked
-      - if: runner.os != 'Windows'
-        run: python scripts/check-terminal-pty.py --binary target/debug/embedide-terminal
-      - if: runner.os != 'Windows'
-        run: python scripts/check-tui-pty.py --binary target/debug/embedide-terminal
-      - if: runner.os != 'Windows'
-        run: python scripts/check-tui-pty.py --binary target/debug/embed --cli
-      - if: runner.os != 'Windows'
-        run: python scripts/check-workspace-pty.py --binary target/debug/embed
-      - if: runner.os != 'Windows'
-        run: python scripts/check-native-cli.py --binary target/debug/embed
-      - if: runner.os == 'Windows'
-        run: python scripts/check-native-cli.py --binary target/debug/embed.exe
+      - run: python scripts/check-terminal-pty.py --binary target/debug/embedide-terminal
+      - run: python scripts/check-tui-pty.py --binary target/debug/embedide-terminal
+      - run: python scripts/check-tui-pty.py --binary target/debug/embed --cli
+      - run: python scripts/check-workspace-pty.py --binary target/debug/embed
+      - run: python scripts/check-native-cli.py --binary target/debug/embed
 
   musl:
     runs-on: ubuntu-latest
@@ -72,7 +65,18 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - run: cargo test --workspace --locked --target x86_64-unknown-linux-musl
       - run: cargo build -p embedide-cli --release --locked --target x86_64-unknown-linux-musl
-      - run: python3 scripts/check-native-cli.py --binary target/x86_64-unknown-linux-musl/release/embedide
+      - run: python3 scripts/check-native-cli.py --binary target/x86_64-unknown-linux-musl/release/embed
+
+  freebsd:
+    # FreeBSD has no hosted runner: type-check and lint the whole workspace for the target.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-freebsd
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --locked --target x86_64-unknown-freebsd -- -D warnings
 
   offline-editor:
     runs-on: ubuntu-latest

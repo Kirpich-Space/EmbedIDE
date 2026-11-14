@@ -49,6 +49,19 @@ many VTE-based terminals ignore it. Use `Shift`+drag with your terminal's own co
 **Terminal panel: can't scroll** — `Shift+PgUp` / `Shift+PgDn`; if your terminal keeps those for its own
 scrollback, use the mouse wheel over the panel.
 
+## FreeBSD
+
+FreeBSD is supported but has only been compiled and linted so far; please report problems.
+
+- Install: `sudo pkg install rust gmake git` (a C compiler is in the base system as `cc`; `pkg install gcc`
+  for GCC), then `cargo install --path crates/embedide-cli --locked --root ~/.local`.
+- **Makefile projects fail with syntax errors** — BSD `make` cannot read GNU Makefiles. EmbedIDE uses
+  `gmake` automatically when it is on `PATH`; in the terminal run `gmake`.
+- **Serial ports** are `/dev/cuaU0`, `/dev/cuaU1`, … (USB) and `/dev/cuau0` (UART). Add your user to the
+  `dialer` group and log in again if opening a port is denied.
+- **Compilers**: `cc` is Clang; `embed toolchain list` shows what is found, `embed toolchain recommend c`
+  prints `pkg install` suggestions.
+
 ## Editing and building
 
 **The build ignores my last edit** — builds use files on disk. Save (`:w` or `Ctrl+S`) before `F5`.
@@ -123,9 +136,9 @@ model.
 
 ## FAQ
 
-**Which platforms work?** Linux x86_64 is the verified platform. The code is portable Rust and the CLI
-parts are expected to work elsewhere, but Windows, macOS and other Linux architectures have not been
-run, and no binaries are published for them.
+**Which platforms work?** Linux and FreeBSD. Linux x86_64 is the verified platform and the only one with
+published binaries. FreeBSD is compiled and linted (cross) but not yet run: build it from source and
+please report what breaks. Windows and macOS are not supported.
 
 **Is there a GUI?** No. `embed` is a terminal application. A native GUI is planned, not started.
 

@@ -11,8 +11,7 @@ Exit codes: `0` success, `1` operation error, `2` usage error, a failing build r
 exit code, `130` when a build is cancelled with Ctrl+C.
 
 Configuration: user settings in `config.toml` inside the configuration directory
-(`$XDG_CONFIG_HOME/embedide` or `~/.config/embedide` on Linux, `~/Library/Application Support/EmbedIDE`
-on macOS, `%APPDATA%\EmbedIDE` on Windows; `EMBEDIDE_CONFIG_DIR` overrides it). Projects use
+(`$XDG_CONFIG_HOME/embedide` or `~/.config/embedide` on Linux and FreeBSD; `EMBEDIDE_CONFIG_DIR` overrides it). Projects use
 [`embedide.toml`](embedide-toml.md).
 
 ## Environment
@@ -64,7 +63,7 @@ differs from `target.triple` is refused with an explanation; Clang and `zig cc` 
 | `build --release` | Shorthand for `--profile release`. |
 | `build --build-system S` | Only for projects without `embedide.toml` (legacy path). |
 | `clean [PATH] [--dry-run]` | Native: removes the output directory **only** if it carries EmbedIDE's `.embedide-output` marker and lies inside the project. CMake: removes the EmbedIDE CMake build dir. Make/Cargo: runs `make clean` / `cargo clean`. |
-| `terminal [PATH] [--profile P]` | Starts `$SHELL` (`%COMSPEC%` on Windows) in the project with its `[env]` and the selected toolchains' directories first on PATH. |
+| `terminal [PATH] [--profile P]` | Starts `$SHELL` (`/bin/sh` if unset) in the project with its `[env]` and the selected toolchains' directories first on PATH. |
 
 Native builds compile each source with the chosen compiler (no shell, absolute paths) and rebuild
 incrementally: an object is recompiled when it is missing, its exact command line changed, or the

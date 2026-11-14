@@ -8,6 +8,11 @@
 //! vector: edits and boundary lookup are O(pieces), not logarithmic. History is
 //! bounded by transaction count; the insertion store lives with the buffer.
 
+#[cfg(not(unix))]
+compile_error!(
+    "EmbedIDE supports Linux and FreeBSD only (Unix systems); Windows is not supported."
+);
+
 use std::{collections::VecDeque, fmt, io, ops::Range};
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 

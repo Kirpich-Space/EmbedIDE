@@ -407,7 +407,7 @@ pub fn detect(options: &DetectOptions) -> Vec<Toolchain> {
             .collect();
         names.sort();
         for name in names {
-            let stem = name.strip_suffix(".exe").unwrap_or(&name);
+            let stem = name.as_str();
             for k in KINDS.iter().filter(|k| k.cross_suffix.is_some()) {
                 let suffix = format!("-{}", k.cross_suffix.unwrap_or_default());
                 let Some(triple) = stem.strip_suffix(&suffix) else {
@@ -601,9 +601,6 @@ pub fn run_capture(
 }
 
 fn executable_in(dir: &Path, name: &str) -> Option<PathBuf> {
-    #[cfg(windows)]
-    let candidate = dir.join(format!("{name}.exe"));
-    #[cfg(not(windows))]
     let candidate = dir.join(name);
     if !candidate.is_file() {
         return None;
@@ -643,12 +640,7 @@ pub fn is_host_triple(triple: &str) -> bool {
         "aarch64" => t.starts_with("aarch64") || t.starts_with("arm64"),
         other => t.starts_with(other),
     };
-    let os_ok = match env::consts::OS {
-        "linux" => t.contains("linux"),
-        "windows" => t.contains("windows") || t.contains("mingw") || t.contains("msvc"),
-        "macos" => t.contains("darwin") || t.contains("apple") || t.contains("macos"),
-        other => t.contains(other),
-    };
+    let os_ok = t.contains(env::consts::OS);
     arch_ok && os_ok
 }
 
@@ -663,11 +655,11 @@ pub struct Recommendation {
     pub note: &'static str,
 }
 
-/// Detect the host package manager family from /etc/os-release (Linux) or the OS.
+/// Detect the host package manager family: `pkg` on FreeBSD, otherwise from
+/// /etc/os-release (Linux).
 pub fn package_family() -> &'static str {
     match env::consts::OS {
-        "windows" => "winget",
-        "macos" => "brew",
+        "freebsd" => "pkg",
         _ => {
             let osr = std::fs::read_to_string("/etc/os-release")
                 .unwrap_or_default()
@@ -694,21 +686,25 @@ pub fn package_family() -> &'static str {
 
 /// Installation suggestions for a language (text only, never executed).
 pub fn recommend(language: Language, family: &str) -> Vec<Recommendation> {
-    let pkg =
-        |kind: &'static str, pacman: &str, apt: &str, dnf: &str, brew: &str, note: &'static str| {
-            let command = match family {
-                "pacman" if !pacman.is_empty() => Some(format!("sudo pacman -S {pacman}")),
-                "apt" if !apt.is_empty() => Some(format!("sudo apt install {apt}")),
-                "dnf" if !dnf.is_empty() => Some(format!("sudo dnf install {dnf}")),
-                "brew" if !brew.is_empty() => Some(format!("brew install {brew}")),
-                _ => None,
-            };
-            Recommendation {
-                kind,
-                command,
-                note,
-            }
+    let pkg = |kind: &'static str,
+               pacman: &str,
+               apt: &str,
+               dnf: &str,
+               freebsd: &str,
+               note: &'static str| {
+        let command = match family {
+            "pacman" if !pacman.is_empty() => Some(format!("sudo pacman -S {pacman}")),
+            "apt" if !apt.is_empty() => Some(format!("sudo apt install {apt}")),
+            "dnf" if !dnf.is_empty() => Some(format!("sudo dnf install {dnf}")),
+            "pkg" if !freebsd.is_empty() => Some(format!("sudo pkg install {freebsd}")),
+            _ => None,
         };
+        Recommendation {
+            kind,
+            command,
+            note,
+        }
+    };
     match language {
         Language::C | Language::Asm => vec![
             pkg("gcc", "gcc", "gcc", "gcc", "gcc", "GNU C compiler"),
@@ -733,7 +729,7 @@ pub fn recommend(language: Language, family: &str) -> Vec<Recommendation> {
                 "arm-none-eabi-gcc arm-none-eabi-newlib",
                 "gcc-arm-none-eabi",
                 "arm-none-eabi-gcc-cs",
-                "--cask gcc-arm-embedded",
+                "arm-none-eabi-gcc",
                 "Arm Cortex-M cross compiler",
             ),
             pkg(
@@ -775,7 +771,7 @@ pub fn recommend(language: Language, family: &str) -> Vec<Recommendation> {
                 "gcc",
                 "GNU Fortran",
             ),
-            pkg("flang", "flang", "flang", "flang", "flang", "LLVM Flang"),
+            pkg("flang", "flang", "flang", "flang", "", "LLVM Flang"),
             pkg(
                 "lfortran",
                 "",
@@ -853,6 +849,22 @@ mod tests {
             path: "relative/gcc".into(),
         };
         assert!(validate_custom(&bad).is_err());
+    }
+
+    #[test]
+    fn freebsd_gets_pkg_install_suggestions_for_common_tools() {
+        let cmds: Vec<String> = recommend(Language::C, "pkg")
+            .into_iter()
+            .filter_map(|r| r.command)
+            .collect();
+        assert!(
+            cmds.contains(&"sudo pkg install gcc".to_string()),
+            "{cmds:?}"
+        );
+        assert!(cmds.contains(&"sudo pkg install arm-none-eabi-gcc".to_string()));
+        assert!(cmds
+            .iter()
+            .all(|c| !c.contains("brew") && !c.contains("winget")));
     }
 
     #[test]

@@ -16,7 +16,7 @@ An **alpha**: usable for real work in the terminal, with rough edges. What was c
 | Status | What |
 |---|---|
 | **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, explorer, search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo) and C + GNU assembly with GCC; ELF inspector, HEX viewer/editor, disassembly (objdump); AI panel with Claude Code as agent (run live) and chat; skills; official Carbon/Bone theme |
-| **Experimental** (implemented, verified only with mocks or not at all) | Codex CLI as agent (mock CLI; the live run was blocked by a broken local Codex install); API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig and Fortran builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (clangd, rust-analyzer, zls); macOS, Windows, FreeBSD, musl |
+| **Experimental** (implemented, verified only with mocks or not at all) | Codex CLI as agent (mock CLI; the live run was blocked by a broken local Codex install); API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig and Fortran builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (clangd, rust-analyzer, zls); FreeBSD (compiled and linted, never run), Linux musl |
 | **Planned** | Native Rust GUI (not started — the TUI is the interface of this release); DWARF source mapping in the binary view; warm completion sessions |
 
 Hardware is never touched automatically: flashing and debugging need an explicit target and command.
@@ -124,7 +124,8 @@ No Node.js or graphical session is needed. The binary links only against the C r
 ## Requirements and build
 
 - Rust 1.85+ (`cargo build --release --locked`; offline builds need the cached registry dependencies)
-- Linux, macOS or Windows for the CLI; the terminal IDE and its integrated terminal are verified on Linux
+- Linux or FreeBSD (verified on Linux x86_64; FreeBSD is type-checked and linted but not yet run);
+  Windows and macOS are not supported
 - Host toolchains of your choice for building projects: GCC/Clang, `arm-none-eabi-gcc`, `rustc`/`cargo`,
   `zig`, NASM/GNU as, `make`/CMake; `openocd`/`probe-rs` for hardware (never run automatically)
 
@@ -157,7 +158,8 @@ embed doctor
 
 The `x86_64-unknown-linux-gnu` archive needs glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+, Fedora
 40+, Arch). Only targets that were built and run are published; on musl systems (Void musl, Alpine),
-FreeBSD, macOS and Windows, build from source (above).
+FreeBSD, build from source (above; on FreeBSD install `rust` and `gmake` with `pkg`). Windows and macOS
+are not supported.
 
 ## AI providers
 

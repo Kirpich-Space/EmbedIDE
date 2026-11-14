@@ -469,7 +469,7 @@ pub fn plan_clean(root: &Path, manifest: Option<&Manifest>) -> Result<CleanActio
             args: vec!["clean".into()],
         }),
         Some(BuildKind::Make) => CleanAction::Run(ProcessSpec {
-            program: "make".into(),
+            program: embedide_core::make_program().into(),
             args: vec!["clean".into()],
         }),
         None if has(BuildSystem::Cargo) => CleanAction::Run(ProcessSpec {
@@ -477,7 +477,7 @@ pub fn plan_clean(root: &Path, manifest: Option<&Manifest>) -> Result<CleanActio
             args: vec!["clean".into()],
         }),
         None if has(BuildSystem::Make) => CleanAction::Run(ProcessSpec {
-            program: "make".into(),
+            program: embedide_core::make_program().into(),
             args: vec!["clean".into()],
         }),
         _ => CleanAction::Nothing(

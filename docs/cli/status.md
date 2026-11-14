@@ -72,11 +72,12 @@ rows below for those tools come from earlier verification runs.
 - With the real CLIs: agent `approval-required`, `/fix`, session resume across tasks and agent runs
   inside the TUI (all exercised with mock CLIs only; the real agent runs used `embed ai agent`).
 - **Fortran builds**: no gfortran, flang or lfortran is installed on the verification machine.
-- **Windows and macOS runtime.** Windows: `cargo clippy -D warnings` passes for
-  `x86_64-pc-windows-gnu` on every crate except those depending on `ureq` (its `ring` dependency needs a
-  MinGW C compiler that is not installed) — this now includes `embedide-terminal`/`embed`, so the
-  Windows build of the TUI (ConPTY terminal via `portable-pty`) is unverified; nothing was executed on
-  Windows. macOS: not built.
+- **FreeBSD runtime.** `cargo check` and `cargo clippy --all-targets -D warnings` pass for
+  `x86_64-unknown-freebsd` (cross, from Linux); nothing was linked or executed on FreeBSD. Untested
+  there: the PTY terminal (`portable-pty`), serial enumeration (`serialport`, which has a FreeBSD
+  backend), `gmake` selection, `pkg` install hints, process-group cancellation (`killpg`).
+- **Windows and macOS are not supported.** Windows-specific code was removed and the crates refuse to
+  compile on non-Unix targets.
 - **Hardware**: no flashing, debugging or physical serial device. The GDB/MI, probe-rs and serial
   services in `embedide-core` are unchanged and not exposed as automatic CLI actions.
 - LFortran and Flang command lines (implemented from their documented flags, not run).

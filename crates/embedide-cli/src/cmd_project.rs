@@ -446,14 +446,10 @@ pub fn terminal(path: &Path, profile: &str, out: &Out) -> CliResult<(Value, u8)>
     let path_var = std::env::var_os("PATH").unwrap_or_default();
     let joined = std::env::join_paths(dirs.iter().cloned().chain(std::env::split_paths(&path_var)))
         .map_err(|e| fail(e.to_string()))?;
-    let shell = if cfg!(windows) {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
-    } else {
-        std::env::var("SHELL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "/bin/sh".into())
-    };
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".into());
     eprintln!("EmbedIDE terminal: {shell} in {}", root.display());
     for d in &dirs {
         eprintln!("  PATH += {}", d.display());

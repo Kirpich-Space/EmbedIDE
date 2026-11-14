@@ -172,6 +172,8 @@ const READ_COMMANDS: &[&str] = &[
 const DEV_COMMANDS: &[&str] = &[
     "make",
     "gmake",
+    "bmake",
+    "gmake",
     "cmake",
     "ctest",
     "ninja",

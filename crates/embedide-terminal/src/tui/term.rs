@@ -50,14 +50,10 @@ fn io_err(e: impl std::fmt::Display) -> io::Error {
 
 /// The user's shell; never a fixed choice made by EmbedIDE.
 pub fn default_shell() -> String {
-    if cfg!(windows) {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
-    } else {
-        std::env::var("SHELL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "/bin/sh".into())
-    }
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".into())
 }
 
 impl TerminalPane {

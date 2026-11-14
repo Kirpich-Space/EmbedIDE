@@ -4,7 +4,9 @@
 integrated terminal, builds with diagnostics, serial monitor, optional AI) in one binary. It runs in
 any terminal; no GUI, Electron or Node.js is needed.
 
-Verified on Linux x86_64 (see [status](status.md)). Windows and macOS builds are not verified yet.
+Supported systems: **Linux and FreeBSD**. Verified on Linux x86_64; the FreeBSD build is type-checked and
+linted for `x86_64-unknown-freebsd` but has not been run (see [status](status.md)). Windows and macOS are
+not supported.
 
 ## 1. Install
 
@@ -39,6 +41,9 @@ setups do not put on `PATH`. Either install with `--root ~/.local` as above, or 
 | fish | `fish_add_path ~/.local/bin` (run once) |
 | bash | `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`, then open a new shell |
 | zsh | `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`, then open a new shell |
+
+**FreeBSD:** `sudo pkg install rust gmake` (and `gcc` or the base `cc`, `git`), then the same `cargo install`.
+GNU make is `gmake` on FreeBSD; EmbedIDE uses it automatically for Make projects.
 
 `cargo run -p embedide-cli -- …` runs the IDE from the source tree but does not install anything.
 
@@ -178,7 +183,7 @@ applies changes.
 
 ## 9. Known limitations
 
-* Verified on Linux only; Windows/macOS are untested.
+* Linux is the verified platform; FreeBSD is compiled and linted but not run; Windows and macOS are not supported.
 * One shell session in the terminal panel; 5000 lines of history.
 * Mouse support (on by default): focus, cursor placement, explorer rows, wheel, and drag selection with copy in the AI panel; no drag selection in the editor.
 * Real hardware (probes, boards, USB serial adapters) was not used in testing.

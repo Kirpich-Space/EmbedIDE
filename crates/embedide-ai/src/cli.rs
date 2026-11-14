@@ -256,11 +256,7 @@ pub fn locate(kind: CliKind, configured: Option<&Path>) -> Result<PathBuf> {
             )))
         };
     }
-    let name = if cfg!(windows) {
-        format!("{}.exe", kind.program())
-    } else {
-        kind.program().to_string()
-    };
+    let name = kind.program().to_string();
     std::env::var_os("PATH")
         .and_then(|p| std::env::split_paths(&p).map(|d| d.join(&name)).find(|p| p.is_file()))
         .ok_or_else(|| {

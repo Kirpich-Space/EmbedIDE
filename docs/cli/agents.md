@@ -276,7 +276,7 @@ recognised.)
   looked for project instructions, edited `main.c`, built with `make` and ran `timeout 10 ./app`.
   In chat mode Codex answered that it cannot change files there and suggested the `/agent …` command.
 - Not verified with real CLIs: `approval-required` (mock only), `/fix` and session resume (mock only),
-  Windows and macOS.
+  FreeBSD (the rules know `gmake`, but nothing was run there).
 
 ## Limitations
 

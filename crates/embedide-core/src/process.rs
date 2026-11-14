@@ -60,14 +60,6 @@ impl OwnedChild {
             };
             let _ = killpg(Pid::from_raw(self.0.id() as i32), Signal::SIGKILL);
         }
-        #[cfg(windows)]
-        {
-            let _ = Command::new("taskkill")
-                .args(["/PID", &self.0.id().to_string(), "/T", "/F"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }

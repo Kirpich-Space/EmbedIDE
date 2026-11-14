@@ -19,6 +19,14 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
   terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
 
+### Platforms
+- Supported systems are **Linux and FreeBSD**. Windows and macOS are not supported: Windows-specific code
+  (`.exe`, `COMSPEC`, `%APPDATA%`, `taskkill`, `winget`, the crossterm `windows` feature) and macOS paths
+  were removed, and the crates refuse to compile on non-Unix targets.
+- FreeBSD: GNU make is used as `gmake` when present (BSD `make` cannot read GNU Makefiles; also in the
+  agent rules and the built-in skill), `pkg install` hints for missing toolchains, `x86_64-unknown-freebsd`
+  is type-checked and linted in CI. Not run on FreeBSD yet.
+
 ### Documentation
 - New guides: documentation index, tutorials (C, Rust, Zig, assembly, Cortex-M, compilers, AI agent,
   skills, inline suggestions, binaries), key and command reference, configuration reference,

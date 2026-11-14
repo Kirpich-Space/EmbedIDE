@@ -15,15 +15,11 @@ pub fn config_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(d));
     }
     let home = || std::env::var_os("HOME").map(PathBuf::from);
-    let dir = match std::env::consts::OS {
-        "windows" => std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("EmbedIDE")),
-        "macos" => home().map(|h| h.join("Library/Application Support/EmbedIDE")),
-        _ => std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| home().map(|h| h.join(".config")))
-            .map(|c| c.join("embedide")),
-    };
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| home().map(|h| h.join(".config")))
+        .map(|c| c.join("embedide"));
     dir.ok_or_else(|| {
         Error("Cannot determine the configuration directory; set EMBEDIDE_CONFIG_DIR".into())
     })
