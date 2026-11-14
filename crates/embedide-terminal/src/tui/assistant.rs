@@ -2,6 +2,7 @@
 //! requests run on a worker thread and stream into the transcript. Nothing
 //! is sent until the user presses Enter on a message or command.
 use super::layout::{self, Row};
+use super::theme::{Paint, Role};
 use embedide_ai::{
     chat,
     cli::{self, CliKind},
@@ -1097,7 +1098,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         let chars: Vec<char> = self.input.chars().collect();
         let visible: String = chars[first..last].iter().collect();
         let mut input = Row::default();
-        input.push_styled("› ", false, Some(Highlight::Keyword));
+        input.push_styled("› ", false, Some(Role::Accent.into()));
         if visible.is_empty() {
             let hint = if self.approval_pending() {
                 "y allow · a allow similar · n deny · /cancel stops the agent".to_string()
@@ -1113,7 +1114,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 format!("Message {who} · Enter sends · /agent <what to do> edits files · /help")
             };
             let hint: String = hint.chars().take(width.saturating_sub(2)).collect();
-            input.push_styled(&hint, false, Some(Highlight::Comment));
+            input.push_styled(&hint, false, Some(Role::Muted.into()));
         } else {
             input.push(&visible, false);
         }
@@ -1153,10 +1154,10 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                     if !out.is_empty() {
                         out.push(Vec::new());
                     }
-                    let style = if text == "You" {
-                        Highlight::Keyword
+                    let style: Paint = if text == "You" {
+                        Role::Accent.into()
                     } else {
-                        Highlight::Function
+                        Role::Ai.into()
                     };
                     out.push(vec![("▍".into(), Some(style)), (text.clone(), Some(style))]);
                 }
@@ -1168,9 +1169,9 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 Kind::Assistant if text.is_empty() => {
                     if streaming == Some(index) {
                         let spin = self.activity().unwrap_or_default();
-                        out.push(vec![(format!("  {spin}"), Some(Highlight::Comment))]);
+                        out.push(vec![(format!("  {spin}"), Some(Role::Muted.into()))]);
                     } else {
-                        out.push(vec![("  (no answer)".into(), Some(Highlight::Comment))]);
+                        out.push(vec![("  (no answer)".into(), Some(Role::Muted.into()))]);
                     }
                 }
                 Kind::Assistant => {
@@ -1191,15 +1192,15 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                             } else {
                                 "  ╰─".to_string()
                             };
-                            out.push(vec![(mark, Some(Highlight::Comment))]);
+                            out.push(vec![(mark, Some(Role::Muted.into()))]);
                         } else if code {
-                            wrap_into(&mut out, "  │ ", raw, Some(Highlight::String), width);
+                            wrap_into(&mut out, "  │ ", raw, Some(Highlight::String.into()), width);
                         } else if raw.trim_start().starts_with('#') {
                             wrap_into(
                                 &mut out,
                                 "  ",
                                 raw.trim_start_matches('#').trim(),
-                                Some(Highlight::Type),
+                                Some(Highlight::Type.into()),
                                 width,
                             );
                         } else {
@@ -1208,53 +1209,55 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                     }
                     if streaming == Some(index) && blink {
                         if let Some(last) = out.last_mut() {
-                            last.push(("▍".into(), Some(Highlight::Function)));
+                            last.push(("▍".into(), Some(Role::Ai.into())));
                         }
                     }
                 }
-                Kind::Info => wrap_into(&mut out, "  · ", text, Some(Highlight::Comment), width),
-                Kind::Meta => wrap_into(&mut out, "  ", text, Some(Highlight::Comment), width),
-                Kind::Error => wrap_into(&mut out, "  ✗ ", text, Some(Highlight::Constant), width),
+                Kind::Info => wrap_into(&mut out, "  · ", text, Some(Role::Muted.into()), width),
+                Kind::Meta => wrap_into(&mut out, "  ", text, Some(Role::Muted.into()), width),
+                Kind::Error => wrap_into(&mut out, "  ✗ ", text, Some(Role::Error.into()), width),
                 Kind::Step => {
-                    let style = if text.starts_with("$ ") {
-                        Highlight::Keyword
-                    } else {
-                        Highlight::Function
-                    };
-                    wrap_into(&mut out, "  ", text, Some(style), width);
+                    // What the agent does: its commands and tool calls.
+                    wrap_into(&mut out, "  ", text, Some(Role::Ai.into()), width);
                     if running_step == Some(index) {
                         if let (Some(last), Some(s)) = (out.last_mut(), started) {
                             last.push((
                                 format!(" {}", spinner(s.elapsed())),
-                                Some(Highlight::Comment),
+                                Some(Role::Muted.into()),
                             ));
                         }
                     }
                 }
                 Kind::Output => {
                     for raw in text.lines() {
-                        wrap_into(&mut out, "    │ ", raw, Some(Highlight::Comment), width);
+                        wrap_into(&mut out, "    │ ", raw, Some(Role::Muted.into()), width);
                     }
                 }
-                Kind::StepOk => wrap_into(&mut out, "    ✓ ", text, Some(Highlight::String), width),
-                Kind::StepFail => {
-                    wrap_into(&mut out, "    ✗ ", text, Some(Highlight::Constant), width)
+                Kind::StepOk => {
+                    wrap_into(&mut out, "    ✓ ", text, Some(Role::Success.into()), width)
                 }
-                Kind::Changed => wrap_into(&mut out, "  ✎ ", text, Some(Highlight::Type), width),
-                Kind::Denied => wrap_into(&mut out, "  ⊘ ", text, Some(Highlight::Constant), width),
+                Kind::StepFail => {
+                    wrap_into(&mut out, "    ✗ ", text, Some(Role::Error.into()), width)
+                }
+                Kind::Changed => {
+                    wrap_into(&mut out, "  ✎ ", text, Some(Role::Accent.into()), width)
+                }
+                Kind::Denied => {
+                    wrap_into(&mut out, "  ⊘ ", text, Some(Role::Warning.into()), width)
+                }
                 Kind::Approval => {
                     for (i, raw) in text.lines().enumerate() {
                         let lead = if i == 0 { "  ⚠ " } else { "    " };
-                        wrap_into(&mut out, lead, raw, Some(Highlight::Preprocessor), width);
+                        wrap_into(&mut out, lead, raw, Some(Role::Warning.into()), width);
                     }
                 }
                 Kind::Diff => {
                     for raw in text.lines() {
-                        let style = match raw.as_bytes().first() {
-                            Some(b'+') if !raw.starts_with("+++") => Highlight::String,
-                            Some(b'-') if !raw.starts_with("---") => Highlight::Constant,
-                            Some(b'@') => Highlight::Preprocessor,
-                            _ => Highlight::Comment,
+                        let style: Paint = match raw.as_bytes().first() {
+                            Some(b'+') if !raw.starts_with("+++") => Role::Success.into(),
+                            Some(b'-') if !raw.starts_with("---") => Role::Error.into(),
+                            Some(b'@') => Highlight::Preprocessor.into(),
+                            _ => Role::Muted.into(),
                         };
                         wrap_into(&mut out, "", raw, Some(style), width);
                     }
@@ -1267,7 +1270,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 &mut out,
                 "  + ",
                 &format!("skills for agent tasks: {}", names.join(", ")),
-                Some(Highlight::Comment),
+                Some(Role::Muted.into()),
                 width,
             );
         }
@@ -1277,7 +1280,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 &mut out,
                 "  + ",
                 &format!("attached for the next message: {}", names.join(", ")),
-                Some(Highlight::Comment),
+                Some(Role::Muted.into()),
                 width,
             );
         }
@@ -1286,7 +1289,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 }
 
 /// One display line: styled pieces.
-type Line = Vec<(String, Option<Highlight>)>;
+type Line = Vec<(String, Option<Paint>)>;
 
 /// Braille spinner frame for an elapsed time.
 fn spinner(elapsed: Duration) -> char {
@@ -1296,13 +1299,7 @@ fn spinner(elapsed: Duration) -> char {
 
 /// Wrap `text` to `width` cells at spaces (a word longer than the line is
 /// split); continuation lines are indented like the first.
-fn wrap_into(
-    out: &mut Vec<Line>,
-    indent: &str,
-    text: &str,
-    style: Option<Highlight>,
-    width: usize,
-) {
+fn wrap_into(out: &mut Vec<Line>, indent: &str, text: &str, style: Option<Paint>, width: usize) {
     let cells = |t: &str| t.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
     let indent_w = cells(indent);
     let room = width.saturating_sub(indent_w).max(1);
@@ -1739,10 +1736,10 @@ mod usage_tests {
                 .find(|x| x.text.contains(needle))
                 .and_then(|x| x.style)
         };
-        assert_eq!(style_of("for (;;)"), Some(Highlight::String));
-        assert_eq!(style_of("+new"), Some(Highlight::String));
-        assert_eq!(style_of("-old"), Some(Highlight::Constant));
-        assert_eq!(style_of("1.2 s"), Some(Highlight::Comment));
+        assert_eq!(style_of("for (;;)"), Some(Highlight::String.into()));
+        assert_eq!(style_of("+new"), Some(Role::Success.into()));
+        assert_eq!(style_of("-old"), Some(Role::Error.into()));
+        assert_eq!(style_of("1.2 s"), Some(Role::Muted.into()));
         // The empty input shows a hint.
         assert!(lines.last().unwrap().starts_with("› "));
     }

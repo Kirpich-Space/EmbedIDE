@@ -2,6 +2,15 @@
 
 ## `embed` 0.2.0 — in development (`0.2.0-dev`, not released)
 
+### Changed
+- Official EmbedIDE theme (`Desige/embedide-palette.json`) in one module,
+  `crates/embedide-terminal/src/tui/theme.rs`: Carbon (dark) and Bone (light) tokens, syntax colours
+  (`syn-*`: rust keywords, ink code, ceramic jumps) and semantic UI roles — errors red, warnings amber,
+  success green, AI cyan, notes muted, rust accent only for prompts and changed files. Bars are bone on
+  Carbon `#1C1C20`. Build output and PROBLEMS lines are coloured by severity; AI inline suggestions
+  are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
+  terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
+
 ### Added
 - Agent mode (`/agent`, `/mode agent`, `embed ai agent`): Claude Code (Agent SDK host protocol,
   every unapproved tool call answered by EmbedIDE's rules or the user) and Codex CLI (`exec --json`

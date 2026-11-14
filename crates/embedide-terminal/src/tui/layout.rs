@@ -1,7 +1,8 @@
 //! Terminal-only byte/grapheme/cell mapping; document coordinates remain bytes.
+use super::theme::Paint;
 use crate::FrontendError;
 use embedide_editor::{
-    syntax::{Highlight, Highlighter, Span},
+    syntax::{Highlighter, Span},
     vim::SelectionKind,
     Editor, EditorState, Selection,
 };
@@ -20,8 +21,9 @@ pub struct Run {
     pub text: String,
     /// Whether the run should use inverse video.
     pub selected: bool,
-    /// Syntax category (never set on selected runs: selection stays uniform).
-    pub style: Option<Highlight>,
+    /// Syntax category or UI role (never set on selected runs: selection
+    /// stays uniform). Colours come from [`super::theme`].
+    pub style: Option<Paint>,
     /// Colours and attributes a program running in the integrated terminal
     /// asked for (never set on editor text).
     pub cell: Option<CellStyle>,
@@ -56,7 +58,7 @@ impl Row {
     pub(crate) fn push(&mut self, text: &str, selected: bool) {
         self.push_styled(text, selected, None);
     }
-    pub(crate) fn push_styled(&mut self, text: &str, selected: bool, style: Option<Highlight>) {
+    pub(crate) fn push_styled(&mut self, text: &str, selected: bool, style: Option<Paint>) {
         self.push_attrs(text, selected, style, None);
     }
     /// Append text with every attribute a run can carry, merging with the
@@ -65,7 +67,7 @@ impl Row {
         &mut self,
         text: &str,
         selected: bool,
-        style: Option<Highlight>,
+        style: Option<Paint>,
         cell: Option<CellStyle>,
     ) {
         let (style, cell) = if selected {
@@ -278,7 +280,7 @@ impl Layout {
             } else {
                 selected(range)
             };
-            let style = style_at(range.start);
+            let style = style_at(range.start).map(Paint::from);
             if start == column && end == column + cells {
                 row.push_styled(text, highlight, style);
             } else {

@@ -6,6 +6,7 @@ pub mod layout;
 pub mod popup;
 pub mod screen;
 pub mod term;
+pub mod theme;
 pub mod workspace;
 
 use crate::{FrontendError, LineEditor, SessionReport};

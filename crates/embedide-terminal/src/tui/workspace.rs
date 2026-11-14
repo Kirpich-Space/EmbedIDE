@@ -3562,8 +3562,15 @@ impl Workspace {
                 .saturating_sub(count)
                 .saturating_sub(self.panel_scroll)
         };
+        let diagnostics = !matches!(self.panel, Panel::Help | Panel::Settings | Panel::Tools);
         for line in lines.iter().skip(start).take(count) {
-            rows.push(layout::label(line, width, false));
+            let mut row = layout::label(line, width, false);
+            if let Some(role) = diagnostics.then(|| panel_role(line)).flatten() {
+                for run in row.runs.iter_mut().filter(|r| r.style.is_none()) {
+                    run.style = Some(role.into());
+                }
+            }
+            rows.push(row);
         }
         rows.resize_with(height, Row::default);
         rows
@@ -4284,12 +4291,19 @@ fn gutter_width(row: &Row) -> usize {
 
 fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
     use unicode_width::UnicodeWidthChar;
+    let ghost = (
+        Some(super::theme::Role::Ai.into()),
+        Some(layout::CellStyle {
+            italic: true,
+            ..Default::default()
+        }),
+    );
     fn put(
         out: &mut Row,
         used: &mut usize,
         text: &str,
         selected: bool,
-        style: Option<embedide_editor::syntax::Highlight>,
+        style: Option<super::theme::Paint>,
         cell: Option<layout::CellStyle>,
         width: usize,
     ) {
@@ -4321,7 +4335,8 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
                         run.cell,
                     );
                 }
-                put(&mut out, &mut used, text, true, None, None, width);
+                // AI suggestions: signal-ai italics, never mistaken for your code.
+                put(&mut out, &mut used, text, false, ghost.0, ghost.1, width);
                 inserted = true;
             }
             let w = ch.width().unwrap_or(0);
@@ -4343,9 +4358,38 @@ fn insert_at(row: &Row, col: usize, text: &str, width: usize) -> Row {
             let gap = " ".repeat(col - used);
             put(&mut out, &mut used, &gap, false, None, None, width);
         }
-        put(&mut out, &mut used, text, true, None, None, width);
+        put(&mut out, &mut used, text, false, ghost.0, ghost.1, width);
     }
     out
+}
+
+/// Semantic colour of a build-output or problems line: compiler errors red,
+/// warnings amber, a finished build green or red. Other lines keep the ink.
+fn panel_role(line: &str) -> Option<super::theme::Role> {
+    use super::theme::Role;
+    let lower = line.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("finished: exit=") {
+        return Some(if rest.starts_with("some(0)") {
+            Role::Success
+        } else {
+            Role::Error
+        });
+    }
+    let has = |word: &str| {
+        lower.match_indices(word).any(|(i, _)| {
+            let before = lower[..i].chars().next_back();
+            let after = lower[i + word.len()..].chars().next();
+            !before.is_some_and(char::is_alphanumeric)
+                && matches!(after, None | Some(':' | '[' | ' ' | ']'))
+        })
+    };
+    if has("error") || has("fatal error") {
+        Some(Role::Error)
+    } else if has("warning") {
+        Some(Role::Warning)
+    } else {
+        None
+    }
 }
 
 fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<String> {
@@ -4462,16 +4506,49 @@ mod tests {
         row.push("x;", true);
         let out = insert_at(&row, 4, "y = ", 80);
         assert_eq!(text(&out), "int y = x;");
-        // Adjacent inverse runs merge; the ghost text starts an inverse run.
-        assert!(out
-            .runs
-            .iter()
-            .any(|r| r.selected && r.text.starts_with("y = ")));
+        // The ghost text is its own run in the AI colour, in italics.
+        assert!(out.runs.iter().any(|r| r.text == "y = "
+            && !r.selected
+            && r.style == Some(super::super::theme::Role::Ai.into())
+            && r.cell.is_some_and(|c| c.italic)));
         assert_eq!(text(&insert_at(&row, 10, "z", 80)), "int x;    z");
         assert_eq!(text(&insert_at(&row, 2, "LONGTEXT", 6)), "inLONG");
         let mut wide = Row::default();
         wide.push("猫猫", false);
         assert_eq!(text(&insert_at(&wide, 2, "!", 80)), "猫!猫");
+    }
+
+    #[test]
+    fn build_and_problem_lines_get_semantic_colours() {
+        use super::super::theme::Role;
+        assert_eq!(
+            panel_role("main.c:3:5: error: expected ';'"),
+            Some(Role::Error)
+        );
+        assert_eq!(
+            panel_role("error[E0308]: mismatched types"),
+            Some(Role::Error)
+        );
+        assert_eq!(panel_role("> error src/main.rs:1:1 bad"), Some(Role::Error));
+        assert_eq!(
+            panel_role("main.c:9:1: warning: unused x"),
+            Some(Role::Warning)
+        );
+        assert_eq!(
+            panel_role("Finished: exit=Some(0), 0.20s, omitted 0 bytes"),
+            Some(Role::Success)
+        );
+        assert_eq!(
+            panel_role("Finished: exit=Some(2), 0.20s, omitted 0 bytes"),
+            Some(Role::Error)
+        );
+        assert_eq!(
+            panel_role("Finished: exit=None, 0.20s, omitted 0 bytes"),
+            Some(Role::Error)
+        );
+        // Words that merely contain "error" stay plain.
+        assert_eq!(panel_role("$ gcc -Werror=format -c errors.c"), None);
+        assert_eq!(panel_role("Artifact: build/app"), None);
     }
 
     #[test]

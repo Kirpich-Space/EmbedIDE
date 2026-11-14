@@ -139,6 +139,27 @@ Ctrl+letter, Shift+PageUp/PageDown/Home/End/Up/Down, arrows, Esc, Enter, Tab, Ba
 bracketed paste. Ctrl+Alt+digit and the held-digit hide chords need the kitty keyboard protocol.
 Alt+1/2/3 therefore never reach programs in the integrated terminal.
 
+
+## Theme
+
+`theme = "dark"` (default, **Carbon**), `"light"` (**Bone**) or `"mono"` in the user config; `:theme`
+cycles them. All colours live in `crates/embedide-terminal/src/tui/theme.rs` and come from the brand
+palette `Desige/embedide-palette.json`:
+
+| Role | Carbon (dark) | Bone (light) | Used for |
+|------|---------------|--------------|----------|
+| bars | `#F4F1EC` on `#1C1C20` | `#0B0B0C` on `#EAE5DC` | title/status bars, selections, popups |
+| accent | `#E0703F` | `#A3401A` | AI prompt `›`, your messages, changed files, edited bytes |
+| error / warning / success | `#F2645F` / `#E5AE45` / `#5DB57A` | `#B8302C` / `#7E5500` / `#276B3E` | diagnostics, build result, diff `-`/`+`, agent steps |
+| AI | `#86B9CC` | `#2C6A80` | AI answers, agent actions, inline suggestions (italic) |
+| muted | `#A8A6A2` | `#5C5A55` | hints, notes, command output |
+
+Syntax: keywords `#E0703F`, types `#E3B98F`, strings `#A6C48E`, numbers `#E8C27A`, comments
+`#8A8A91`, preprocessor/registers `#86B9CC`, jumps `#F3DCCB`; code itself stays ink. `dark` keeps
+your terminal's background (set it to `#0B0B0C` for the exact look); `light` paints Bone. With
+`COLORTERM=truecolor` the exact colours are used, otherwise the nearest xterm-256 colours; terminals
+without 256 colours (Linux console, plain `xterm`) and `mono` use inverse video for bars.
+
 ## Indentation
 
 Indentation follows the language of the file (detected like syntax highlighting). Rules look only at

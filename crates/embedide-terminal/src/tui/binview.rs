@@ -2,6 +2,7 @@
 //! editor area. Opening never modifies the file; editing is an explicit
 //! mode (`i`) and only `w` (confirmed by the workspace) writes.
 use super::layout::{self, Row};
+use super::theme::Role;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use embedide_core::{binary, disasm, elf};
 use embedide_editor::syntax::Highlight;
@@ -731,7 +732,7 @@ impl BinaryView {
             for (j, b) in chunk.iter().enumerate() {
                 let at = base + j as u64;
                 let edited = self.file.is_edited(at);
-                let style = edited.then_some(Highlight::Branch);
+                let style = edited.then_some(Role::Accent.into());
                 let text = match self.nibble {
                     Some(high) if at == self.cursor => format!("{high:X}_"),
                     _ => format!("{b:02X}"),
@@ -753,7 +754,7 @@ impl BinaryView {
                 r.push_styled(
                     &c.to_string(),
                     at == self.cursor,
-                    self.file.is_edited(at).then_some(Highlight::Branch),
+                    self.file.is_edited(at).then_some(Role::Accent.into()),
                 );
             }
             out.push(clip(r, width));
@@ -919,7 +920,7 @@ impl BinaryView {
                     r.push_styled(
                         &format!("── section {} ──", l.text),
                         selected,
-                        Some(Highlight::Preprocessor),
+                        Some(Highlight::Preprocessor.into()),
                     );
                     r
                 }
@@ -928,7 +929,7 @@ impl BinaryView {
                     r.push_styled(
                         &format!("{:016x} <{}>:", l.addr.unwrap_or(0), l.text),
                         selected,
-                        Some(Highlight::Function),
+                        Some(Highlight::Function.into()),
                     );
                     r
                 }
@@ -938,7 +939,7 @@ impl BinaryView {
                     r.push_styled(
                         &format!("{:<24}  ", l.bytes),
                         selected,
-                        Some(Highlight::Comment),
+                        Some(Highlight::Comment.into()),
                     );
                     let (mnemonic, operands) = l.text.split_once(' ').unwrap_or((&l.text, ""));
                     let branch = embedide_editor::asm::Dialect::GasAtt.is_branch(mnemonic)
@@ -947,11 +948,14 @@ impl BinaryView {
                     r.push_styled(
                         mnemonic,
                         selected,
-                        Some(if branch {
-                            Highlight::Branch
-                        } else {
-                            Highlight::Keyword
-                        }),
+                        Some(
+                            if branch {
+                                Highlight::Branch
+                            } else {
+                                Highlight::Keyword
+                            }
+                            .into(),
+                        ),
                     );
                     r.push(&format!(" {operands}"), selected);
                     r
