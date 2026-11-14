@@ -1,12 +1,45 @@
-# EmbedIDE
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Desige/embedide-wordmark-on-dark.svg">
+    <img alt="EmbedIDE" src="Desige/embedide-wordmark-on-light.svg" width="360">
+  </picture>
+</p>
 
-**Engineering IDE for embedded firmware, drivers, kernels, systems and scientific code**
+<h3 align="center">A native Rust IDE for embedded and systems development — in your terminal.</h3>
 
-Built by [Kirpich Space](https://github.com/Kirpich-Space). Languages: C, C++, Rust, Zig, Assembly, Fortran.
+<p align="center">
+  <a href="https://github.com/Kirpich-Space/EmbedIDE/releases"><img alt="release" src="https://img.shields.io/github/v/release/Kirpich-Space/EmbedIDE?include_prereleases&label=alpha"></a>
+  <a href="LICENSE"><img alt="license GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <img alt="platforms" src="https://img.shields.io/badge/platforms-Linux%20%7C%20FreeBSD-lightgrey">
+  <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-orange">
+</p>
+
+EmbedIDE (`embed`) is a full-screen, keyboard-driven IDE for people who build firmware, drivers and
+systems software: a Vim-style editor, a project explorer, a real PTY terminal, builds with jump-to-source
+diagnostics, an ELF/HEX/disassembly view for the binaries you produce, and AI agents that work *inside
+your project* through the Claude Code or Codex CLI you already use — with permissions you control.
+One Rust binary (a fully static build is published). No Electron, no browser, no telemetry, no EmbedIDE account.
+
+You choose the compilers (GCC, Clang, `zig cc`, `arm-none-eabi-gcc`, NASM, …); EmbedIDE detects what is
+installed and never downloads or flashes anything on its own.
+
+![The editor with a native build](docs/img/editor-build.png)
+
+<table>
+<tr>
+<td width="50%"><img alt="Codex CLI agent editing a project and running make" src="docs/img/agent-codex.png"><br><sub><b>Agent mode</b> — Codex CLI creates <code>add.c</code>, builds with <code>make</code>, runs the program; every step and file change is shown, reviewable and revertible.</sub></td>
+<td width="50%"><img alt="Disassembly of a function in the built ELF" src="docs/img/disassembly.png"><br><sub><b>Binary view</b> — HEX, ELF inspector and disassembly of the program you just built (objdump).</sub></td>
+</tr>
+</table>
+
+<sub>All screenshots are real: `scripts/render-screenshots.py` runs the released binary in a pseudo-terminal and draws its screen.</sub>
 
 > EmbedIDE is a pure **Rust** project: the core, build engine, toolchain management and AI layer are
-> crates, used by the **`embed`** terminal IDE. The earlier Electron/React desktop application has been
-> removed (it remains in the git history before the commit "Remove the legacy Electron application").
+> crates, used by the **`embed`** terminal IDE. A native GUI is **planned, not started**. The earlier
+> Electron/React desktop application has been removed (it remains in the git history before the commit
+> "Remove the legacy Electron application").
+
+**Supported systems: Linux (verified) and FreeBSD (compiled and linted, not yet run).** Windows and macOS are not supported.
 
 ## 0.1.0-alpha.1 — first public alpha
 
@@ -207,6 +240,25 @@ See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills
   commands. See [what terminals can report](docs/cli/tui.md#what-terminals-can-report).
 - **Build ignores the latest edit** — builds use files on disk; save (`:w`) before F5.
 
+## Roadmap
+
+Honest and short; nothing here is promised for a date.
+
+- **Now (alpha):** terminal IDE, builds, binary view, AI agents and skills — collecting real-world bug reports.
+- **Next:** FreeBSD verification and a ports entry, DWARF source mapping in the binary view, warm
+  completion sessions for faster AI suggestions, more per-terminal key testing.
+- **Later:** a native Rust GUI sharing the same crates. Not started.
+
+## Contributing
+
+Contributions of every size are welcome — bug reports from your terminal and OS count as much as code.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md); [docs/cli/architecture.md](docs/cli/architecture.md) maps
+the crates. Good first areas: testing on your terminal emulator and on FreeBSD, tutorials for a board you
+own, assembly dialect and toolchain edge cases. Please
+[open an issue](https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose) with `embed --version` and
+`embed doctor`. A note on transparency: parts of this code base were written with AI coding assistants
+(see the `Co-Authored-By` trailers); every change goes through the same tests.
+
 ## Known alpha limitations
 
 See [docs/cli/status.md](docs/cli/status.md#known-limitations). In short: Linux is the only verified
@@ -230,4 +282,7 @@ EmbedIDE/
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GNU General Public License v3.0 only (`GPL-3.0-only`) — see [LICENSE](LICENSE). You may use, study, modify
+and redistribute EmbedIDE; distributed modified versions must stay under the GPL with their source.
+Releases up to and including `0.1.0-alpha.1` were published under the MIT license; those copies keep it.
+Programs you build or edit with EmbedIDE are not affected by this license.
