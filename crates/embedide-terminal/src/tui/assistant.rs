@@ -158,7 +158,8 @@ pub struct Assistant {
     run: Option<agent::AgentRun>,
     /// Agent conversation kept between turns (CLI session).
     session: Option<embedide_ai::agent::Session>,
-    /// Plain text starts an agent task instead of a chat message.
+    /// Plain text starts an agent task instead of a chat message (when the
+    /// backend is an agent-capable CLI; see `agent_active`).
     agent_mode: bool,
     /// Policy for the next agent turn.
     policy: embedide_ai::agent::Policy,
@@ -178,7 +179,7 @@ const HELP: &str = "Type here (this panel) and press Enter. Start with: /provide
 (your installed, logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
 Chat: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
 /apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers. \
-Agent (claude-code / codex-cli works in the project): /agent <what to do> · /mode agent|chat · /policy read-only|workspace-write|approval-required \
+Agent (default with claude-code / codex-cli: plain text is a task the agent carries out in the project; /mode chat for read-only answers): /agent <what to do> · /mode agent|chat · /policy read-only|workspace-write|approval-required \
 · y / a / n answer approvals · /changes · /review [file] · /revert file|all · /fix [command] · /new · \
 /skills · /skill name · /skill off name. Nothing is sent until Enter.";
 
@@ -307,6 +308,12 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     }
 
     /// The official CLI in use, when the backend is `claude-code` or `codex-cli`.
+    /// Plain text runs as an agent task: agent mode with a CLI backend (API
+    /// backends cannot edit the workspace, so they always chat).
+    fn agent_active(&self) -> bool {
+        self.agent_mode && self.cli_backend().is_some()
+    }
+
     fn cli_backend(&self) -> Option<CliKind> {
         (self.auth == AuthMode::Subscription)
             .then_some(self.provider?)
@@ -346,7 +353,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             Some(_) => "waiting",
             None if self.suggestion.is_some() => "suggestion ready",
             None if self.proposal.is_some() => "edit proposed",
-            None if self.agent_mode => "agent mode",
+            None if self.agent_active() => "agent mode",
             None => "idle",
         }
     }
@@ -473,9 +480,14 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 self.note(
                     Kind::Info,
                     format!(
-                        "Backend {} ({}): requests go to your installed official CLI and use its login; no API key is used. Checking…",
+                        "Backend {} ({}): requests go to your installed official CLI and use its login; no API key is used. {} Checking…",
                         kind.id(),
-                        kind.name()
+                        kind.name(),
+                        if self.agent_mode {
+                            format!("Mode agent, policy {}: type what to do and the agent works in the project (/mode chat for read-only answers).", self.policy)
+                        } else {
+                            "Mode chat: read-only answers (/mode agent lets plain text edit the project).".to_string()
+                        }
                     ),
                 );
                 self.check_backends(vec![kind]);
@@ -659,7 +671,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 Kind::Error,
                 format!("Unknown command {c}. /help lists commands"),
             ),
-            _ if self.agent_mode => self.start_agent(ctx, line.clone(), None),
+            _ if self.agent_active() => self.start_agent(ctx, line.clone(), None),
             _ => self.chat(&line),
         }
     }
@@ -1095,7 +1107,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
                 "/cancel stops the answer".to_string()
             } else if self.provider.is_none() {
                 "/provider claude-code  or  /provider codex-cli".to_string()
-            } else if self.agent_mode {
+            } else if self.agent_active() {
                 format!("Task for the {who} agent · Enter runs · /mode chat · /help")
             } else {
                 format!("Message {who} · Enter sends · /agent <what to do> edits files · /help")
@@ -1353,6 +1365,17 @@ mod usage_tests {
     /// The AI panel with a mock Claude Code agent and a disposable workspace.
     #[cfg(unix)]
     fn agent_fixture(name: &str) -> (Assistant, EditorContext, PathBuf) {
+        agent_fixture_for("claude", name)
+    }
+
+    /// The AI panel with a mock `kind` (`claude` or `codex`) agent CLI.
+    #[cfg(unix)]
+    fn agent_fixture_for(kind: &str, name: &str) -> (Assistant, EditorContext, PathBuf) {
+        let backend = if kind == "codex" {
+            "codex-cli"
+        } else {
+            "claude-code"
+        };
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!(
             "embedide-panel-agent-{}-{name}",
@@ -1364,11 +1387,11 @@ mod usage_tests {
         std::fs::write(ws.join("main.c"), "int main(void) { return 0; }\n").unwrap();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../embedide-ai/tests/fixtures/mock_agent.py");
-        let program = dir.join("claude");
+        let program = dir.join(kind);
         std::fs::write(
             &program,
             format!(
-                "#!/bin/sh\nexec python3 '{}' claude edit '{}' \"$@\"\n",
+                "#!/bin/sh\nexec python3 '{}' {kind} edit '{}' \"$@\"\n",
                 script.display(),
                 dir.display()
             ),
@@ -1376,11 +1399,11 @@ mod usage_tests {
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut cfg = AiConfig {
-            provider: Some("claude-code".into()),
+            provider: Some(backend.into()),
             ..AiConfig::default()
         };
         cfg.providers.insert(
-            "claude-code".into(),
+            backend.into(),
             ProviderConfig {
                 cli: Some(program),
                 ..Default::default()
@@ -1480,6 +1503,58 @@ mod usage_tests {
         let status = &a.transcript.iter().rev().nth(1).unwrap().1;
         assert!(status.contains("1 turn(s)"), "{status}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plain_text_is_an_agent_task_by_default_and_the_agent_creates_files() {
+        // `/provider codex-cli`, then an ordinary request: no `/agent` needed.
+        let (mut a, ctx, dir) = agent_fixture_for("codex", "default-mode");
+        a.input = "/provider codex-cli".into();
+        a.submit(&ctx);
+        let shown: String = a.transcript.iter().map(|(_, t)| format!("{t}\n")).collect();
+        assert!(
+            shown.contains("Mode agent, policy workspace-write"),
+            "{shown}"
+        );
+        a.input = "Create add.c with an add function and build it".into();
+        a.submit(&ctx);
+        assert!(a.agent_running(), "plain text started an agent task");
+        tick_until(&mut a, "the end", |a| !a.agent_running());
+        assert_eq!(
+            std::fs::read_to_string(ctx.root.join("add.c")).unwrap(),
+            "int add(int a, int b) { return a + b; }\n",
+            "the agent wrote the file in the workspace"
+        );
+        let shown = text(&a.rows(120, 200, false).0).join("\n");
+        assert!(
+            shown.contains("Agent · Codex CLI · workspace-write"),
+            "{shown}"
+        );
+        assert!(shown.contains("✎ add.c (added)"), "{shown}");
+        // /mode chat: plain text is a read-only chat message again.
+        a.input = "/mode chat".into();
+        a.submit(&ctx);
+        a.input = "what does add do?".into();
+        a.submit(&ctx);
+        assert!(!a.agent_running(), "chat mode does not start the agent");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn api_backends_chat_even_in_agent_mode() {
+        let mut a = Assistant::new(AiConfig::default());
+        assert!(a.agent_mode, "agent is the default mode");
+        a.provider = Some(ProviderId::Anthropic);
+        a.auth = AuthMode::ApiKey;
+        assert!(
+            !a.agent_active(),
+            "an API backend cannot edit the workspace"
+        );
+        a.input = "/mode".into();
+        a.submit(&EditorContext::default());
+        let last = &a.transcript.last().unwrap().1;
+        assert!(last.contains("this backend chats"), "{last}");
     }
 
     #[cfg(unix)]

@@ -6,8 +6,11 @@ tests, reads the errors and fixes them. EmbedIDE starts the CLI, answers its per
 under the policy you chose, shows every step, lets you review and revert what changed, and stops it
 (with every process it started) on `/cancel`.
 
-Chat (`text + Enter`, `/edit`, `/complete`) is unchanged and never touches files. Agent mode is
-separate and explicit: `/agent <task>`, or `/mode agent` so that plain text starts tasks.
+With a CLI backend (`/provider claude-code` or `/provider codex-cli`) agent mode is the default:
+plain text + Enter is a task the agent carries out in the project. `/mode chat` switches plain text to
+read-only chat, which never touches files (`/edit`, `/complete` stay chat-only too); `/agent <task>`
+still runs one task from chat mode. API backends (`anthropic`, `openai`, …) cannot edit the
+workspace and always chat.
 
 No API key is needed: the CLI uses its own login and plan. See [AI subsystem](ai.md) for backends,
 billing and authentication rules, which apply unchanged.
@@ -188,7 +191,7 @@ editor's usual check against files changed on disk.
 ```toml
 [ai.agent]
 policy = "workspace-write"      # read-only | workspace-write | approval-required
-mode = "chat"                   # what plain text does in the panel: chat | agent
+mode = "agent"                  # what plain text does with a CLI backend: agent (default) | chat
 timeout_secs = 1800             # per turn, not counting time waiting for approvals
 snapshot_max_bytes = 67108864
 snapshot_max_files = 20000

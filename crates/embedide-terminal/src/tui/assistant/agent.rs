@@ -273,7 +273,14 @@ impl Assistant {
                 }
                 "" => self.note(
                     Kind::Info,
-                    format!("Mode: {}", if self.agent_mode { "agent" } else { "chat" }),
+                    format!(
+                        "Mode: {}",
+                        match (self.agent_mode, self.agent_active()) {
+                            (true, true) => "agent",
+                            (true, false) => "agent (this backend chats: agent tasks need /provider claude-code or codex-cli)",
+                            _ => "chat",
+                        }
+                    ),
                 ),
                 other => self.note(
                     Kind::Error,

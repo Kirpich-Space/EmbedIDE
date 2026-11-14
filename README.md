@@ -48,7 +48,9 @@ file). See [the TUI guide](docs/cli/tui.md).
   AI panel uses your installed, already logged-in official CLI (your subscription, no API key, no second
   login), streams the answer, and gives the model no file access (Claude Code) or a read-only sandbox
   (Codex). See [AI](docs/cli/ai.md#claude-code-and-codex-cli-backends-claude-code-codex-cli).
-- **Agent mode** — `/agent <task>` lets Claude Code or Codex CLI work in the project: read, search,
+- **Agent mode (default with a CLI backend)** — after `/provider codex-cli` or `/provider claude-code`,
+  an ordinary request ("fix the build errors", "make me a script that …") is a task: Claude Code or
+  Codex CLI work in the project: read, search,
   create, edit and delete files, run builds and tests and fix the errors, under a policy you choose
   (`read-only`, `workspace-write`, `approval-required`). Every command, file change and refusal is
   shown; destructive, privileged, network, hardware and out-of-workspace actions ask first (`y` / `a`

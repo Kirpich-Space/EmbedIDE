@@ -85,7 +85,9 @@ impl Default for CliConfig {
 pub struct AgentConfig {
     /// `read-only`, `workspace-write` (default) or `approval-required`.
     pub policy: String,
-    /// What plain text typed in the AI panel does: `chat` (default) or `agent`.
+    /// What plain text typed in the AI panel does with an agent-capable CLI
+    /// backend: `agent` (default: run it as a task in the project) or `chat`
+    /// (read-only answers). API backends always chat.
     pub mode: String,
     /// Longest one agent turn may run, in seconds.
     pub timeout_secs: u64,
@@ -110,7 +112,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             policy: "workspace-write".into(),
-            mode: "chat".into(),
+            mode: "agent".into(),
             timeout_secs: 1800,
             snapshot_max_bytes: 64 * 1024 * 1024,
             snapshot_max_files: 20_000,

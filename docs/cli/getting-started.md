@@ -146,7 +146,7 @@ If `claude` (Claude Code) or `codex` (Codex CLI) is installed and logged in, not
    `Claude Code 2.1.322 … ready, logged in via claude.ai (pro)`.
 3. `/file` attaches the current file; type a question and press Enter. `/cancel` stops a request.
 4. `/edit <instruction>` shows a diff; `/apply` puts it into the buffer (undo with `u`; `:w` saves).
-5. `/agent <task>` lets the CLI work in the project itself — edit files, build, run tests, fix
+5. With `claude-code` or `codex-cli`, plain text is a task: the CLI works in the project itself — edit files, build, run tests, fix
    errors — under the `workspace-write` policy: risky actions ask first (`y` / `a` / `n`), `/review`
    shows what changed, `/revert all` undoes it. See [agent mode](agents.md).
 6. In Insert mode `Alt+\` asks for an inline suggestion; Tab accepts it, Esc dismisses it.

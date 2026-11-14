@@ -144,8 +144,8 @@ until you press Enter.
 | `/cancel`, `/clear`, `/model <id>`, `/auth <mode>`, `/complete`, `/help` | as before |
 
 Chat output never runs commands and never writes files: its only path to your files is `/apply` into
-a buffer you then save yourself. Agent mode is the explicit exception — `/agent <task>` (or `/mode
-agent`), `/policy`, approvals with `y`/`a`/`n`, `/changes`, `/review`, `/revert`, `/fix`, `/new`,
+a buffer you then save yourself. Agent mode is the exception — the default with a CLI backend (plain text
+is a task; `/mode chat` for read-only answers; `/agent <task>` from chat mode), `/policy`, approvals with `y`/`a`/`n`, `/changes`, `/review`, `/revert`, `/fix`, `/new`,
 `/skills`, `/skill` — see [agents.md](agents.md). `/inline [off|manual|auto]` shows or switches inline
 suggestions.
 
@@ -207,7 +207,7 @@ All AI settings live in `config.toml` (`embed config set ai.… …`); keys are 
 | `ai.completion.cache_entries` | 64 | suggestions remembered by context |
 | `ai.completion.max_lines` | 40 | longest suggestion kept |
 | `ai.agent.policy` | `workspace-write` | `read-only`, `workspace-write`, `approval-required` |
-| `ai.agent.mode` | `chat` | what plain text does in the panel: `chat` or `agent` |
+| `ai.agent.mode` | `agent` | what plain text does with a CLI backend: `agent` or `chat` (API backends always chat) |
 | `ai.agent.timeout_secs` | 1800 | one agent turn (approval waits excluded) |
 | `ai.agent.snapshot_max_bytes` / `.snapshot_max_files` | 64 MiB / 20000 | review snapshot limits |
 | `ai.agent.max_fix_iterations` | 3 | `/fix` rounds |
