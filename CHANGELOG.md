@@ -19,6 +19,11 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   are cyan italics instead of an inverse block. Truecolor terminals get exact tokens, 256-colour
   terminals the nearest ones; tests check WCAG contrast (≥ 4.5:1) of every text colour.
 
+### Documentation
+- New guides: documentation index, tutorials (C, Rust, Zig, assembly, Cortex-M, compilers, AI agent,
+  skills, inline suggestions, binaries), key and command reference, configuration reference,
+  troubleshooting and FAQ, architecture, `CONTRIBUTING.md`.
+
 ### Fixed (release preparation)
 - Test `cancel_and_timeout_stop_the_whole_process_group` was flaky: `pgrep -f` matched the mock
   directory `…-1` as a prefix of concurrent mocks `…-10`…`…-19`. Pattern anchored.

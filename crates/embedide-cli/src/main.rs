@@ -1,4 +1,4 @@
-//! EmbedIDE command-line IDE. No GUI, Electron or Node.js runtime is required.
+//! EmbedIDE command-line IDE. No GUI or Node.js runtime is required.
 mod cmd_ai;
 mod cmd_project;
 mod cmd_toolchain;

@@ -115,6 +115,8 @@ embed ai skills                                  # project, extra and global ski
 - [Command reference](docs/cli/commands.md)
 - [`embedide.toml` reference](docs/cli/embedide-toml.md)
 - [AI subsystem](docs/cli/ai.md) · [agent mode](docs/cli/agents.md) · [skills](docs/cli/skills.md)
+- [Tutorials](docs/cli/tutorials.md) · [keys and commands](docs/cli/keys.md) · [configuration](docs/cli/configuration.md) · [troubleshooting and FAQ](docs/cli/troubleshooting.md)
+- [Architecture](docs/cli/architecture.md) · [contributing](CONTRIBUTING.md) · [all documentation](docs/README.md)
 - [Verified and unverified functionality](docs/cli/status.md)
 
 No Node.js or graphical session is needed. The binary links only against the C runtime.
