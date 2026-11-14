@@ -25,6 +25,12 @@ experimental versions (1.0.0 – 2.6.2, Electron) are unrelated and stay in the 
   third-party dependencies are GPL-3.0-compatible (MIT, Apache-2.0, BSD, ISC, Unicode, MPL-2.0, Zlib,
   Unlicense).
 
+### Fixed (agents)
+- Claude Code agents were asked for approval to run `embed build .` (EmbedIDE's own command was not on the
+  development allow list). `embed build`, `clean`, `doctor`, `targets`, `project info|init`, `toolchain
+  list|detect|info|recommend` and `config list|get|path` are now allowed under `workspace-write`;
+  `embed ai`, `terminal`, `config set` and `toolchain add` still ask.
+
 ### Distribution
 - Static `x86_64-unknown-linux-musl` archive (any Linux distribution, no glibc requirement) next to the
   glibc one; `install.sh` (checksum-verified, user-local); issue templates for bug reports.

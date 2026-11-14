@@ -61,7 +61,7 @@ running a shell (quotes, `&&`, `|`, `;`, redirections, `for … do … done`) an
 - allowed: reading/searching (`ls`, `cat`, `grep`, `rg`, `find` without `-delete`/`-exec`, `git
   status/diff/log/show`), builds and tests (`make`, `cmake`, `ninja`, `cargo build/test/check/clippy`,
   `zig build/test`, `gcc`, `clang`, `cc`, `as`, `nasm`, `ld`, `objdump`, cross tools such as
-  `arm-none-eabi-gcc`, `python3 -m pytest`, `qemu-*`), running programs inside the workspace
+  `arm-none-eabi-gcc`, `python3 -m pytest`, `qemu-*`, EmbedIDE's own `embed build` / `embed clean` / `embed doctor` / `embed project info`), running programs inside the workspace
   (`./app`), `mkdir`/`cp`/`mv`/`touch` inside the workspace, and the names in `ai.agent.allow_commands`;
 - asks: deleting or overwriting data (`rm`, `dd`, `truncate`, `find -delete`, `git reset/clean/checkout
   /push/commit/stash`), privileges or other processes (`sudo`, `chown`, `kill`, `systemctl`), network

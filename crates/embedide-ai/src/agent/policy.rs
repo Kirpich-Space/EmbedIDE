@@ -745,6 +745,7 @@ impl Rules {
         }
         match name.as_str() {
             "git" => return git(args),
+            "embed" => return embed_command(args),
             "cargo" => {
                 return match sub {
                     Some(
@@ -913,6 +914,26 @@ fn raise(c: CommandClass, worst: &mut CommandClass) {
     }
 }
 
+/// EmbedIDE's own command line: building and inspecting is ordinary development; anything that changes
+/// global configuration, starts a shell or talks to a provider asks.
+fn embed_command(args: &[String]) -> CommandClass {
+    let mut words = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(String::as_str);
+    match (words.next(), words.next()) {
+        (Some("build" | "clean"), _) => CommandClass::Dev,
+        (Some("doctor" | "targets" | "toolchains"), _) | (None, _) => CommandClass::Read,
+        (Some("toolchain"), Some("list" | "detect" | "info" | "recommend")) => CommandClass::Read,
+        (Some("project"), Some("info" | "templates")) => CommandClass::Read,
+        (Some("project"), Some("init")) => CommandClass::Dev,
+        (Some("config"), Some("list" | "get" | "path")) => CommandClass::Read,
+        (Some(other), _) => CommandClass::Sensitive(format!(
+            "embed {other} changes configuration, starts a shell or contacts a provider"
+        )),
+    }
+}
+
 fn git(args: &[String]) -> CommandClass {
     let sub = args
         .iter()
@@ -962,6 +983,10 @@ mod tests {
             "mkdir -p build; mv a.c src/a.c",
             "python3 -m pytest -q",
             "just test",
+            "embed build . 2>&1 | tail -20; timeout 10 ./build/debug/ringbuf",
+            "embed doctor",
+            "embed project info .",
+            "embed clean --dry-run",
             "FOO=1 make",
             "timeout 30 ./build/tests",
             "nasm -f elf64 hello.asm -o hello.o > /dev/null",
@@ -1012,6 +1037,10 @@ mod tests {
             "cat <<EOF > x\nhi\nEOF",
             "cd /etc && ls",
             "unknown-tool --flag",
+            "embed ai agent --provider codex-cli x",
+            "embed terminal .",
+            "embed config set ai.agent.policy read-only",
+            "embed toolchain add x --kind gcc --path /bin/gcc",
             "sed -i s/a/b/ ../x.c",
             "cat \"$HOME/.ssh/id_rsa\"",
             "cat $DIR/secret",
