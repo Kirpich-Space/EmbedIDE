@@ -18,22 +18,22 @@ Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd Emb
 Bugs and feedback: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 The AI agents use the Claude Code / Codex CLI you are logged in with; EmbedIDE needs no API key.
-Voice: Piper TTS, LibriTTS-R voice (CC BY 4.0). Music: original, synthesised for this video.
+Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.
 
 0:00 Introduction
-0:17 Open a project
-0:33 Build, error, jump
-0:47 Fix and rebuild
-0:56 Integrated terminal
-1:09 Skills and policies
-1:25 AI agent: the task
-1:40 The agent works
-1:54 Review and revert
-2:06 Run the result
-2:15 Permission prompts
-2:38 Binary view
-2:55 Summary
-3:18 Install
+0:21 Open a project
+0:40 Build, error, jump
+0:57 Fix and rebuild
+1:09 Integrated terminal
+1:24 Skills and policies
+1:43 AI agent: the task
+2:00 The agent works
+2:14 Review and revert
+2:29 Run the result
+2:39 Permission prompts
+3:03 Binary view
+3:22 Summary
+3:47 Install
 
 
 

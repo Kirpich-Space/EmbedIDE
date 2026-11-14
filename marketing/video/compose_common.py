@@ -3,13 +3,20 @@ import json, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import audio as A, brand as B, film as F  # noqa: E402
+from lib import audio as A, brand as B, film as F, i18n  # noqa: E402
+from lib.i18n import tr  # noqa: E402,F401
 from PIL import Image, ImageDraw  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "out"
 
 
+def sfx(name):
+    """Output name with the language suffix (the Russian dub is *_ru)."""
+    return name + ("_ru" if i18n.LANG == "ru" else "")
+
+
 def build(film, name, crf=18):
+    name = sfx(name)
     A.fit_durations(film)
     film.layout()
     wav = OUT / f"{name}.wav"
@@ -65,6 +72,7 @@ def thumbnail(path, frame_img, title_lines, kicker="EmbedIDE · alpha", size=(12
 
 
 def metadata(name, title, description, tags, film, extra=""):
+    name = sfx(name)
     """Write upload-ready metadata (title, description with chapters, tags) next to the video."""
     ch = (OUT / f"{name}.chapters.txt").read_text().strip() if (OUT / f"{name}.chapters.txt").exists() else ""
     text = f"# {name}\n\n## Title\n\n{title}\n\n## Description\n\n{description}\n"

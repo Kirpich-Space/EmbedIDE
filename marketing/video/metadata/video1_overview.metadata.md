@@ -18,18 +18,19 @@ curl -fsSL https://raw.githubusercontent.com/Kirpich-Space/EmbedIDE/main/install
 Build from source: git clone https://github.com/Kirpich-Space/EmbedIDE && cd EmbedIDE && cargo build --release --locked
 Found a bug? https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
-Voice: Piper TTS, LibriTTS-R voice (CC BY 4.0). Music: original, synthesised for this video.
+Voice: Kokoro-82M (Apache-2.0). Music: original, synthesised for this video.
 
 0:00 What is EmbedIDE
-0:19 Architecture
-0:41 Editor and builds
-0:52 Integrated terminal
-1:03 Binary view
-1:16 Claude and Codex
-1:33 AI agent edits files
-2:12 Status
-2:23 Install
-2:41 Build from source
+0:37 Architecture
+1:03 Editor and builds
+1:15 Integrated terminal
+1:25 Binary view
+1:41 Claude and Codex
+2:01 AI agent edits files
+2:24 Permission prompts
+3:03 Status
+3:17 Install
+3:35 Build from source
 
 
 

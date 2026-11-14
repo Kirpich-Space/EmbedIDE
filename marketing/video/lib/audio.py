@@ -10,7 +10,24 @@ VOICE = VOICE_DIR / "en_US-libritts_r-medium.onnx"
 SPEAKER = 6
 CACHE = VOICE_DIR / "narration"
 
-_voice = None
+_piper = {}
+_kokoro = None
+KOKORO_VOICE = "af_heart"      # Kokoro-82M (Apache-2.0), best-rated English voice
+PIPER_RU = VOICE_DIR / "ru_RU-denis-medium.onnx"   # Piper, CC0 dataset
+
+
+def _resample(a, sr_from):
+    from scipy.signal import resample_poly
+    from math import gcd
+    g = gcd(SR, sr_from)
+    return resample_poly(a, SR // g, sr_from // g).astype(np.float32)
+
+
+def _tail_trim(a):
+    nz = np.where(np.abs(a) > 0.01)[0]
+    if len(nz):
+        a = a[max(0, nz[0] - 800): nz[-1] + 1600]
+    return a
 
 
 SPOKEN = [
@@ -21,9 +38,9 @@ SPOKEN = [
     (r"/review", "slash review"), (r"/revert", "slash revert"), (r"/policy", "slash policy"), (r"/skills", "slash skills"),
     (r"\bGCC\b", "G C C"), (r"\bPTY\b", "P T Y"), (r"\bCLIs\b", "C L Is"), (r"\bCLI\b", "C L I"),
     (r"\bTUI\b", "T U I"), (r"\bGUI\b", "G U I"), (r"\bAPI\b", "A P I"), (r"\bI/O\b", "I O"),
-    (r"\bFreeBSD\b", "Free B S D"), (r"\bobjdump\b", "obj dump"), (r"\bELF\b", "E L F"), (r"\bHEX\b", "hex"),
-    (r"\bNASM\b", "nasm"), (r"\bGDB\b", "G D B"), (r"\bOpenOCD\b", "Open O C D"), (r"\bRust\b", "Rust"),
-    (r"\bLinux\b", "Linux"), (r"\bGitHub\b", "Git Hub"), (r"\bzig cc\b", "zig C C"), (r"\bLSP\b", "L S P"),
+    (r"\bFreeBSD\b", "Free B S D"), (r"\bobjdump\b", "obj dump"), (r"\bELF\b", "elf"), (r"\bHEX\b", "hex"),
+    (r"\bNASM\b", "nasm"), (r"\bGDB\b", "G D B"), (r"\bOpenOCD\b", "Open O C D"),
+    (r"\bGitHub\b", "Git Hub"), (r"\bzig cc\b", "zig C C"), (r"\bLSP\b", "L S P"),
 ]
 
 
@@ -33,27 +50,52 @@ def spoken(text):
     return text
 
 
-def narrate(text):
-    """Return mono float32 audio at SR for `text` (cached on disk); pronunciation fixes via SPOKEN."""
-    global _voice
-    text = spoken(text)
+SPOKEN_RU = [
+    (r"EmbedIDE", "Эмбэд-Ай-Ди-И"), (r"Claude Code", "Клод Код"), (r"Codex", "Кодекс"), (r"\bRust\b", "Раст"),
+    (r"0\.1\.0-alpha\.1", "ноль точка один точка ноль, альфа один"), (r"GPL-3\.0|GPL", "Джи-Пи-Эл три"),
+    (r"\bF5\b", "эф пять"), (r"\bAlt\+(\d)", lambda m: "Альт плюс " + ["ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"][int(m.group(1))]),
+    (r"\b(\w+)\.([ch])\b", lambda m: f"{m.group(1)} точка {'си' if m.group(2) == 'c' else 'аш'}"),
+    (r"/review", "слэш ревью"), (r"/revert", "слэш ревёрт"), (r"/policy", "слэш полиси"), (r"/skills", "слэш скиллс"),
+    (r"\bGCC\b", "Джи-Си-Си"), (r"\bPTY\b", "пи-ти-вай"), (r"\bCLI\b", "си-эл-ай"), (r"\bTUI\b", "ти-ю-ай"),
+    (r"\bGUI\b", "гуи"), (r"\bAPI\b", "эй-пи-ай"), (r"\bFreeBSD\b", "Фри-Би-Эс-Ди"), (r"\bELF\b", "эльф"),
+    (r"\bHEX\b", "хекс"), (r"\bobjdump\b", "обж-дамп"), (r"\bNASM\b", "насм"), (r"\bGDB\b", "Джи-Ди-Би"),
+    (r"\bOpenOCD\b", "Оупен-О-Си-Ди"), (r"\bGitHub\b", "Гитхаб"), (r"\bLinux\b", "Линукс"),
+    (r"\bElectron\b", "Электрон"), (r"\bzig cc\b", "зиг си-си"), (r"\bClang\b", "Клэнг"), (r"\bCMake\b", "Си-Мэйк"),
+    (r"\bMake\b", "Мэйк"), (r"\bCargo\b", "Карго"), (r"\bZig\b", "Зиг"), (r"\bCortex-M\b", "Кортекс-М"),
+    (r"\bC\b", "Си"), (r"\bVim\b", "Вим"), (r"\bAI\b", "эй-ай"), (r"\bembed\b", "эмбэд"), (r"\bGit\b", "Гит"),
+    (r"\bring_pop\b", "ринг-поп"), (r"\bmain\b", "майн"), (r"\bdoctor\b", "доктор"),
+]
+
+
+def spoken_ru(text):
+    for pat, rep_ in SPOKEN_RU:
+        text = re.sub(pat, rep_, text)
+    return text
+
+
+def narrate(text, lang="en"):
+    """Mono float32 audio at SR for `text`, cached on disk. English: Kokoro-82M; Russian: Piper (CC0 voice)."""
+    global _kokoro
     CACHE.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha1(f"{SPEAKER}|{text}".encode()).hexdigest()[:16]
+    spoken_text = spoken(text) if lang == "en" else spoken_ru(text)
+    key = hashlib.sha1(f"{lang}|{KOKORO_VOICE}|{spoken_text}".encode()).hexdigest()[:16]
     f = CACHE / f"{key}.npy"
     if f.exists():
         return np.load(f)
-    from piper import PiperVoice, SynthesisConfig
-    if _voice is None:
-        _voice = PiperVoice.load(str(VOICE))
-    cfg = SynthesisConfig(speaker_id=SPEAKER, length_scale=1.04, noise_scale=0.55, noise_w_scale=0.6)
-    chunks = [c.audio_int16_array for c in _voice.synthesize(text, syn_config=cfg)]
-    a = np.concatenate(chunks).astype(np.float32) / 32768.0
-    # resample 22050 -> 48000 (linear; speech only) and trim edge silence
-    n = int(len(a) * SR / 22050)
-    a = np.interp(np.linspace(0, len(a) - 1, n), np.arange(len(a)), a).astype(np.float32)
-    nz = np.where(np.abs(a) > 0.01)[0]
-    if len(nz):
-        a = a[max(0, nz[0] - 600): nz[-1] + 1200]
+    if lang == "en":
+        from kokoro_onnx import Kokoro
+        if _kokoro is None:
+            _kokoro = Kokoro(str(VOICE_DIR / "kokoro-v1.0.onnx"), str(VOICE_DIR / "voices-v1.0.bin"))
+        a, sr = _kokoro.create(spoken_text, voice=KOKORO_VOICE, speed=1.02, lang="en-us")
+        a = _resample(np.asarray(a, dtype=np.float32), sr)
+    else:
+        from piper import PiperVoice, SynthesisConfig
+        if "ru" not in _piper:
+            _piper["ru"] = PiperVoice.load(str(PIPER_RU))
+        cfg = SynthesisConfig(length_scale=1.05, noise_scale=0.6, noise_w_scale=0.7)
+        chunks = [c.audio_int16_array for c in _piper["ru"].synthesize(spoken_text, syn_config=cfg)]
+        a = _resample(np.concatenate(chunks).astype(np.float32) / 32768.0, 22050)
+    a = _tail_trim(a)
     a = a / max(1e-6, np.abs(a).max()) * 0.85
     np.save(f, a)
     return a
@@ -85,7 +127,7 @@ def fit_durations(film, pad=1.0, lead=0.45):
     """Make each narrated scene at least as long as its narration."""
     for s, _ in film.scenes:
         if s.narration:
-            s.narr = narrate(s.narration)
+            s.narr = narrate(s.narration, film.lang)
             s.duration = max(s.duration, len(s.narr) / SR + lead + pad)
 
 
@@ -134,7 +176,7 @@ def _pluck(freq, dur, vel=1.0):
     return y * env * vel
 
 
-def music(duration, bpm=92, seed=7):
+def music(duration, bpm=100, seed=7):
     """Original ambient-industrial bed in A minor: pad, bass, soft pluck arpeggio, quiet pulse."""
     n = int(duration * SR)
     out = np.zeros((n,), dtype=np.float32)
@@ -179,15 +221,30 @@ def music(duration, bpm=92, seed=7):
             p = _pluck(f, 1.0, 0.16 if s % 2 == 0 else 0.10)
             j1 = min(n, idx + len(p))
             out[idx:j1] += p[: j1 - idx]
-        # pulse: very quiet filtered noise tick on beats 2 and 4
-        for beat in (1, 3):
-            idx = int((t0 + beat * spb) * SR)
-            if idx >= n:
-                break
-            m = int(0.05 * SR)
-            tick = rng.uniform(-1, 1, m).astype(np.float32) * np.exp(-np.arange(m) / (SR * 0.012)) * 0.05
-            j1 = min(n, idx + m)
-            out[idx:j1] += tick[: j1 - idx]
+        # rhythm from the second bar on: soft kick on 1 and 3, snare on 2 and 4, hats on the 8ths
+        if b >= 1:
+            for beat in range(4):
+                idx = int((t0 + beat * spb) * SR)
+                if idx >= n:
+                    break
+                if beat in (0, 2):
+                    m = int(0.28 * SR)
+                    tt = np.arange(m) / SR
+                    kick = np.sin(2 * np.pi * (45 + 90 * np.exp(-tt * 28)) * tt) * np.exp(-tt * 9) * 0.55
+                else:
+                    m = int(0.18 * SR)
+                    tt = np.arange(m) / SR
+                    kick = (rng.uniform(-1, 1, m) * 0.5 + np.sin(2 * np.pi * 190 * tt) * 0.4) * np.exp(-tt * 22) * 0.22
+                j1 = min(n, idx + m)
+                out[idx:j1] += kick[: j1 - idx].astype(np.float32)
+            for e in range(8):
+                idx = int((t0 + e * spb / 2) * SR)
+                if idx >= n:
+                    break
+                m = int(0.04 * SR)
+                hat = np.diff(rng.uniform(-1, 1, m + 1)).astype(np.float32) * np.exp(-np.arange(m) / (SR * 0.01)) * (0.07 if e % 2 else 0.04)
+                j1 = min(n, idx + m)
+                out[idx:j1] += hat[: j1 - idx]
     # slow master fade in / out
     fi = min(n, int(2.5 * SR))
     out[:fi] *= np.linspace(0, 1, fi)
@@ -195,6 +252,17 @@ def music(duration, bpm=92, seed=7):
     out[-fo:] *= np.linspace(1, 0, fo)
     out /= max(1e-6, np.abs(out).max())
     return out * 0.35
+
+
+def whoosh(dur=0.8, seed=3):
+    """Short rising-then-falling noise sweep for scene transitions."""
+    n = int(dur * SR)
+    noise = np.random.default_rng(seed).uniform(-1, 1, n).astype(np.float32)
+    lo = np.convolve(noise, np.ones(80, dtype=np.float32) / 80, mode="same")
+    hi = np.convolve(noise, np.ones(6, dtype=np.float32) / 6, mode="same")
+    sweep = np.linspace(0, 1, n, dtype=np.float32)
+    env = np.sin(np.linspace(0, np.pi, n, dtype=np.float32)) ** 2
+    return (lo * (1 - sweep) + hi * sweep) * env * 0.5
 
 
 def duck(music_track, windows, depth=0.38, ramp=0.25):
@@ -231,7 +299,12 @@ def mix(film, out_wav):
     mus = np.pad(mus, (0, max(0, len(voice) - len(mus))))[: len(voice)]
     mus = duck(mus, windows)
     voice = voice[: len(mus)]
-    mono = voice * 0.95 + mus
+    sfx = np.zeros(len(mus), dtype=np.float32)
+    for i, p in enumerate(film.placed[1:], 1):
+        w = whoosh(0.9, seed=i)
+        i0 = max(0, int((p.start - 0.2) * SR))
+        sfx[i0:i0 + len(w)] += w[: max(0, len(sfx) - i0)]
+    mono = voice * 0.95 + mus + sfx * 0.55
     stereo = np.stack([mono, mono * 0.98], axis=1)[: int(film.total * SR)]
     write_wav(out_wav, stereo)
     return windows
