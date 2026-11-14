@@ -5213,7 +5213,7 @@ mod tests {
         let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
         // No history yet: Shift+PageUp belongs to the shell.
         assert!(!scrollback_key(&mut t, shift(KeyCode::PageUp)));
-        t.paste("i=1; while [ $i -le 60 ]; do printf '\\033[32mL%02d\\033[0m\\n' $i; i=$((i+1)); done; echo DONE\n");
+        t.paste("i=1; while [ $i -le 60 ]; do printf '\\033[32mL%02d\\033[0m\\n' $i; i=$((i+1)); done; echo DO''NE\n");
         wait_for(&mut t, "DONE");
         assert!(t.history() >= 50, "history {}", t.history());
         // Shift+PageUp: one page (rows - 1) back; the cursor is hidden.

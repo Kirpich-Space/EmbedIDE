@@ -245,8 +245,9 @@ fn oversized_output_is_stopped_at_the_configured_limit() {
 }
 
 fn alive(dir: &Path) -> bool {
+    // Anchor the end: mock `…-1` must not match `…-10` of a concurrent test.
     let out = std::process::Command::new("pgrep")
-        .args(["-f", &dir.display().to_string()])
+        .args(["-f", &format!("{}( |/|$)", dir.display())])
         .output()
         .unwrap();
     !out.stdout.is_empty()
