@@ -243,7 +243,7 @@ See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills
 ## Videos
 
 Official Kirpich Space videos of the real program (version 0.1.0-alpha.1; recordings are real, animations
-and time-lapses are labelled). English narration and a Russian dub in the same AI-synthesised voice (runs locally), with subtitles:
+and time-lapses are labelled). English narration and a Russian dub in the same AI-synthesised voice (Microsoft Emma, free neural TTS), with subtitles:
 
 | Video | English | Русский дубляж |
 |---|---|---|

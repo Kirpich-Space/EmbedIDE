@@ -23,13 +23,13 @@ out/                  recordings, WAVs and the rendered MP4s (git-ignored; MP4s 
 ## Requirements
 
 Linux, `ffmpeg` (libx264, aac), `rsvg-convert`, Python 3.11+ with `pyte pillow numpy scipy`, fonts DejaVu Sans Mono /
-DejaVu Sans / Noto Sans. Narration runs **locally** (no cloud, no API) and uses **one voice for every language**:
-Chatterbox Multilingual (MIT) cloned from a single reference clip, `~/.cache/embedide-video/ref_voice.wav`
-(a short Kokoro-82M sample, Apache-2.0). It needs a separate Python with torch (CUDA), `chatterbox-tts` and
-`faster-whisper`; a GPU with 8 GB is enough. Run `python3 prefill_voice.py --tts-python /path/to/that/python`
+DejaVu Sans / Noto Sans. Narration uses **one voice for every language**: Microsoft's free neural voice
+`en-US-EmmaMultilingualNeural`, reached with the `edge-tts` package (no key or account; only the public script
+text leaves the machine, and the endpoint is unofficial, so check Microsoft's terms before commercial use).
+Install `edge-tts faster-whisper scipy` in a virtualenv and run `python3 prefill_voice.py --tts-python /path/to/it`
 once: it queues every line of all storyboards, synthesises them sentence by sentence and re-takes any sentence
-that Whisper does not read back correctly. The compose scripts then only read the cache.
-`finalize.sh` copies the finished renders into `../../videos/`.
+that Whisper does not read back correctly. The compose scripts then only read the cache. Music is synthesised
+here (calm sine pad and bells, no samples). `finalize.sh` copies the finished renders into `../../videos/`.
 
 The agent recordings need the **Codex CLI** and **Claude Code** installed and logged in (they use your
 subscriptions: a few short tasks per run). `install.sh` is run for real against GitHub.

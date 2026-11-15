@@ -18,7 +18,7 @@ EmbedIDE: техническая демонстрация — правка, сб
 Ошибки и отзывы: https://github.com/Kirpich-Space/EmbedIDE/issues/new/choose
 
 ИИ-агенты используют Claude Code / Codex CLI, в которых вы вошли; ключ API EmbedIDE не нужен.
-Голос: синтезирован ИИ, один голос на все языки (Chatterbox Multilingual, MIT). Музыка: оригинальная.
+Голос: синтезирован ИИ, один голос на все языки (нейроголос Microsoft Emma Multilingual). Музыка: оригинальная.
 
 0:00 Введение
 0:22 Открываем проект

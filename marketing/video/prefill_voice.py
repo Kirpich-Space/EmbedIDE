@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synthesise every narration line of all three videos in both languages with the single cloned voice.
 
-  python3 prefill_voice.py [--tts-python PATH]      # PATH: Python with torch, chatterbox-tts, faster-whisper
+  python3 prefill_voice.py [--tts-python PATH]      # PATH: Python with edge-tts, faster-whisper, scipy
 
 Step 1 (dry run, no GPU): import each storyboard and queue the lines missing from the cache.
 Step 2: lib/tts_worker.py synthesises them (each sentence is verified with Whisper and retried).
