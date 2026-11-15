@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-- `crates/` contains the native Rust workspace: `embedide-project`, `embedide-core`, `embedide-editor`, `embedide-cli`, and `embedide-terminal`. Keep editor logic independent of presentation; frontends share the existing engine.
+- `crates/` contains the native Rust workspace (nine crates; see `docs/cli/architecture.md`): `embedide-editor` (piece-table buffer, Vim input, syntax), `embedide-core` (processes, LSP, diagnostics, ELF/HEX, serial, GDB/MI), `embedide-workspace` (`embedide.toml`, config, atomic writes), `embedide-toolchains` (compiler discovery, never installs), `embedide-build` (reviewable build plans), `embedide-ai` (providers, Claude Code/Codex backends, agent policy, skills), `embedide-terminal` (full-screen TUI), `embedide-cli` (the `embed` binary), and `embedide-project` (project discovery, legacy `embedide.json`). Keep editor logic independent of presentation; frontends share the existing engine.
 - Rust integration tests live in each crate’s `tests/`; editor benchmarks live in `crates/embedide-editor/benches/`. `scripts/` contains verification helpers. Read `docs/native/` (historical design notes from the migration away from the removed Electron app) and `docs/cli/` for verified limitations.
 
 ## Build, Test, and Development Commands
