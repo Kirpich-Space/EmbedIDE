@@ -242,20 +242,11 @@ See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills
   commands. See [what terminals can report](docs/cli/tui.md#what-terminals-can-report).
 - **Build ignores the latest edit** — builds use files on disk; save (`:w`) before F5.
 
-## Videos
+## Video
 
-Official Kirpich Space videos of the real program (version 0.1.0-alpha.1; recordings are real, animations
-and time-lapses are labelled). English narration and a Russian dub in the same AI-synthesised voice (Microsoft Emma, free neural TTS), with subtitles:
+- **[One terminal: from a C build error to a fixed program, then an AI agent](https://www.youtube.com/watch?v=x8ovqAr2uSg)** (YouTube, 1 min, English subtitles) — a real recording of EmbedIDE 0.1.0-alpha.1: the build error, the problem list, the jump to the exact line, the fix, a run in the built-in terminal, then the Codex CLI adding a function while every command stays on screen. Waiting time is sped up and labelled; the voice is AI-synthesised.
 
-| Video | English | Русский дубляж |
-|---|---|---|
-| Overview, ~4 min | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.mp4) · [subtitles](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.en.srt) | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.ru.mp4) · [субтитры](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-overview-0.1.0-alpha.1.ru.srt) |
-| Technical demonstration, ~4 min | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.mp4) · [subtitles](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.en.srt) | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.ru.mp4) · [субтитры](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-technical-demo-0.1.0-alpha.1.ru.srt) |
-| Short, 42 s (vertical) | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.mp4) · [subtitles](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.en.srt) | [mp4](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.ru.mp4) · [субтитры](https://github.com/Kirpich-Space/EmbedIDE/releases/download/v0.1.0-alpha.1/embedide-short-0.1.0-alpha.1.ru.srt) |
-
-The files are H.264 + AAC. If your VLC says "codec not supported", install its ffmpeg plugin
-(Arch/Artix: `vlc-plugin-ffmpeg`) or use `mpv`. The pipeline that records and renders them from the real
-binary is in [marketing/video](marketing/video).
+The pipeline that records and renders videos from the real binary is in [marketing/video](marketing/video).
 
 ## Roadmap
 
