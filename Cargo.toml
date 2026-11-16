@@ -20,7 +20,7 @@ embedide-toolchains = { path = "crates/embedide-toolchains" }
 embedide-workspace = { path = "crates/embedide-workspace" }
 embedide-build = { path = "crates/embedide-build" }
 embedide-ai = { path = "crates/embedide-ai" }
-toml = "0.8"
+toml = "1.2"
 toml_edit = "0.22"
 
 [workspace.lints.rust]
