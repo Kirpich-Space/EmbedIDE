@@ -18,6 +18,13 @@ Please **do not open a public issue**. Use GitHub's private vulnerability report
 Include the version (`embed --version`), the platform, steps to reproduce and the impact. You will get
 an acknowledgement; fixes are released as a new pre-release with a CHANGELOG entry.
 
+## Trust boundary
+
+Opening a project never runs its scripts. **Building** it does run what the project describes: Make, CMake and Cargo
+projects execute their own build files, and a native `embedide.toml` chooses compiler flags. EmbedIDE refuses
+loader and search-path variables (`LD_*`, `PATH`, …) in a manifest and warns about flags that load project code, but it
+cannot make a hostile project safe to build. Build projects you trust, or use a throw-away user or container.
+
 ## Scope
 
 In scope: escaping the workspace through agent mode or its approval rules, credential or API-key

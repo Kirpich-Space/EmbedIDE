@@ -46,7 +46,7 @@ cargo_profile = "release"
 flags = ["-O1", "-g", "-fsanitize=address"]
 toolchain = { c = "clang" }
 
-[env]                         # for builds and `embed terminal`
+[env]                         # for builds and `embed terminal`; LD_*, DYLD_*, PATH, SHELL, IFS, BASH_ENV, ENV, COMPILER_PATH, GCC_EXEC_PREFIX are refused
 SDK_ROOT = "/opt/vendor sdk"
 
 [ai]

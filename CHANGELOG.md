@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- **A project manifest can no longer choose what the build loads.** `embedide.toml` `[env]` refuses `LD_*`, `DYLD_*`,
+  `PATH`, `SHELL`, `IFS`, `BASH_ENV`, `ENV`, `COMPILER_PATH` and `GCC_EXEC_PREFIX` (an `LD_PRELOAD` in a cloned
+  project's manifest used to run its library inside the compiler on F5 or `embed build`). Compiler flags that load or run
+  project code (`-fplugin`, `-wrapper`, `-specs`, `-B…`, `-load`) are reported as warnings by `embed build` and
+  `embed project info`; they stay allowed because embedded projects use `-specs=nano.specs`. Build only projects you trust.
+
+### Fixed
+- **The screen no longer freezes on F5 when a compiler hangs.** Probing every compiler's version (5 s timeout each, one
+  after another), downloading required toolchains and planning the build now run on a background thread; before, a hung
+  `gcc` froze the TUI for 5 s (measured).
+- `embed --help`, the Settings panel and code comments no longer claim that EmbedIDE never installs anything.
+
 ## `embed` 0.1.0-alpha.1 — update of 2026-11-16 (same version, rebuilt archives)
 
 The `0.1.0-alpha.1` release was updated in place: its archives were rebuilt with the changes below. The

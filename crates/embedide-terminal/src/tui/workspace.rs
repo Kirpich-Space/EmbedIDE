@@ -360,8 +360,8 @@ pub struct Workspace {
     target: Option<usize>,
     operation: Option<Running>,
     problems: Vec<Diagnostic>,
-    /// A toolchain download running on a background thread (progress and the final result).
-    installer: Option<std::sync::mpsc::Receiver<InstallMsg>>,
+    /// A build being prepared on a background thread (progress and the final plan).
+    installer: Option<std::sync::mpsc::Receiver<PrepMsg>>,
     /// Reads multi-line compiler diagnostics (gfortran) across output lines.
     diag_parser: core::diagnostics::Parser,
     build_log: Log,
@@ -405,10 +405,11 @@ pub struct Workspace {
     prepared: Option<embedide_build::Prepared>,
     edit_mark: (usize, u64, usize),
 }
-/// Progress of a background toolchain download.
-enum InstallMsg {
+/// Progress and result of preparing a build on a background thread (toolchain probing, downloads of
+/// missing required toolchains, build planning).
+enum PrepMsg {
     Line(String),
-    Done(Result<(), String>),
+    Done(Result<Box<embedide_build::Prepared>, String>),
 }
 
 fn service_error(error: impl std::fmt::Display) -> FrontendError {
@@ -538,7 +539,7 @@ impl Workspace {
         doc
     }
     /// Toolchains `embedide.toml` and the user configuration select for this
-    /// project (no version probes; nothing is installed).
+    /// project (no version probes, no downloads).
     fn select_compilers(&mut self) {
         self.compilers.clear();
         let Some(m) = &self.manifest else { return };
@@ -1210,47 +1211,59 @@ impl Workspace {
         }
         if self.installer.is_some() {
             return Err(service_error(
-                "Toolchains are still downloading; the build starts when they are ready",
+                "A build is still being prepared; it starts when it is ready",
             ));
         }
-        let manifest = self.manifest.as_ref().expect("manifest");
-        // Toolchains the user's config (or the project, by name) requires but the machine lacks are
-        // downloaded on a background thread, then the build starts by itself.
-        let pending = embedide_build::missing_installs(&self.user, Some(manifest))
-            .map_err(|e| service_error(e.0))?;
-        if !pending.is_empty() {
-            if !self.user.toolchains.auto_install {
-                return Err(service_error(format!(
-                    "Toolchains not installed: {}. Run `embed toolchain install` (toolchains.auto_install is off)",
-                    pending.join(", ")
-                )));
-            }
-            let (user, manifest) = (self.user.clone(), manifest.clone());
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.build_log.clear();
-            self.build_log
-                .push(&format!("Downloading toolchains: {}", pending.join(", ")));
-            self.build_status = "Installing toolchains".into();
-            std::thread::spawn(move || {
-                let result = embedide_build::ensure_required(&user, Some(&manifest), &mut |l| {
-                    let _ = tx.send(InstallMsg::Line(l.to_string()));
-                });
-                let _ = tx.send(InstallMsg::Done(result.map(|_| ()).map_err(|e| e.0)));
-            });
-            self.installer = Some(rx);
-            let previous = self.focus;
-            self.show_panel(Panel::Build);
-            self.focus = previous;
-            return Ok(());
+        let manifest = self.manifest.clone().expect("manifest");
+        let (user, root, profile) = (self.user.clone(), self.root.clone(), self.profile.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.build_log.clear();
+        self.build_status = "Preparing build".into();
+        // Probing every compiler's version (each bounded by a timeout, one after another), downloading
+        // toolchains the config requires and planning the build can all take seconds, so none of it runs
+        // on the thread that draws the screen.
+        std::thread::spawn(move || {
+            let log = |line: &str| {
+                let _ = tx.send(PrepMsg::Line(line.to_string()));
+            };
+            let result = (|| -> Result<Box<embedide_build::Prepared>, String> {
+                let pending =
+                    embedide_build::missing_installs(&user, Some(&manifest)).map_err(|e| e.0)?;
+                if !pending.is_empty() {
+                    if !user.toolchains.auto_install {
+                        return Err(format!(
+                            "Toolchains not installed: {}. Run `embed toolchain install` (toolchains.auto_install is off)",
+                            pending.join(", ")
+                        ));
+                    }
+                    log(&format!("Downloading toolchains: {}", pending.join(", ")));
+                    embedide_build::ensure_required(&user, Some(&manifest), &mut |l| log(l))
+                        .map_err(|e| e.0)?;
+                }
+                let tools = embedide_build::registry(&user, true);
+                let req = embedide_build::Request {
+                    profile,
+                    ..Default::default()
+                };
+                embedide_build::prepare(&root, Some(&manifest), &user, &tools, &req)
+                    .map(Box::new)
+                    .map_err(|e| e.0)
+            })();
+            let _ = tx.send(PrepMsg::Done(result));
+        });
+        self.installer = Some(rx);
+        let previous = self.focus;
+        self.show_panel(Panel::Build);
+        self.focus = previous;
+        Ok(())
+    }
+    /// Start the build for a plan that was prepared in the background.
+    fn start_prepared(&mut self, prepared: embedide_build::Prepared) -> Result<(), FrontendError> {
+        if self.operation.is_some() {
+            return Err(service_error(
+                "Another task started while the build was being prepared; try F5 again",
+            ));
         }
-        let tools = embedide_build::registry(&self.user, true);
-        let req = embedide_build::Request {
-            profile: self.profile.clone(),
-            ..Default::default()
-        };
-        let prepared =
-            embedide_build::prepare(&self.root, Some(manifest), &self.user, &tools, &req)
-                .map_err(|e| service_error(e.0))?;
         prepared.begin().map_err(|e| service_error(e.0))?;
         self.problems.clear();
         self.diag_parser.reset();
@@ -3193,31 +3206,29 @@ impl Workspace {
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
-        let mut install_done = None;
+        let mut prep_done = None;
         if let Some(rx) = &self.installer {
             while let Ok(msg) = rx.try_recv() {
                 changed = true;
                 match msg {
-                    InstallMsg::Line(line) => self.build_log.push(&line),
-                    InstallMsg::Done(result) => install_done = Some(result),
+                    PrepMsg::Line(line) => self.build_log.push(&line),
+                    PrepMsg::Done(result) => prep_done = Some(result),
                 }
             }
         }
-        if let Some(result) = install_done {
+        if let Some(result) = prep_done {
             self.installer = None;
             match result {
-                Ok(()) => {
-                    self.build_log.push("Toolchains ready; starting the build");
-                    if let Err(e) = self.build_manifest(false) {
+                Ok(prepared) => {
+                    if let Err(e) = self.start_prepared(*prepared) {
                         self.build_status = "Failed / cancelled".into();
                         self.notification = e.to_string();
                     }
                 }
                 Err(e) => {
-                    self.build_log
-                        .push(&format!("Toolchain download failed: {e}"));
+                    self.build_log.push(&format!("Cannot start the build: {e}"));
                     self.build_status = "Failed / cancelled".into();
-                    self.notification = format!("Toolchain download failed: {e}");
+                    self.notification = e;
                 }
             }
         }
@@ -4501,7 +4512,7 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "        Servers: rust-analyzer (Rust), clangd (C/C++), zls (Zig) when installed; otherwise words of this file",
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
-        "        Compilers come from embedide.toml and config.toml (Settings panel); nothing is installed for you",
+        "        Compilers come from embedide.toml and config.toml (Settings panel); compilers are downloaded only if your config.toml requires them",
         "TERMINAL Alt+3: your shell in a real pseudo-terminal; all keys go to it except the panel keys (Alt+1/2/3)",
         "        History: Shift+PageUp scrolls back; then Shift+PageUp/PageDown page, Shift+Up/Down line,",
         "        Shift+Home oldest, Shift+End (or typing) back to live. Full-screen programs keep these keys",

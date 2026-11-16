@@ -257,6 +257,9 @@ pub fn build_manifest(
         online: a.online,
     };
     let prepared = build::prepare(root, Some(m), &user, &tools, &req).map_err(|e| fail(e.0))?;
+    for w in m.warnings() {
+        out.err(&format!("warning: {w}"));
+    }
     for s in &prepared.toolchains {
         out.err(&format!(
             "[{}] {} → {} {}",

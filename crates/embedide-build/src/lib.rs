@@ -151,7 +151,7 @@ impl Prepared {
 
 /// Toolchains available to builds: PATH, configured search directories, toolchains EmbedIDE has
 /// installed for the user (see [`ensure_required`]), plus the user's custom entries. This function
-/// never installs or downloads anything.
+/// never installs or downloads anything (see [`ensure_required`] for that).
 pub fn registry(user: &UserConfig, probe: bool) -> Vec<Toolchain> {
     let mut search_dirs = user.toolchains.search_dirs.clone();
     let specs = embedide_toolchains::install::merged(&user.toolchains.install);

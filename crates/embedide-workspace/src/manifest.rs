@@ -193,6 +193,31 @@ pub struct Manifest {
     pub install: InstallSection,
 }
 
+/// Variables that make a process load code or run programs chosen by whoever sets them (the dynamic
+/// loader, the executable search path, the shell, and the compiler's own search prefixes). A project
+/// manifest may not set them: opening a cloned repository and pressing F5 must not run its libraries.
+fn is_hijack_variable(name: &str) -> bool {
+    name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || matches!(
+            name,
+            "PATH" | "SHELL" | "IFS" | "BASH_ENV" | "ENV" | "COMPILER_PATH" | "GCC_EXEC_PREFIX"
+        )
+}
+
+/// Compiler flags that make the compiler load or run code named by the project (plugins, wrapper
+/// programs, spec files, alternative tool prefixes). They are legitimate in embedded projects
+/// (`-specs=nano.specs`), so they are reported, not refused.
+fn risky_flag(flag: &str) -> bool {
+    ["-fplugin", "-wrapper", "-specs", "--specs", "-B", "-load"]
+        .iter()
+        .any(|p| {
+            flag == *p
+                || flag.starts_with(&format!("{p}="))
+                || (*p == "-B" && flag.len() > 2 && flag.starts_with("-B"))
+        })
+}
+
 fn relative_inside(field: &str, p: &str) -> Result<()> {
     let path = Path::new(p);
     if p.is_empty()
@@ -341,6 +366,12 @@ impl Manifest {
             if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
                 return Err(Error(format!("Invalid environment variable '{k}'")));
             }
+            if is_hijack_variable(k) {
+                return Err(Error(format!(
+                    "env.{k} cannot be set in {MANIFEST_FILE}: it decides which programs or libraries the build loads, \
+                     so a project must not choose it. Set it in your shell, or use `embed toolchain search-dir` for compiler directories"
+                )));
+            }
         }
         Ok(())
     }
@@ -381,11 +412,32 @@ impl Manifest {
 
     /// Warnings that do not block a build (e.g. credentials in env).
     pub fn warnings(&self) -> Vec<String> {
-        self.env
+        let mut out: Vec<String> = self
+            .env
             .keys()
             .filter(|k| crate::looks_secret(k))
             .map(|k| format!("env.{k} looks like a credential; prefer setting it in your shell, not in {MANIFEST_FILE}"))
-            .collect()
+            .collect();
+        let flags = self
+            .build
+            .flags
+            .iter()
+            .chain(&self.build.link_flags)
+            .chain(&self.target.flags)
+            .chain(
+                self.profiles
+                    .values()
+                    .flat_map(|p| p.flags.iter().chain(&p.link_flags)),
+            );
+        let mut seen = std::collections::BTreeSet::new();
+        for f in flags.filter(|f| risky_flag(f)) {
+            if seen.insert(f.clone()) {
+                out.push(format!(
+                    "flag '{f}' makes the compiler load or run code named by this project; build only projects you trust"
+                ));
+            }
+        }
+        out
     }
 }
 
@@ -449,5 +501,48 @@ mod tests {
         let mut m = Manifest::new("d", Language::C, BuildKind::Native);
         m.env.insert("OPENAI_API_KEY".into(), "x".into());
         assert_eq!(m.warnings().len(), 1);
+    }
+
+    #[test]
+    fn loader_and_search_path_variables_cannot_be_set_by_a_project() {
+        for name in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PATH",
+            "SHELL",
+            "BASH_ENV",
+            "COMPILER_PATH",
+        ] {
+            let mut m = Manifest::new("d", Language::C, BuildKind::Native);
+            m.env.insert(name.into(), "/tmp/x".into());
+            let e = m.validate().unwrap_err().0;
+            assert!(
+                e.contains(name) && e.contains("must not choose"),
+                "{name}: {e}"
+            );
+        }
+        let mut ok = Manifest::new("d", Language::C, BuildKind::Native);
+        ok.env.insert("CFLAGS_EXTRA".into(), "-O2".into());
+        ok.env.insert("PKG_CONFIG_PATH".into(), "/opt/pc".into());
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn code_loading_flags_are_reported_but_normal_embedded_flags_are_not() {
+        let mut m = Manifest::new("d", Language::C, BuildKind::Native);
+        m.build.flags = vec![
+            "-Wall".into(),
+            "-fplugin=./evil.so".into(),
+            "-Bsomewhere".into(),
+            "-specs=nano.specs".into(),
+        ];
+        m.build.link_flags = vec!["-Wl,--gc-sections".into(), "-Wl,-Map=out.map".into()];
+        let w = m.warnings();
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert!(w.iter().any(|x| x.contains("-fplugin=./evil.so")));
+        assert!(!w
+            .iter()
+            .any(|x| x.contains("-Wall") || x.contains("--gc-sections")));
     }
 }

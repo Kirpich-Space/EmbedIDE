@@ -29,7 +29,7 @@ HEX/ELF/disassembly views for binaries, build output and diagnostics. :help insi
 Subcommand names win over same-named files: use `embed ./build` for a file called build.\n\n\
 The subcommands below are for scripts and automation.\n\nYou choose the compilers: EmbedIDE detects what is installed (GCC, Clang, zig cc, \
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran, cross GCCs) and builds with exactly what you select. \
-It never installs toolchains, never flashes hardware and never starts a debugger on its own."
+It downloads a compiler only if your own config.toml names it (HTTPS URL + SHA-256); it never flashes hardware and never starts a debugger on its own."
 )]
 struct Cli {
     /// Emit a single JSON result on stdout; tool output goes to stderr.
@@ -43,7 +43,7 @@ struct Cli {
 enum Commands {
     /// Check the environment: OS, configuration, toolchains per language.
     Doctor,
-    /// Discover, inspect and configure compilers (you choose; nothing is installed).
+    /// Discover, inspect and configure compilers (you choose; downloads only from your config).
     #[command(subcommand)]
     Toolchain(ToolchainCmd),
     /// Create, adopt and inspect projects (embedide.toml).
