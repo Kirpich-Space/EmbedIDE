@@ -4,7 +4,7 @@
 # SHA-256 checksum. Nothing is installed system-wide and nothing runs as root.
 #
 #   sh install.sh                 # latest release
-#   sh install.sh v0.1.0-alpha.2  # a specific tag
+#   sh install.sh v0.1.0-alpha.1  # a specific tag
 #   PREFIX=/opt/embed sh install.sh   # binary goes to $PREFIX/bin
 set -eu
 

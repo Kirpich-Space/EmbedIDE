@@ -6,8 +6,7 @@ EmbedIDE runs compilers, shells and AI agents on your machine, so security repor
 
 | Version | Supported |
 |---|---|
-| 0.1.0-alpha.2 (latest pre-release) | yes |
-| 0.1.0-alpha.1 | no, upgrade |
+| 0.1.0-alpha.1 (latest pre-release, updated 2026-11-16) | yes |
 | older development builds | no |
 
 ## Reporting a vulnerability

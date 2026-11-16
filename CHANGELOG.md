@@ -1,6 +1,9 @@
 # Changelog
 
-## `embed` 0.1.0-alpha.2 — 2026-11-16 (pre-release)
+## `embed` 0.1.0-alpha.1 — update of 2026-11-16 (same version, rebuilt archives)
+
+The `0.1.0-alpha.1` release was updated in place: its archives were rebuilt with the changes below. The
+version string is unchanged, so check `SHA256SUMS` to tell the builds apart.
 
 ### Fixed
 - **Fortran builds failed with gfortran** (`f951: Fatal Error: To enable preprocessing, use '-cpp'`): EmbedIDE
