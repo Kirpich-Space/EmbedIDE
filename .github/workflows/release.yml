@@ -1,0 +1,98 @@
+name: Release
+
+# A release is built by CI from the tagged commit, never by hand: push a tag `vX.Y.Z[-pre]` whose version equals the
+# workspace version in Cargo.toml. `workflow_dispatch` is a dry run: it builds and uploads the archives as workflow
+# artifacts (to compare builds) but publishes nothing.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl C compiler (ring compiles C)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+      - name: Version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match the workspace version ${version}" >&2
+            exit 1
+          fi
+      - name: Build
+        env:
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/build
+        run: cargo build -p embedide-cli --release --locked --target ${{ matrix.target }}
+      - name: Check the binary
+        run: |
+          bin=target/${{ matrix.target }}/release/embed
+          "$bin" --version | grep -F "${{ steps.version.outputs.version }}"
+      - name: Package
+        run: |
+          name=embed-${{ steps.version.outputs.version }}-${{ matrix.target }}
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/embed" LICENSE README.md CHANGELOG.md SECURITY.md "dist/$name/"
+          epoch=$(git log -1 --format=%ct)
+          tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
+          rm -rf "dist/$name"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* -R "$GITHUB_REPOSITORY" --clobber
+          else
+            prerelease=""
+            case "$tag" in *-*) prerelease="--prerelease";; esac
+            gh release create "$tag" dist/* -R "$GITHUB_REPOSITORY" $prerelease \
+              --title "EmbedIDE ${tag#v}" \
+              --notes "Built by CI from the tagged commit. See CHANGELOG.md for the changes and SHA256SUMS for the archives."
+          fi
