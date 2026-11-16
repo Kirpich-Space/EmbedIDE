@@ -245,6 +245,10 @@ pub fn build_manifest(
     out: &Out,
 ) -> CliResult<(Value, u8)> {
     let user = user()?;
+    // Toolchains the user (or the project, by name) requires and the machine lacks are downloaded first.
+    if !a.dry_run {
+        build::ensure_required(&user, Some(m), &mut |line| out.err(line)).map_err(|e| fail(e.0))?;
+    }
     let tools = registry(&user, true);
     let req = Request {
         profile: a.profile,

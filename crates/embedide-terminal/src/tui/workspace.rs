@@ -360,6 +360,10 @@ pub struct Workspace {
     target: Option<usize>,
     operation: Option<Running>,
     problems: Vec<Diagnostic>,
+    /// A toolchain download running on a background thread (progress and the final result).
+    installer: Option<std::sync::mpsc::Receiver<InstallMsg>>,
+    /// Reads multi-line compiler diagnostics (gfortran) across output lines.
+    diag_parser: core::diagnostics::Parser,
     build_log: Log,
     task_log: Log,
     serial_log: Log,
@@ -401,6 +405,12 @@ pub struct Workspace {
     prepared: Option<embedide_build::Prepared>,
     edit_mark: (usize, u64, usize),
 }
+/// Progress of a background toolchain download.
+enum InstallMsg {
+    Line(String),
+    Done(Result<(), String>),
+}
+
 fn service_error(error: impl std::fmt::Display) -> FrontendError {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string()).into()
 }
@@ -469,6 +479,8 @@ impl Workspace {
             target,
             operation: None,
             problems: Vec::new(),
+            installer: None,
+            diag_parser: core::diagnostics::Parser::default(),
             build_log: Log::default(),
             task_log: Log::default(),
             serial_log: Log::default(),
@@ -1196,7 +1208,41 @@ impl Workspace {
                 "Another task is running; cancel or wait first",
             ));
         }
+        if self.installer.is_some() {
+            return Err(service_error(
+                "Toolchains are still downloading; the build starts when they are ready",
+            ));
+        }
         let manifest = self.manifest.as_ref().expect("manifest");
+        // Toolchains the user's config (or the project, by name) requires but the machine lacks are
+        // downloaded on a background thread, then the build starts by itself.
+        let pending = embedide_build::missing_installs(&self.user, Some(manifest))
+            .map_err(|e| service_error(e.0))?;
+        if !pending.is_empty() {
+            if !self.user.toolchains.auto_install {
+                return Err(service_error(format!(
+                    "Toolchains not installed: {}. Run `embed toolchain install` (toolchains.auto_install is off)",
+                    pending.join(", ")
+                )));
+            }
+            let (user, manifest) = (self.user.clone(), manifest.clone());
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.build_log.clear();
+            self.build_log
+                .push(&format!("Downloading toolchains: {}", pending.join(", ")));
+            self.build_status = "Installing toolchains".into();
+            std::thread::spawn(move || {
+                let result = embedide_build::ensure_required(&user, Some(&manifest), &mut |l| {
+                    let _ = tx.send(InstallMsg::Line(l.to_string()));
+                });
+                let _ = tx.send(InstallMsg::Done(result.map(|_| ()).map_err(|e| e.0)));
+            });
+            self.installer = Some(rx);
+            let previous = self.focus;
+            self.show_panel(Panel::Build);
+            self.focus = previous;
+            return Ok(());
+        }
         let tools = embedide_build::registry(&self.user, true);
         let req = embedide_build::Request {
             profile: self.profile.clone(),
@@ -1207,6 +1253,7 @@ impl Workspace {
                 .map_err(|e| service_error(e.0))?;
         prepared.begin().map_err(|e| service_error(e.0))?;
         self.problems.clear();
+        self.diag_parser.reset();
         self.build_log.clear();
         self.problem = 0;
         for s in &prepared.toolchains {
@@ -1298,6 +1345,7 @@ impl Workspace {
                 self.start_plan(plan, Operation::Build)
                     .map_err(service_error)?;
                 self.problems.clear();
+                self.diag_parser.reset();
                 self.build_log.clear();
                 self.problem = 0;
             }
@@ -2006,6 +2054,7 @@ impl Workspace {
                 )
                 .map_err(service_error)?;
                 self.problems.clear();
+                self.diag_parser.reset();
                 self.problem = 0;
             }
             InputKind::SerialSend => self
@@ -3123,7 +3172,7 @@ impl Workspace {
             }
             return;
         }
-        if let Some(diagnostic) = core::diagnostics::parse(line) {
+        if let Some(diagnostic) = self.diag_parser.feed(line) {
             if self.problems.len() < 1000 {
                 self.problems.push(diagnostic);
             }
@@ -3144,6 +3193,34 @@ impl Workspace {
     /// Returns true only when presentation state changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.assistant.tick();
+        let mut install_done = None;
+        if let Some(rx) = &self.installer {
+            while let Ok(msg) = rx.try_recv() {
+                changed = true;
+                match msg {
+                    InstallMsg::Line(line) => self.build_log.push(&line),
+                    InstallMsg::Done(result) => install_done = Some(result),
+                }
+            }
+        }
+        if let Some(result) = install_done {
+            self.installer = None;
+            match result {
+                Ok(()) => {
+                    self.build_log.push("Toolchains ready; starting the build");
+                    if let Err(e) = self.build_manifest(false) {
+                        self.build_status = "Failed / cancelled".into();
+                        self.notification = e.to_string();
+                    }
+                }
+                Err(e) => {
+                    self.build_log
+                        .push(&format!("Toolchain download failed: {e}"));
+                    self.build_status = "Failed / cancelled".into();
+                    self.notification = format!("Toolchain download failed: {e}");
+                }
+            }
+        }
         if self.focus != Focus::Editor {
             // No suggestion requests for an editor the user is not typing in.
             self.assistant.pause_requests();

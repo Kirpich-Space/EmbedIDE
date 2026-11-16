@@ -142,6 +142,23 @@ pub struct AiSection {
     pub exclude: Vec<String>,
 }
 
+/// `[install]`: toolchains this project needs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InstallSection {
+    /// Names of downloadable toolchains the project needs. Each name must be defined in the user's
+    /// `config.toml` (`[toolchains.install.<name>]`) or be built in; a project can never supply its own
+    /// download URL, so cloning a repository cannot make EmbedIDE fetch arbitrary code.
+    #[serde(default)]
+    pub toolchains: Vec<String>,
+}
+
+impl InstallSection {
+    fn is_empty(&self) -> bool {
+        self.toolchains.is_empty()
+    }
+}
+
 /// The whole manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,6 +188,9 @@ pub struct Manifest {
     /// `[debug]` — kept verbatim for debugger front ends; never auto-started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug: Option<toml::Table>,
+    /// `[install]`
+    #[serde(default, skip_serializing_if = "InstallSection::is_empty")]
+    pub install: InstallSection,
 }
 
 fn relative_inside(field: &str, p: &str) -> Result<()> {
@@ -229,6 +249,7 @@ impl Manifest {
             env: BTreeMap::new(),
             ai: AiSection::default(),
             debug: None,
+            install: InstallSection::default(),
         }
     }
 

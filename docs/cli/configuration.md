@@ -36,6 +36,35 @@ validated before it is written.
 | `search_dirs` | `[]` | extra directories searched for compilers after `PATH` |
 | `custom` | `[]` | toolchains registered with `embed toolchain add` (id, kind, path) |
 | `defaults.<language>` | — | default toolchain id per language (`c = "clang"`) |
+| `require` | `[]` | names of downloadable toolchains that must exist; missing ones are downloaded |
+| `install.<name>` | — | a downloadable toolchain: `url`, `sha256`, `strip`, `bin`, `provides` (see below) |
+| `auto_install` | `true` | download missing required toolchains without asking; `false` fails with a hint |
+
+#### Toolchain downloads
+
+EmbedIDE downloads a compiler **only** when your own `config.toml` (or the built-in, checksum-pinned `zig`
+entry) describes it and something requires it (`toolchains.require`, or a project's `[install] toolchains`).
+Every entry pins the archive:
+
+```toml
+[toolchains]
+require = ["flang"]
+
+[toolchains.install.flang]
+url = "https://example.org/flang-linux-x86_64.tar.xz"   # https only
+sha256 = "<64 hex digits of the archive>"               # mandatory
+strip = 1                                                # leading path components to drop
+bin = ["bin"]                                            # directories with executables (default: bin, .)
+provides = ["flang"]                                     # ids that mean "already on this machine"
+```
+
+The archive is hashed while it downloads and discarded if the SHA-256 differs; only `tar`, `tar.gz` and
+`tar.xz` are accepted. Unpacking rejects absolute paths, `..` and symlinks that leave the install
+directory, and drops setuid bits. Files go to `$EMBEDIDE_DATA_DIR/toolchains` (default
+`~/.local/share/embedide/toolchains`); no installer, script or package manager runs and no root is needed.
+Installed directories are searched after `PATH`, so a compiler already on your machine wins.
+`EMBEDIDE_OFFLINE=1` forbids all downloads. In the TUI the download runs in the background (progress in the
+build panel) and the build starts when it finishes.
 
 ### `[ai]`
 

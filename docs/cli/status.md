@@ -49,8 +49,11 @@ Environment of record: Linux x86_64 (Artix), rustc 1.99.1. Evidence: `cargo test
 | **Live agent, Codex CLI 0.167.2**: the local Codex install lacks `codex-code-mode-host`; `codex exec` alone fails the same way, so no file was written. Not an EmbedIDE fault; Codex agent mode is verified with the mock CLI only | blocked |
 | Plain text (no `/agent`) after `/provider codex-cli` runs an agent task and writes a file | mock Codex CLI (unit test) |
 
-Not available on this machine: clang, zig, nasm, gfortran, cross GCCs, OpenOCD, probes, boards — the
-rows below for those tools come from earlier verification runs.
+| **Fortran with gfortran 16.2.1**: a project with three files whose modules depend on each other (the program sorts first) builds in dependency order, runs, rebuilds only what a changed module affects, and a syntax error gives a diagnostic with file, line and column (`tests/workflows.rs`) | pass |
+| **Toolchain download**: built-in `zig` 0.17.1 (54 MiB) downloaded over HTTPS, SHA-256 verified, unpacked, `zig version` printed `0.17.1`; a wrong checksum was rejected with nothing left on disk; an `http://` URL was refused; F5 in the TUI downloaded in the background and then built | pass (real network) |
+
+Not available on this machine: cross GCCs, OpenOCD, probes, boards — rows for those tools come from earlier
+verification runs.
 
 ## Verified only with mocks / fakes
 
@@ -71,7 +74,7 @@ rows below for those tools come from earlier verification runs.
   authorized, would cost money; mock servers only.
 - With the real CLIs: agent `approval-required`, `/fix`, session resume across tasks and agent runs
   inside the TUI (all exercised with mock CLIs only; the real agent runs used `embed ai agent`).
-- **Fortran builds**: no gfortran, flang or lfortran is installed on the verification machine.
+- **Fortran with Flang or LFortran**: only gfortran was run.
 - **FreeBSD runtime.** `cargo check` and `cargo clippy --all-targets -D warnings` pass for
   `x86_64-unknown-freebsd` (cross, from Linux); nothing was linked or executed on FreeBSD. Untested
   there: the PTY terminal (`portable-pty`), serial enumeration (`serialport`, which has a FreeBSD
@@ -86,7 +89,7 @@ rows below for those tools come from earlier verification runs.
 ## Known limitations
 
 - Native compiles run sequentially; `--jobs` applies to Make/CMake/Cargo/Zig.
-- Fortran module dependencies are not scanned (compile order = directory order).
+- Fortran module order comes from EmbedIDE's own scan of `module`/`use`/`include` lines; modules supplied through the C preprocessor (`#include`) are not followed.
 - `ai login` reads the key with echo when typed interactively; piping is recommended.
 - Credentials are stored in a 0600 file, not in the OS keychain.
 - The former Electron app was removed from the repository (see the git history).

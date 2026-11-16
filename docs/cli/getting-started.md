@@ -11,7 +11,7 @@ not supported.
 ## 1. Install
 
 Requirements: Rust 1.85 or newer (`rustup` or your distribution's package), a C toolchain only for
-the projects you build (EmbedIDE never installs compilers).
+the projects you build (EmbedIDE downloads a compiler only if your own `config.toml` asks for it).
 
 From the repository root:
 
@@ -187,7 +187,7 @@ applies changes.
 * One shell session in the terminal panel; 5000 lines of history.
 * Mouse support (on by default): focus, cursor placement, explorer rows, wheel, and drag selection with copy in the AI panel; no drag selection in the editor.
 * Real hardware (probes, boards, USB serial adapters) was not used in testing.
-* Fortran builds were not run (no Fortran compiler on the test machine).
+* Fortran was verified with gfortran only (not Flang or LFortran).
 * Builds use the files on disk: save before F5.
 * Completion: no snippet placeholders, automatic imports, signature help or LSP diagnostics yet.
 

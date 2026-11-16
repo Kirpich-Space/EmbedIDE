@@ -387,6 +387,119 @@ fn cpp_asm_nasm_and_zig_projects_build() {
 }
 
 #[test]
+fn fortran_modules_build_in_dependency_order_and_errors_have_locations() {
+    if !have("gfortran") {
+        return skip("gfortran missing: Fortran module ordering and diagnostics not verified");
+    }
+    let e = Env::new("fortran-modules");
+    let p = e.dir.join("heat");
+    std::fs::create_dir_all(p.join("src")).unwrap();
+    std::fs::write(
+        p.join("embedide.toml"),
+        "schema = 1\n[project]\nname = \"heat\"\nlanguage = \"fortran\"\n[build]\nsystem = \"native\"\nsources = [\"src\"]\n[toolchain]\nfortran = \"gfortran\"\n[profiles.debug]\nflags = [\"-O0\"]\n",
+    )
+    .unwrap();
+    // The program sorts first by name but needs both modules; physics needs grid_mod.
+    std::fs::write(
+        p.join("src/a_main.f90"),
+        "program heat\n  use physics, only: scaled\n  implicit none\n  print '(a,i0)', 'value=', scaled(6)\nend program heat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        p.join("src/grid_mod.f90"),
+        "module grid_mod\n  implicit none\n  integer, parameter :: n = 7\nend module grid_mod\n",
+    )
+    .unwrap();
+    let physics = "module physics\n  use grid_mod, only: n\n  implicit none\ncontains\n  integer function scaled(x)\n    integer, intent(in) :: x\n    scaled = x * n\n  end function scaled\nend module physics\n";
+    std::fs::write(p.join("src/physics.f90"), physics).unwrap();
+    let v = e.ok(&p, &["build"]);
+    assert!(run_artifact(v["data"]["outcome"]["artifact"].as_str().unwrap()).contains("value=42"));
+    // Nothing changed: everything is up to date (3 objects, no link).
+    let v = e.ok(&p, &["build"]);
+    assert_eq!(v["data"]["prepared"]["up_to_date"], 3);
+    // A syntax error is reported with file, line and column even though gfortran prints it over
+    // several lines.
+    std::fs::write(
+        p.join("src/physics.f90"),
+        physics.replace("x * n", "x * * n +"),
+    )
+    .unwrap();
+    let (v, code, _) = e.cli(&p, &["build"]);
+    assert_ne!(code, 0);
+    let diags = v["data"]["outcome"]["diagnostics"].as_array().unwrap();
+    let d = diags
+        .iter()
+        .find(|d| d["severity"] == "error")
+        .unwrap_or_else(|| panic!("no error diagnostic in {v}"));
+    assert!(d["file"].as_str().unwrap().ends_with("physics.f90"));
+    assert_eq!(d["line"], 7);
+}
+
+#[test]
+fn toolchain_downloads_need_https_and_a_checksum_and_can_be_switched_off() {
+    let e = Env::new("downloads");
+    std::fs::create_dir_all(&e.cfg).unwrap();
+    let config = e.cfg.join("config.toml");
+    let data = e.dir.join("data");
+    // The built-in, checksum-pinned entry is listed and not installed.
+    let v = e.ok(&e.dir, &["toolchain", "available"]);
+    let zig = v["data"]["available"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"] == "zig")
+        .expect("zig is built in");
+    assert_eq!(zig["source"], "built in");
+    assert_eq!(zig["sha256"].as_str().unwrap().len(), 64);
+    // A plain http:// address and a missing checksum are both refused when the config is read.
+    for (entry, needle) in [
+        (
+            "url = \"http://example.org/t.tar.gz\"\nsha256 = \"".to_string()
+                + &"ab".repeat(32)
+                + "\"\n",
+            "https://",
+        ),
+        (
+            "url = \"https://example.org/t.tar.gz\"\n".to_string(),
+            "sha256",
+        ),
+    ] {
+        std::fs::write(&config, format!("[toolchains.install.mytool]\n{entry}")).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_embed"))
+            .args(["toolchain", "available"])
+            .env("EMBEDIDE_CONFIG_DIR", &e.cfg)
+            .env("EMBEDIDE_DATA_DIR", &data)
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(needle),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // A valid entry is refused (without any network access) while EMBEDIDE_OFFLINE is set.
+    std::fs::write(
+        &config,
+        format!("[toolchains.install.mytool]\nurl = \"https://example.org/t.tar.gz\"\nsha256 = \"{}\"\n", "ab".repeat(32)),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_embed"))
+        .args(["toolchain", "install", "mytool"])
+        .env("EMBEDIDE_CONFIG_DIR", &e.cfg)
+        .env("EMBEDIDE_DATA_DIR", &data)
+        .env("EMBEDIDE_OFFLINE", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("EMBEDIDE_OFFLINE"));
+    assert!(
+        !data.join("toolchains").exists()
+            || std::fs::read_dir(data.join("toolchains")).unwrap().count() == 0
+    );
+}
+
+#[test]
 fn rust_cargo_project_builds_offline() {
     if !have("cargo") {
         return skip("cargo missing: Rust build not verified");

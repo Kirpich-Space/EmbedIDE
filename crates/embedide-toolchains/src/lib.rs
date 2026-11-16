@@ -2,8 +2,13 @@
 //!
 //! EmbedIDE never imposes a compiler: it finds what is installed, reports
 //! versions, paths and targets, and lets the user pick per project and per
-//! profile. Nothing is downloaded or installed here; [`recommend`] only
-//! returns suggestions as text.
+//! profile. Detection never downloads anything; [`recommend`] only returns
+//! suggestions as text. The one exception is [`install`]: a toolchain that the
+//! user's own configuration names (with a pinned URL and SHA-256) can be
+//! downloaded into a private per-user directory.
+
+pub mod install;
+pub use install::InstallSpec;
 
 use serde::Serialize;
 use std::{

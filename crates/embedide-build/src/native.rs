@@ -1,5 +1,5 @@
 //! Native builds: EmbedIDE drives the selected compilers directly.
-use crate::{select, Error, Prepared, Request, Result, Selection};
+use crate::{fortran, select, Error, Prepared, Request, Result, Selection};
 use embedide_core::ProcessSpec;
 use embedide_toolchains::{Family, Language, Toolchain};
 use embedide_workspace::{BuildKind, Manifest, UserConfig};
@@ -123,12 +123,23 @@ pub(crate) fn parse_depfile(text: &str) -> Vec<PathBuf> {
     deps
 }
 
-fn stale(obj: &Path, src: &Path, dep: Option<&Path>, cmd_file: &Path, cmd: &str) -> bool {
+fn stale(
+    obj: &Path,
+    src: &Path,
+    dep: Option<&Path>,
+    extra: &[PathBuf],
+    cmd_file: &Path,
+    cmd: &str,
+) -> bool {
     let Some(obj_t) = mtime(obj) else { return true };
     if std::fs::read_to_string(cmd_file).ok().as_deref() != Some(cmd) {
         return true;
     }
     if mtime(src).is_none_or(|t| t > obj_t) {
+        return true;
+    }
+    // Dependencies known without a depfile (Fortran module providers and include files).
+    if extra.iter().any(|d| mtime(d).is_none_or(|t| t > obj_t)) {
         return true;
     }
     if let Some(dep) = dep {
@@ -147,6 +158,36 @@ fn stale(obj: &Path, src: &Path, dep: Option<&Path>, cmd_file: &Path, cmd: &str)
         }
     }
     false
+}
+
+/// Put Fortran sources in module dependency order (after the other sources) and collect what each
+/// one depends on, so that edits to a module rebuild its users.
+fn order_fortran(
+    sources: Vec<(PathBuf, SourceKind)>,
+    include_dirs: &[PathBuf],
+    deps: &mut BTreeMap<PathBuf, Vec<PathBuf>>,
+) -> Result<Vec<(PathBuf, SourceKind)>> {
+    let (fort, mut rest): (Vec<_>, Vec<_>) = sources
+        .into_iter()
+        .partition(|(_, k)| *k == SourceKind::Fortran);
+    if fort.is_empty() {
+        return Ok(rest);
+    }
+    let mut units = Vec::with_capacity(fort.len());
+    for (p, _) in &fort {
+        let bytes =
+            std::fs::read(p).map_err(|e| Error(format!("Cannot read {}: {e}", p.display())))?;
+        units.push(fortran::Unit {
+            path: p.clone(),
+            scan: fortran::scan(&String::from_utf8_lossy(&bytes), fortran::is_fixed_form(p)),
+        });
+    }
+    let plan = fortran::plan(&units, include_dirs)?;
+    for (u, d) in units.iter().zip(plan.deps) {
+        deps.insert(u.path.clone(), d);
+    }
+    rest.extend(plan.order.into_iter().map(|i| fort[i].clone()));
+    Ok(rest)
 }
 
 fn cmd_text(spec: &ProcessSpec) -> String {
@@ -278,6 +319,9 @@ pub(crate) fn prepare(
             m.build.sources.join(", ")
         )));
     }
+    let include_dirs: Vec<PathBuf> = m.build.include.iter().map(|i| root.join(i)).collect();
+    let mut fortran_deps: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    let sources = order_fortran(sources, &include_dirs, &mut fortran_deps)?;
     let needed: BTreeSet<SourceKind> = sources.iter().map(|(_, k)| *k).collect();
     let mut sel: BTreeMap<SourceKind, Selection> = BTreeMap::new();
     for k in &needed {
@@ -361,6 +405,8 @@ pub(crate) fn prepare(
                     src.to_string_lossy().into_owned(),
                     "-o".into(),
                     obj.to_string_lossy().into_owned(),
+                    "-J".into(),
+                    mod_dir.to_string_lossy().into_owned(),
                 ]);
                 uses_dep = false;
             }
@@ -387,8 +433,9 @@ pub(crate) fn prepare(
                         _ => {}
                     }
                 }
-                let fortran_dep = *kind == SourceKind::Fortran && t.kind == "flang";
-                uses_dep = !fortran_dep;
+                // Fortran has no depfile (`gfortran -MMD` needs `-cpp`): module dependencies come from
+                // the source scan in `order_fortran`.
+                uses_dep = *kind != SourceKind::Fortran;
                 if uses_dep {
                     args.extend([
                         "-MMD".into(),
@@ -410,10 +457,12 @@ pub(crate) fn prepare(
             args,
         };
         let text = cmd_text(&spec);
+        let extra = fortran_deps.get(src).map(Vec::as_slice).unwrap_or(&[]);
         if stale(
             &obj,
             src,
             uses_dep.then_some(dep.as_path()),
+            extra,
             &cmd_file,
             &text,
         ) {

@@ -21,7 +21,8 @@ your project* through the Claude Code or Codex CLI you already use — with perm
 One Rust binary (a fully static build is published). No Electron, no browser, no telemetry, no EmbedIDE account.
 
 You choose the compilers (GCC, Clang, `zig cc`, `arm-none-eabi-gcc`, NASM, …); EmbedIDE detects what is
-installed and never downloads or flashes anything on its own.
+installed. It downloads a compiler only if your own `config.toml` names it (HTTPS URL + SHA-256), and it
+never flashes anything on its own.
 
 ![The editor with a native build](docs/img/editor-build.png)
 
@@ -119,8 +120,9 @@ file). See [the TUI guide](docs/cli/tui.md).
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,
 rustc/Cargo, Zig, GNU as, NASM, gfortran, Flang, LFortran and triple-prefixed cross GCCs — and builds
 with exactly what you select in `embedide.toml` (per project and profile) or in your user
-`config.toml`. It never installs or downloads toolchains, never flashes hardware and never starts a
-debugger by itself. AI is optional: without a provider the IDE works fully offline.
+`config.toml`. It downloads a toolchain only when your own `config.toml` describes it with a pinned
+HTTPS URL and SHA-256 (see [Toolchain downloads](docs/cli/configuration.md#toolchain-downloads)); it never
+flashes hardware and never starts a debugger by itself. AI is optional: without a provider the IDE works fully offline.
 
 The same services are scriptable through subcommands:
 

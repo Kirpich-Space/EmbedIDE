@@ -26,7 +26,7 @@ pub fn config_dir() -> Result<PathBuf> {
 }
 
 /// `[toolchains]`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ToolchainsConfig {
     /// Extra directories searched after PATH.
@@ -35,6 +35,27 @@ pub struct ToolchainsConfig {
     pub custom: Vec<CustomToolchain>,
     /// Default toolchain id per language for projects that do not choose one.
     pub defaults: BTreeMap<String, String>,
+    /// Names of downloadable toolchains (`[toolchains.install.<name>]` or built in) that must exist on
+    /// this machine; missing ones are downloaded when `auto_install` is on.
+    pub require: Vec<String>,
+    /// Downloadable toolchains: name -> pinned archive (https URL + SHA-256). Only entries written here
+    /// (or built in) are ever downloaded; a project manifest can only refer to them by name.
+    pub install: BTreeMap<String, embedide_toolchains::InstallSpec>,
+    /// Download missing required toolchains without asking (default true). `EMBEDIDE_OFFLINE=1` always wins.
+    pub auto_install: bool,
+}
+
+impl Default for ToolchainsConfig {
+    fn default() -> Self {
+        Self {
+            search_dirs: Vec::new(),
+            custom: Vec::new(),
+            defaults: BTreeMap::new(),
+            require: Vec::new(),
+            install: BTreeMap::new(),
+            auto_install: true,
+        }
+    }
 }
 
 /// `[ai.providers.<id>]`
@@ -285,6 +306,12 @@ impl UserConfig {
                     t.id, t.kind
                 )));
             }
+        }
+        for (name, spec) in &c.toolchains.install {
+            embedide_toolchains::install::validate_spec(name, spec).map_err(Error)?;
+        }
+        for name in &c.toolchains.require {
+            embedide_toolchains::install::validate_name(name).map_err(Error)?;
         }
         for lang in c.toolchains.defaults.keys() {
             lang.parse::<embedide_toolchains::Language>()

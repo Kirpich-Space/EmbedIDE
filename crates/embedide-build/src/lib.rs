@@ -9,6 +9,7 @@
 //! rebuilt incrementally (compiler depfiles + a hash of each command).
 //! Make/CMake/Cargo/Zig projects keep their own build systems.
 
+mod fortran;
 mod native;
 pub mod select;
 
@@ -148,14 +149,88 @@ impl Prepared {
     }
 }
 
-/// Toolchains available to builds: PATH and configured search directories,
-/// plus the user's custom entries. Nothing is installed or downloaded.
+/// Toolchains available to builds: PATH, configured search directories, toolchains EmbedIDE has
+/// installed for the user (see [`ensure_required`]), plus the user's custom entries. This function
+/// never installs or downloads anything.
 pub fn registry(user: &UserConfig, probe: bool) -> Vec<Toolchain> {
+    let mut search_dirs = user.toolchains.search_dirs.clone();
+    let specs = embedide_toolchains::install::merged(&user.toolchains.install);
+    for d in embedide_toolchains::install::managed_search_dirs(&specs) {
+        if !search_dirs.contains(&d) {
+            search_dirs.push(d);
+        }
+    }
     embedide_toolchains::detect(&embedide_toolchains::DetectOptions {
-        search_dirs: user.toolchains.search_dirs.clone(),
+        search_dirs,
         custom: user.toolchains.custom.clone(),
         probe,
     })
+}
+
+/// Names of the downloadable toolchains this build needs: the user's `toolchains.require` plus the
+/// project's `[install] toolchains`, without duplicates.
+pub fn required_names(user: &UserConfig, manifest: Option<&Manifest>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for n in user
+        .toolchains
+        .require
+        .iter()
+        .chain(manifest.iter().flat_map(|m| m.install.toolchains.iter()))
+    {
+        if !names.contains(n) {
+            names.push(n.clone());
+        }
+    }
+    names
+}
+
+/// Names of required toolchains that are not available yet (no network access). A front end can call
+/// this to decide whether to run [`ensure_required`] off its main thread.
+pub fn missing_installs(user: &UserConfig, manifest: Option<&Manifest>) -> Result<Vec<String>> {
+    let names = required_names(user, manifest);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let specs = embedide_toolchains::install::merged(&user.toolchains.install);
+    let detected = registry(user, false);
+    let ids: Vec<&str> = detected.iter().map(|t| t.id.as_str()).collect();
+    let todo = embedide_toolchains::install::missing(&names, &specs, &ids).map_err(Error)?;
+    Ok(todo.into_iter().map(|(n, _)| n.to_string()).collect())
+}
+
+/// Download and unpack the required toolchains that are neither installed by EmbedIDE nor already on
+/// the machine. Only entries from the user's `config.toml` (or the built-in, checksum-pinned ones) can
+/// be fetched, each verified against its SHA-256; see `embedide_toolchains::install`. Returns the names
+/// that were installed. `progress` receives status lines. Does nothing when `toolchains.auto_install` is
+/// off (it then fails with a hint) or when nothing is required.
+pub fn ensure_required(
+    user: &UserConfig,
+    manifest: Option<&Manifest>,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Vec<String>> {
+    let names = required_names(user, manifest);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let specs = embedide_toolchains::install::merged(&user.toolchains.install);
+    let detected = registry(user, false);
+    let ids: Vec<&str> = detected.iter().map(|t| t.id.as_str()).collect();
+    let todo = embedide_toolchains::install::missing(&names, &specs, &ids).map_err(Error)?;
+    if todo.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !user.toolchains.auto_install {
+        return Err(Error(format!(
+            "Toolchains not installed: {}. Run `embed toolchain install` (automatic downloads are off: toolchains.auto_install = false).",
+            todo.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+        )));
+    }
+    let mut installed = Vec::new();
+    for (name, spec) in todo {
+        embedide_toolchains::install::install(name, &spec, progress).map_err(Error)?;
+        installed.push(name.to_string());
+    }
+    Ok(installed)
 }
 
 /// Outcome of [`run`].
@@ -355,6 +430,10 @@ pub fn run(
     let task = ProcessTask::start(prepared.plan(), prepared.env.clone())?;
     let mut diags = Vec::new();
     let mut pending = [String::new(), String::new()];
+    let mut parsers = [
+        diagnostics::Parser::default(),
+        diagnostics::Parser::default(),
+    ];
     let mut finished = None;
     while finished.is_none() {
         if cancel.is_cancelled() {
@@ -369,7 +448,7 @@ pub fn run(
                     buf.push_str(&text);
                     while let Some(nl) = buf.find('\n') {
                         let line: String = buf.drain(..=nl).collect();
-                        if let Some(d) = diagnostics::parse(line.trim_end()) {
+                        if let Some(d) = parsers[err as usize].feed(line.trim_end()) {
                             diags.push(d);
                         }
                     }
@@ -381,8 +460,8 @@ pub fn run(
             std::thread::sleep(Duration::from_millis(15));
         }
     }
-    for buf in &pending {
-        if let Some(d) = diagnostics::parse(buf.trim_end()) {
+    for (buf, parser) in pending.iter().zip(parsers.iter_mut()) {
+        if let Some(d) = parser.feed(buf.trim_end()) {
             diags.push(d);
         }
     }

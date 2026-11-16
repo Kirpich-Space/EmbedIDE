@@ -70,7 +70,7 @@ FreeBSD is supported but has only been compiled and linted so far; please report
 that changed outside the IDE (another editor, an agent, `git checkout`). Reopen the file (`:q!` then
 `:e <path>`), or save your version under a new name with `:w <file>`.
 
-**Toolchain not installed or not configured** — EmbedIDE never installs compilers. `embed toolchain
+**Toolchain not installed or not configured** — EmbedIDE downloads a compiler only if your `config.toml` describes it (`[toolchains.install.<name>]`) and something requires it; otherwise it installs nothing. `embed toolchain
 list` shows what it found; `embed toolchain recommend c` prints install suggestions (not executed);
 `embed toolchain add <id> --kind gcc --path /path/to/gcc` registers one; `embed toolchain search-dir
 /opt/x/bin` adds a directory.

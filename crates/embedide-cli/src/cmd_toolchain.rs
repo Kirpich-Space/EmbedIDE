@@ -40,6 +40,16 @@ pub enum ToolchainCmd {
     SearchDir { dir: PathBuf },
     /// Print installation suggestions. Nothing is downloaded or installed.
     Recommend { language: Option<Language> },
+    /// List downloadable toolchains: the built-in pinned ones and your [toolchains.install.*] entries.
+    Available,
+    /// Download and install toolchains you described in config.toml (or built in). Without names:
+    /// everything listed in `toolchains.require`. Each archive is checked against its SHA-256.
+    Install {
+        /// Names from `embed toolchain available`.
+        names: Vec<String>,
+    },
+    /// Remove a toolchain that `install` unpacked.
+    Uninstall { name: String },
 }
 
 /// Detected toolchains using the user's configuration.
@@ -106,6 +116,74 @@ fn save_user(f: &ConfigFile) -> crate::CliResult<()> {
 pub fn run(cmd: ToolchainCmd, out: &Out) -> crate::CliResult<Value> {
     let user = UserConfig::load().map_err(|e| fail(e.0))?;
     match cmd {
+        ToolchainCmd::Available => {
+            let specs = tc::install::merged(&user.toolchains.install);
+            let builtin = tc::install::builtin();
+            let mut rows = Vec::new();
+            if specs.is_empty() {
+                out.line("No downloadable toolchains. Describe one under [toolchains.install.<name>] in config.toml.");
+            }
+            for (name, spec) in &specs {
+                let installed = tc::install::is_installed(name, spec);
+                let source = if user.toolchains.install.contains_key(name) {
+                    "config.toml"
+                } else if builtin.contains_key(name) {
+                    "built in"
+                } else {
+                    ""
+                };
+                let required = user.toolchains.require.contains(name);
+                out.line(&format!(
+                    "{:<14} {:<11} {}{}  {}",
+                    name,
+                    if installed {
+                        "installed"
+                    } else {
+                        "not installed"
+                    },
+                    source,
+                    if required { ", required" } else { "" },
+                    spec.url
+                ));
+                rows.push(json!({"name": name, "installed": installed, "source": source, "required": required,
+                    "url": spec.url, "sha256": spec.sha256, "directory": tc::install::install_dir(name, spec)}));
+            }
+            Ok(json!({"available": rows}))
+        }
+        ToolchainCmd::Install { names } => {
+            let specs = tc::install::merged(&user.toolchains.install);
+            let names = if names.is_empty() {
+                user.toolchains.require.clone()
+            } else {
+                names
+            };
+            if names.is_empty() {
+                return Err(crate::usage("Name the toolchains to install (see `embed toolchain available`) or list them in toolchains.require".into()));
+            }
+            let mut done = Vec::new();
+            for name in &names {
+                let spec = specs.get(name).ok_or_else(|| {
+                    fail(format!("No download entry '{name}'. Add [toolchains.install.{name}] (url, sha256, strip, bin) to config.toml; see `embed toolchain available`."))
+                })?;
+                let dir = tc::install::install(name, spec, &mut |m| out.err(m)).map_err(fail)?;
+                out.line(&format!("{name}: {}", dir.display()));
+                done.push(json!({"name": name, "directory": dir}));
+            }
+            Ok(json!({"installed": done}))
+        }
+        ToolchainCmd::Uninstall { name } => {
+            let specs = tc::install::merged(&user.toolchains.install);
+            let spec = specs
+                .get(&name)
+                .ok_or_else(|| fail(format!("No download entry '{name}'")))?;
+            let removed = tc::install::uninstall(&name, spec).map_err(fail)?;
+            out.line(&if removed {
+                format!("Removed {name}")
+            } else {
+                format!("{name} is not installed")
+            });
+            Ok(json!({"removed": removed}))
+        }
         ToolchainCmd::List { language, no_probe } => {
             let list: Vec<_> = registry(&user, !no_probe)
                 .into_iter()

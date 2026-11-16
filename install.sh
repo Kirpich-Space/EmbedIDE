@@ -4,7 +4,7 @@
 # SHA-256 checksum. Nothing is installed system-wide and nothing runs as root.
 #
 #   sh install.sh                 # latest release
-#   sh install.sh v0.1.0-alpha.1  # a specific tag
+#   sh install.sh v0.1.0-alpha.2  # a specific tag
 #   PREFIX=/opt/embed sh install.sh   # binary goes to $PREFIX/bin
 set -eu
 
@@ -35,7 +35,7 @@ command -v tar >/dev/null 2>&1 || fail "tar is required"
 if [ -z "$TAG" ]; then
   # `latest` ignores pre-releases, so resolve the newest tag from the releases page.
   get "https://api.github.com/repos/$REPO/releases" "${TMPDIR:-/tmp}/embed-releases.$$" 2>/dev/null \
-    || fail "cannot list releases (pass a tag: sh install.sh v0.1.0-alpha.1)"
+    || fail "cannot list releases (pass a tag: sh install.sh v0.1.0-alpha.2)"
   TAG="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "${TMPDIR:-/tmp}/embed-releases.$$" | head -n 1)"
   rm -f "${TMPDIR:-/tmp}/embed-releases.$$"
   [ -n "$TAG" ] || fail "no release found"

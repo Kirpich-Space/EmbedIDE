@@ -22,7 +22,7 @@ Configuration: user settings in `config.toml` inside the configuration directory
 | `embed targets` | The 67-entry MCU catalog (metadata only, not hardware validation). |
 | `embed toolchains` | Legacy PATH inventory (does not execute tools). |
 
-## Toolchains — you choose, nothing is installed
+## Toolchains — you choose; downloads only from your own config
 
 | Command | What it does |
 |---|---|
@@ -34,6 +34,9 @@ Configuration: user settings in `config.toml` inside the configuration directory
 | `toolchain default <language> <id>` | Your default for projects that do not choose. |
 | `toolchain search-dir <dir>` | Search an extra directory after PATH (e.g. a vendor `bin/`). |
 | `toolchain recommend [language]` | Installation suggestions for your package manager. **Printed, never executed.** |
+| `toolchain available` | Downloadable toolchains: built-in pinned ones and your `[toolchains.install.*]` entries, with install state. |
+| `toolchain install [names…]` | Download, verify (SHA-256) and unpack entries; without names, everything in `toolchains.require`. |
+| `toolchain uninstall <name>` | Remove an installed entry. |
 
 Kinds: `gcc`, `g++`, `clang`, `clang++`, `zig-cc` (`zig cc`), `zig-c++` (`zig c++`), `rustc`,
 `cargo`, `zig`, `gas`, `nasm`, `gfortran`, `flang`, `lfortran`. Triple-prefixed GCCs

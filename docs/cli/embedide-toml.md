@@ -67,5 +67,20 @@ gdb = "arm-none-eabi-gdb"
   `language = "rust"` with `native` it runs `rustc src/main.rs`.
 - `make`, `cmake`, `cargo`, `zig` — the project's own build files are used unchanged.
 
-Limitations: Fortran module dependencies are compiled in directory order (no module dependency
-scan yet); native compiles run sequentially.
+Fortran files are ordered by reading their `module`, `submodule`, `use` and `include` statements: a module
+is always compiled before the files that use it, and editing a module rebuilds everything that depends on
+it (module files go to `<output>/<profile>/mod`). Modules from outside the project (`iso_fortran_env`,
+`omp_lib`, …) are left to the compiler; a cycle or a module defined twice is an error. Fixed-form
+(`.f`, `.for`) and free-form sources are both read. Native compiles run sequentially.
+
+## `[install]` — toolchains the project needs
+
+```toml
+[install]
+toolchains = ["zig", "flang"]
+```
+
+Names of downloadable toolchains. If one is neither installed by EmbedIDE nor already on the machine, it is
+downloaded before the build. The names must exist in **your** `config.toml` (`[toolchains.install.<name>]`)
+or be built in; a project can never carry its own download URL, so opening someone else's repository cannot
+make EmbedIDE fetch code. See [Toolchain downloads](configuration.md#toolchain-downloads).

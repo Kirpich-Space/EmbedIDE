@@ -99,3 +99,168 @@ pub fn parse(line: &str) -> Option<Diagnostic> {
     }
     None
 }
+
+/// Stateful line parser. It understands everything [`parse`] does and also gfortran's layout, where
+/// the location, a source excerpt and the message are on separate lines:
+///
+/// ```text
+/// src/physics.f90:11:27:
+///
+///    11 |       u(i) = t(i) + 0.25 +*(t(i-1))
+///       |                           1
+/// Error: Syntax error in expression at (1)
+/// ```
+///
+/// Feed output lines in order; a diagnostic is returned when its message line arrives.
+#[derive(Debug, Default, Clone)]
+pub struct Parser {
+    pending: Option<(PathBuf, usize, usize)>,
+}
+
+/// `path:line:col:`, `path:line:col-col:` or the older `path:line.col:` with nothing after the colon.
+fn location_only(line: &str) -> Option<(PathBuf, usize, usize)> {
+    let body = line.trim_end().strip_suffix(':')?;
+    if body.is_empty() || body.starts_with(' ') {
+        return None;
+    }
+    // Older gfortran: `file.f90:12.5`
+    if let Some((file, rest)) = body.rsplit_once(':') {
+        if let Some((row, col)) = rest.split_once('.') {
+            if let (Ok(row), Ok(col)) = (row.parse::<usize>(), col.parse::<usize>()) {
+                return Some((PathBuf::from(file), row.max(1), col.max(1)));
+            }
+        }
+    }
+    let mut parts = body.rsplitn(3, ':');
+    let col = parts.next()?;
+    let row = parts.next()?;
+    let file = parts.next()?;
+    // A column range (`27-29`) keeps its first column.
+    let col = col.split('-').next()?;
+    let (Ok(row), Ok(col)) = (row.trim().parse::<usize>(), col.trim().parse::<usize>()) else {
+        return None;
+    };
+    (!file.is_empty()).then(|| (PathBuf::from(file), row.max(1), col.max(1)))
+}
+
+impl Parser {
+    /// Forget any half-read diagnostic (call at the start of a new build).
+    pub fn reset(&mut self) {
+        self.pending = None;
+    }
+
+    /// Consume one output line.
+    pub fn feed(&mut self, line: &str) -> Option<Diagnostic> {
+        let line = line.trim_end();
+        if let Some(loc) = location_only(line) {
+            self.pending = Some(loc);
+            return None;
+        }
+        if let Some((file, row, column)) = self.pending.clone() {
+            for (marker, severity) in [
+                ("Fatal Error: ", "fatal error"),
+                ("Internal Error: ", "error"),
+                ("Error: ", "error"),
+                ("Warning: ", "warning"),
+                ("Note: ", "note"),
+            ] {
+                if let Some(rest) = line.strip_prefix(marker) {
+                    self.pending = None;
+                    // `... [-Wunused-variable]` carries the warning option as a code.
+                    let (message, code) = match rest.rsplit_once(" [") {
+                        Some((m, c)) if c.ends_with(']') && c.starts_with('-') => {
+                            (m.trim_end(), Some(c.trim_end_matches(']').to_string()))
+                        }
+                        _ => (rest, None),
+                    };
+                    return Some(Diagnostic {
+                        severity: severity.into(),
+                        message: message.into(),
+                        file: Some(file),
+                        line: row,
+                        column,
+                        code,
+                        source: "compiler".into(),
+                    });
+                }
+            }
+            // Source excerpt, caret line or blank line: keep waiting for the message.
+            let t = line.trim_start();
+            let excerpt = t.is_empty()
+                || t.starts_with('|')
+                || t.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if !excerpt {
+                self.pending = None;
+            }
+        }
+        parse(line)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feed_all(lines: &[&str]) -> Vec<Diagnostic> {
+        let mut p = Parser::default();
+        lines.iter().filter_map(|l| p.feed(l)).collect()
+    }
+
+    #[test]
+    fn gfortran_multi_line_errors_and_warnings() {
+        let d = feed_all(&[
+            "src/physics.f90:11:27:",
+            "",
+            "   11 |       u(i) = t(i) + 0.25 +*(t(i-1))",
+            "      |                           1",
+            "Error: Syntax error in expression at (1)",
+            "a_main.f90:12:31:",
+            "",
+            "   12 |   print '(a,f8.3)', 'mid=', t(n/2)",
+            "      |                               1",
+            "Warning: Integer division truncated to constant '5' at (1) [-Winteger-division]",
+        ]);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].severity, "error");
+        assert_eq!(
+            (
+                d[0].file.as_deref().unwrap().to_str().unwrap(),
+                d[0].line,
+                d[0].column
+            ),
+            ("src/physics.f90", 11, 27)
+        );
+        assert_eq!(d[0].message, "Syntax error in expression at (1)");
+        assert_eq!(d[1].severity, "warning");
+        assert_eq!(d[1].code.as_deref(), Some("-Winteger-division"));
+        assert_eq!((d[1].line, d[1].column), (12, 31));
+    }
+
+    #[test]
+    fn gfortran_column_ranges_and_old_dot_style() {
+        let d = feed_all(&[
+            "x.f90:3:5-9:",
+            "",
+            "Error: bad",
+            "y.f:7.2:",
+            "Fatal Error: Cannot open module file 'm.mod'",
+        ]);
+        assert_eq!((d[0].line, d[0].column), (3, 5));
+        assert_eq!(
+            (d[1].line, d[1].column, d[1].severity.as_str()),
+            (7, 2, "fatal error")
+        );
+    }
+
+    #[test]
+    fn single_line_formats_still_work_and_stale_locations_are_dropped() {
+        let d = feed_all(&[
+            "a.c:1:2: error: boom",
+            "b.f90:4:1:",
+            "unrelated text",
+            "Error: not attached",
+        ]);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].file.as_deref().unwrap().to_str().unwrap(), "a.c");
+    }
+}

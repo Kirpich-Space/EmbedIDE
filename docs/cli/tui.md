@@ -386,7 +386,7 @@ path = "/opt/vendor sdk/bin/gcc"
 
 `:edit_project_config` and `:edit_user_config` open these files in the editor; `:reload` applies
 them; `:compilers` (and the Settings panel) shows which compiler each language uses and why.
-EmbedIDE detects and reuses installed toolchains; it never installs or downloads one.
+EmbedIDE detects and reuses installed toolchains. It downloads one only if your `config.toml` requires it (progress appears in the build panel, then the build starts).
 
 ## AI assistant (Alt+2)
 

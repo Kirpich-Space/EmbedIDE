@@ -1,5 +1,30 @@
 # Changelog
 
+## `embed` 0.1.0-alpha.2 — 2026-11-16 (pre-release)
+
+### Fixed
+- **Fortran builds failed with gfortran** (`f951: Fatal Error: To enable preprocessing, use '-cpp'`): EmbedIDE
+  asked for a dependency file that needs the preprocessor. Fortran no longer uses one.
+- **Fortran modules** are compiled in dependency order (EmbedIDE reads `module`, `submodule`, `use` and
+  `include` statements, free and fixed form), a changed module rebuilds the files that use it, and cycles or
+  duplicate modules are reported. Before, files were compiled in directory order.
+- **gfortran diagnostics** (location, source excerpt and message on separate lines) now reach the problem
+  list and jump-to-error; before, Fortran errors produced no entries.
+
+### Added
+- **Toolchain downloads from your own config**: `[toolchains.install.<name>]` (HTTPS URL, mandatory SHA-256,
+  `strip`, `bin`, `provides`), `toolchains.require`, `toolchains.auto_install`, a built-in checksum-pinned
+  `zig` entry, a project-level `[install] toolchains = [...]` that refers to entries by name only, and
+  `embed toolchain available | install | uninstall`. Missing required toolchains are downloaded before a
+  build (`embed build` and F5; in the TUI on a background thread). Archives are verified before unpacking
+  and unpacked with path checks. `EMBEDIDE_OFFLINE=1` forbids downloads. See
+  [Toolchain downloads](docs/cli/configuration.md#toolchain-downloads).
+
+### Changed
+- The README and docs no longer say that EmbedIDE never downloads anything: it downloads only what your
+  `config.toml` (or the built-in pinned `zig` entry) describes and something requires.
+- LFortran compiles now pass `-J <module dir>` (from its documented options; not run).
+
 ## `embed` 0.1.0-alpha.1 — 2026-11-14 (first public alpha, pre-release)
 
 Version note: development builds were called `0.2.0-dev` and an earlier `0.1.0` release candidate was

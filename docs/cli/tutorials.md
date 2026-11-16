@@ -76,7 +76,7 @@ integrated terminal (`openocd`, `probe-rs`, `gdb`). Serial: `Ctrl+K` → *Select
 
 ## 5. Choose your compilers
 
-EmbedIDE uses exactly what you select and never installs anything.
+EmbedIDE uses exactly what you select; it downloads a compiler only if your own `config.toml` asks for it.
 
 ```sh
 embed toolchain list                       # what is installed

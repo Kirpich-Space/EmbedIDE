@@ -30,7 +30,7 @@ frontend-independent crates, so another frontend (a future native GUI) can reuse
 | `embedide-editor` | UTF-8 piece-table buffer with bounded undo, Vim-style input parser (`Key` → `Action`), executor, syntax lexers and incremental highlighter, indentation, completion ranking, assembly dialects | no I/O, no terminal types; offsets are bytes on scalar boundaries |
 | `embedide-core` | cancellable processes (own process group, no shell), LSP client, diagnostics parsers (GCC/Clang/rustc/NASM/GAS), paged binary file and ELF reader, objdump wrapper, explorer, serial, GDB/MI, `NativeConfig` | shared by CLI and TUI |
 | `embedide-workspace` | `embedide.toml` manifest, user `config.toml` (including `[ai]`), project templates, atomic file writes | unknown project metadata is preserved |
-| `embedide-toolchains` | detection, versions, targets and selection of compilers | never downloads or installs |
+| `embedide-toolchains` | detection, versions, targets and selection of compilers; optional checksum-pinned downloads from the user's config | downloads only entries the user wrote (or built-in pinned ones) |
 | `embedide-build` | turns project + profile + toolchain choice into a reviewable plan, then runs it | no shell; process-group cancel; incremental via depfiles |
 | `embedide-ai` | provider wire formats, Claude Code / Codex CLI backends, agent runtime and permission rules, snapshots, skills, inline completion engine | credentials never read from CLI config |
 | `embedide-terminal` | the full-screen TUI (crossterm, vt100 + portable-pty for the terminal panel) and the line/batch editor frontends | thin adapter over the crates above |
