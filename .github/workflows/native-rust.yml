@@ -58,11 +58,15 @@ jobs:
 
   musl:
     runs-on: ubuntu-latest
+    env:
+      CC_x86_64_unknown_linux_musl: musl-gcc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
+      # `ring` (TLS) compiles C and needs a musl C compiler.
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo test --workspace --locked --target x86_64-unknown-linux-musl
       - run: cargo build -p embedide-cli --release --locked --target x86_64-unknown-linux-musl
       - run: python3 scripts/check-native-cli.py --binary target/x86_64-unknown-linux-musl/release/embed

@@ -10,6 +10,7 @@ Requires Python 3.11+ and the installed Rust/Cargo/rustfmt/Clippy tools.
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,12 +20,14 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 EDITOR = ROOT / "crates/embedide-editor"
 TERMINAL = ROOT / "crates/embedide-terminal"
+# The ephemeral manifests live in a temporary directory; tests that read repository files use this.
+ENV = dict(os.environ, EMBEDIDE_REPO_ROOT=str(ROOT))
 
 
 def manifest(terminal=False):
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
     package = tomllib.loads((EDITOR / "Cargo.toml").read_text())
-    if package.get("dependencies") != {"unicode-segmentation": "1.12"}:
+    if package.get("dependencies") != {"unicode-segmentation": "1.12", "unicode-width": "0.2"}:
         raise ValueError("editor dependencies changed; update the offline checker")
     for section in ("dev-dependencies", "build-dependencies", "target"):
         if package.get(section):
@@ -32,7 +35,7 @@ def manifest(terminal=False):
     lines = ['[package]', 'name = "embedide-editor"']
     for field in ("version", "edition", "rust-version", "license"):
         lines.append(f'{field} = {json.dumps(workspace["workspace"]["package"][field])}')
-    lines += ['[dependencies]', 'unicode-segmentation = "1.12"', "[workspace]"]
+    lines += ['[dependencies]', 'unicode-segmentation = "1.12"', 'unicode-width = "0.2"', "[workspace]"]
     if terminal:
         lines.append('members = ["terminal"]')
     lines += ["[lib]", f'path = {json.dumps(str(EDITOR / "src/lib.rs"))}']
@@ -57,15 +60,20 @@ def terminal_manifest():
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
     package = tomllib.loads((TERMINAL / "Cargo.toml").read_text())
     deps = package.get("dependencies", {})
-    optional = {"crossterm", "unicode-segmentation", "unicode-width"}
-    if deps.get("embedide-editor") != {"workspace": True} or set(deps) != optional | {"embedide-editor", "embedide-core", "serde_json"}:
+    # Everything except the editor is optional and only compiled with the `tui` feature; the line-only
+    # build below leaves it out.
+    optional = {"crossterm", "unicode-segmentation", "unicode-width", "embedide-core", "serde_json",
+                "portable-pty", "vt100", "embedide-build", "embedide-workspace", "embedide-toolchains",
+                "embedide-ai"}
+    if deps.get("embedide-editor") != {"workspace": True} or set(deps) != optional | {"embedide-editor"}:
         raise ValueError("terminal dependencies changed; update the line-only offline checker")
-    if not all(deps[name].get("optional") for name in optional | {"embedide-core", "serde_json"}):
+    if not all(deps[name].get("optional") for name in optional):
         raise ValueError("TUI dependencies must remain optional for offline line builds")
     target = package.get("target", {})
-    if set(target) != {"cfg(unix)"} or not target["cfg(unix)"].get("dependencies", {}).get("signal-hook", {}).get("optional"):
+    platform = target.get("cfg(unix)", {}).get("dependencies", {}) if set(target) == {"cfg(unix)"} else {}
+    if set(platform) != {"signal-hook", "nix"} or not all(platform[name].get("optional") for name in platform):
         raise ValueError("terminal platform dependencies changed; update this checker")
-    if set(package.get("features", {}).get("tui", [])) != {"dep:" + name for name in optional | {"signal-hook", "embedide-core", "serde_json"}}:
+    if set(package.get("features", {}).get("tui", [])) != {"dep:" + name for name in optional | {"signal-hook", "nix"}}:
         raise ValueError("TUI feature dependencies changed; update this checker")
     if any(package.get(section) for section in ("dev-dependencies", "build-dependencies")):
         raise ValueError("terminal has additional dependencies; update this checker")
@@ -110,7 +118,7 @@ def main():
         def run(*arguments):
             command = ["cargo", *arguments, "--manifest-path", str(path)]
             print("+", " ".join(command), flush=True)
-            subprocess.run(command, cwd=ROOT, check=True)
+            subprocess.run(command, cwd=ROOT, check=True, env=ENV)
 
         run("generate-lockfile", "--offline")
         run("check", "--workspace", "--locked", "--offline")
@@ -118,7 +126,7 @@ def main():
         # Options after `--` belong to Clippy's compiler rather than Cargo.
         subprocess.run(["cargo", "clippy", "--manifest-path", str(path),
                         "--workspace", "--all-targets", "--locked", "--offline", "--", "-D", "warnings"],
-                       cwd=ROOT, check=True)
+                       cwd=ROOT, check=True, env=ENV)
         if args.bench:
             run("bench", "--locked", "--offline", "--bench", "buffer", "--bench", "engine")
         if args.build_terminal:

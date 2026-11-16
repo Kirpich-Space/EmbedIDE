@@ -230,7 +230,11 @@ fn completion_sets_match_the_dialect() {
 
 #[test]
 fn the_example_project_files_are_detected_correctly() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/asm");
+    // The offline checker builds from a temporary manifest and passes the repository root explicitly.
+    let root = std::env::var_os("EMBEDIDE_REPO_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let dir = root.join("examples/asm");
     for (file, dialect) in [
         ("hello-nasm.asm", Dialect::Nasm),
         ("hello-att.s", Dialect::GasAtt),
