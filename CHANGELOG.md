@@ -10,6 +10,11 @@
   `embed project info`; they stay allowed because embedded projects use `-specs=nano.specs`. Build only projects you trust.
 
 ### Fixed
+- **FreeBSD (verified on 15.1 amd64, UFS):** the disassembly view failed because LLVM's `objdump` (the base `/usr/bin/objdump`)
+  rejects the `--` argument; a `tools.make` setting in `embedide.json` was ignored because GNU make is `gmake` there; and
+  saving twice in quick succession reported "file changed externally" (the change time of a freshly renamed file still moves
+  on UFS with soft updates, so it is no longer compared on the BSDs). Three tests that assumed GNU/Linux (`make` name,
+  `wc -l` output) were made portable. The full suite (383 tests) and the PTY checks pass on FreeBSD.
 - **The screen no longer freezes on F5 when a compiler hangs.** Probing every compiler's version (5 s timeout each, one
   after another), downloading required toolchains and planning the build now run on a background thread; before, a hung
   `gcc` froze the TUI for 5 s (measured).

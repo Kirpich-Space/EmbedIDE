@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -68,7 +69,9 @@ class NativeCliContracts(unittest.TestCase):
         self.write("Makefile", "all:\n\t@touch SHOULD_NOT_EXIST\n")
         self.cli("build", "--dry-run", code=1)
         value, _ = self.cli("build", "--dry-run", "--build-system", "make")
-        self.assertEqual(value["data"]["plan"]["steps"][0]["program"], "make")
+        # GNU make is `gmake` on the BSDs.
+        bsd = platform.system() in ("FreeBSD", "DragonFly", "NetBSD", "OpenBSD") and shutil.which("gmake")
+        self.assertEqual(value["data"]["plan"]["steps"][0]["program"], "gmake" if bsd else "make")
         self.assertFalse((self.project / "SHOULD_NOT_EXIST").exists())
 
     def test_invalid_metadata_remains_unchanged(self):

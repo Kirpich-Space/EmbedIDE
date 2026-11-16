@@ -424,8 +424,10 @@ fn subscription_mode_runs_the_official_cli_in_an_empty_directory() {
     assert!(out.contains("answer from the subscription CLI"));
     let seen = std::fs::read_to_string(&log).unwrap();
     assert!(seen.contains("args:-p --output-format text"), "{seen}");
+    // `wc -l` pads its answer on the BSDs ("files:       0"), so compare the number, not the text.
     assert!(
-        seen.contains("files:0"),
+        seen.lines()
+            .any(|l| l.strip_prefix("files:").is_some_and(|n| n.trim() == "0")),
         "the CLI starts in an empty directory: {seen}"
     );
     assert!(!seen.contains(&format!("cwd:{}", t.dir.display())));

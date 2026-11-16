@@ -40,7 +40,7 @@ never flashes anything on its own.
 > Electron/React desktop application has been removed (it remains in the git history before the commit
 > "Remove the legacy Electron application").
 
-**Supported systems: Linux (verified) and FreeBSD (compiled and linted, not yet run).** Windows and macOS are not supported.
+**Supported systems: Linux and FreeBSD (both verified: tests and terminal checks were run on each).** Windows and macOS are not supported.
 
 ## 0.1.0-alpha.1 — first public alpha
 
@@ -159,7 +159,7 @@ No Node.js or graphical session is needed. The binary links only against the C r
 ## Requirements and build
 
 - Rust 1.85+ (`cargo build --release --locked`; offline builds need the cached registry dependencies)
-- Linux or FreeBSD (verified on Linux x86_64; FreeBSD is type-checked and linted but not yet run);
+- Linux or FreeBSD (verified on Linux x86_64 and on FreeBSD 15.1 amd64; the other BSDs are untested);
   Windows and macOS are not supported
 - Host toolchains of your choice for building projects: GCC/Clang, `arm-none-eabi-gcc`, `rustc`/`cargo`,
   `zig`, NASM/GNU as, `make`/CMake; `openocd`/`probe-rs` for hardware (never run automatically)

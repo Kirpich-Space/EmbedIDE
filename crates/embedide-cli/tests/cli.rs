@@ -188,6 +188,12 @@ fn adapters_validate_options_and_build_order() {
         let plan = core::plan_build(&project, &options(None)).unwrap();
         assert_eq!(plan.system, system);
         assert_eq!(plan.steps.len(), steps);
+        // GNU make is `gmake` on the BSDs.
+        let program = if program == "make" {
+            core::make_program()
+        } else {
+            program
+        };
         assert_eq!(plan.steps[0].program, program);
         let mut invalid = options(None);
         invalid.jobs = 0;

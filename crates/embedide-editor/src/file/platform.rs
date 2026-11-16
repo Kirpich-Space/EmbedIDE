@@ -23,13 +23,32 @@ pub(super) fn same_protection(a: &fs::Metadata, b: &fs::Metadata) -> bool {
             && a.uid() == b.uid()
             && a.gid() == b.gid()
             && a.nlink() == b.nlink()
-            && a.ctime() == b.ctime()
-            && a.ctime_nsec() == b.ctime_nsec()
+            && same_change_time(a, b)
     }
     #[cfg(not(unix))]
     {
         a.permissions() == b.permissions()
     }
+}
+
+/// Whether the inode change time (`ctime`) is unchanged. On the BSDs it is not compared: UFS with soft
+/// updates finishes a pending inode update a few milliseconds after a `rename`, so the `ctime` of a file
+/// this editor has just saved still moves once, and comparing it reported our own save as "file changed
+/// externally" (measured on FreeBSD 15: the second save within a second failed about half the time).
+/// Everything else that can change without touching the contents is still compared: mode, owner, group,
+/// link count, size, modification time and identity.
+#[cfg(unix)]
+fn same_change_time(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    if cfg!(any(
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )) {
+        return true;
+    }
+    a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

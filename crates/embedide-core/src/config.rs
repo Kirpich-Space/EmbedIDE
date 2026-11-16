@@ -465,10 +465,38 @@ impl NativeConfig {
             crate::BuildSystem::Zig => {}
         }
         for step in &mut plan.steps {
-            if let Some(path) = self.tools.get(&step.program) {
+            if let Some(path) = configured_tool(&self.tools, &step.program) {
                 step.program = path.clone();
             }
         }
         Ok(plan)
+    }
+}
+
+/// The program configured to replace `program`. GNU make is `gmake` on the BSDs (see `make_program`), but
+/// the configuration key is `make`, so a `tools.make` entry must apply to `gmake` too.
+fn configured_tool<'a>(
+    tools: &'a std::collections::BTreeMap<String, String>,
+    program: &str,
+) -> Option<&'a String> {
+    tools
+        .get(program)
+        .or_else(|| (program == "gmake").then(|| tools.get("make")).flatten())
+}
+
+#[cfg(test)]
+mod configured_tool_tests {
+    use super::configured_tool;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn a_make_override_also_replaces_gmake_but_an_exact_entry_wins() {
+        let mut tools = BTreeMap::new();
+        tools.insert("make".to_string(), "/opt/make".to_string());
+        assert_eq!(configured_tool(&tools, "make").unwrap(), "/opt/make");
+        assert_eq!(configured_tool(&tools, "gmake").unwrap(), "/opt/make");
+        assert!(configured_tool(&tools, "cargo").is_none());
+        tools.insert("gmake".to_string(), "/opt/gmake".to_string());
+        assert_eq!(configured_tool(&tools, "gmake").unwrap(), "/opt/gmake");
     }
 }

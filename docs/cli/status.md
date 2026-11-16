@@ -75,10 +75,11 @@ verification runs.
 - With the real CLIs: agent `approval-required`, `/fix`, session resume across tasks and agent runs
   inside the TUI (all exercised with mock CLIs only; the real agent runs used `embed ai agent`).
 - **Fortran with Flang or LFortran**: only gfortran was run.
-- **FreeBSD runtime.** `cargo check` and `cargo clippy --all-targets -D warnings` pass for
-  `x86_64-unknown-freebsd` (cross, from Linux); nothing was linked or executed on FreeBSD. Untested
-  there: the PTY terminal (`portable-pty`), serial enumeration (`serialport`, which has a FreeBSD
-  backend), `gmake` selection, `pkg` install hints, process-group cancellation (`killpg`).
+- **FreeBSD beyond what was run.** Verified on FreeBSD 15.1-RELEASE amd64 (UFS; Rust 1.98.1, gcc, clang, gfortran 14.2):
+  all 383 tests, the PTY terminal checks, `gmake` selection, gfortran module builds with diagnostics, C builds with
+  clang. The agent tests and the terminal scripts need an executable named `python3`; FreeBSD installs only
+  `python3.12`, so put a `python3` symlink on PATH. Not verified there: serial ports, probes and boards (no hardware), `pkg` install hints, ZFS, other FreeBSD
+  versions and architectures, NetBSD and OpenBSD.
 - **Windows and macOS are not supported.** Windows-specific code was removed and the crates refuse to
   compile on non-Unix targets.
 - **Hardware**: no flashing, debugging or physical serial device. The GDB/MI, probe-rs and serial

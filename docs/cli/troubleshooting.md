@@ -51,7 +51,7 @@ scrollback, use the mouse wheel over the panel.
 
 ## FreeBSD
 
-FreeBSD is supported but has only been compiled and linted so far; please report problems.
+FreeBSD is supported and verified on 15.1 amd64 (UFS); please report problems on other versions or filesystems. The base `objdump` is LLVM's; EmbedIDE works with either.
 
 - Install: `sudo pkg install rust gmake git` (a C compiler is in the base system as `cc`; `pkg install gcc`
   for GCC), then `cargo install --path crates/embedide-cli --locked --root ~/.local`.
@@ -137,8 +137,8 @@ model.
 ## FAQ
 
 **Which platforms work?** Linux and FreeBSD. Linux x86_64 is the verified platform and the only one with
-published binaries. FreeBSD is compiled and linted (cross) but not yet run: build it from source and
-please report what breaks. Windows and macOS are not supported.
+published binaries. FreeBSD (15.1 amd64) is verified too: there is no published FreeBSD binary yet, so build it from source (`pkg install rust`, then
+`cargo build --release --locked`) and report what breaks. Windows and macOS are not supported.
 
 **Is there a GUI?** No. `embed` is a terminal application. A native GUI is planned, not started.
 

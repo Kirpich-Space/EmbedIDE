@@ -91,9 +91,19 @@ pub fn command(
             args.extend(["-M".into(), "intel".into()]);
         }
     }
-    args.push("--".into());
-    args.push(path.display().to_string());
+    args.push(path_argument(path));
     Ok((program, args))
+}
+
+/// The file as one command-line argument. There is no `--` separator: LLVM's objdump, which is what
+/// `/usr/bin/objdump` is on FreeBSD, rejects it. A path that could be read as an option gets a `./` prefix.
+fn path_argument(path: &Path) -> String {
+    let shown = path.display().to_string();
+    if shown.starts_with('-') {
+        format!("./{shown}")
+    } else {
+        shown
+    }
 }
 
 /// Run the disassembler (bounded in time and size) and parse its output.
@@ -230,4 +240,17 @@ pub fn parse(text: &str) -> Vec<Line> {
         });
     }
     lines
+}
+
+#[cfg(test)]
+mod path_argument_tests {
+    use super::path_argument;
+    use std::path::Path;
+
+    #[test]
+    fn paths_are_passed_without_a_separator_and_options_are_neutralised() {
+        assert_eq!(path_argument(Path::new("/tmp/a b/prog")), "/tmp/a b/prog");
+        assert_eq!(path_argument(Path::new("-d")), "./-d");
+        assert_eq!(path_argument(Path::new("build/-x.elf")), "build/-x.elf");
+    }
 }

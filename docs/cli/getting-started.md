@@ -4,9 +4,9 @@
 integrated terminal, builds with diagnostics, serial monitor, optional AI) in one binary. It runs in
 any terminal; no GUI, Electron or Node.js is needed.
 
-Supported systems: **Linux and FreeBSD**. Verified on Linux x86_64; the FreeBSD build is type-checked and
-linted for `x86_64-unknown-freebsd` but has not been run (see [status](status.md)). Windows and macOS are
-not supported.
+Supported systems: **Linux and FreeBSD**. Verified on Linux x86_64 and on FreeBSD 15.1 amd64 (the full test
+suite and the terminal checks were run on both, see [status](status.md)); NetBSD and OpenBSD are untested. Windows
+and macOS are not supported.
 
 ## 1. Install
 
@@ -183,7 +183,7 @@ applies changes.
 
 ## 9. Known limitations
 
-* Linux is the verified platform; FreeBSD is compiled and linted but not run; Windows and macOS are not supported.
+* Linux and FreeBSD (15.1, amd64) are verified; NetBSD and OpenBSD are untested; Windows and macOS are not supported.
 * One shell session in the terminal panel; 5000 lines of history.
 * Mouse support (on by default): focus, cursor placement, explorer rows, wheel, and drag selection with copy in the AI panel; no drag selection in the editor.
 * Real hardware (probes, boards, USB serial adapters) was not used in testing.
