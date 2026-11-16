@@ -10,3 +10,7 @@ embedide-*.png
 embedide.local.json
 .embedide-build/
 __pycache__/
+
+# Promotional material (videos, posts, channel assets) is kept outside the code history
+/marketing/
+/videos/

@@ -246,7 +246,6 @@ See [AI subsystem](docs/cli/ai.md), [agent mode](docs/cli/agents.md) and [skills
 
 - **[One terminal: from a C build error to a fixed program, then an AI agent](https://www.youtube.com/watch?v=x8ovqAr2uSg)** (YouTube, 1 min, English subtitles) — a real recording of EmbedIDE 0.1.0-alpha.1: the build error, the problem list, the jump to the exact line, the fix, a run in the built-in terminal, then the Codex CLI adding a function while every command stays on screen. Waiting time is sped up and labelled; the voice is AI-synthesised.
 
-The pipeline that records and renders videos from the real binary is in [marketing/video](marketing/video).
 
 ## Roadmap
 
