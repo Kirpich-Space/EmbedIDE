@@ -42,6 +42,7 @@ Global (work in every panel except where noted):
 | **Alt+2** | AI assistant — press again to return to the editor |
 | **Alt+3** | Terminal — press again to return to the editor |
 | **Alt+1/2/3 + Delete** | Hold Alt and the digit, press Delete: hide that panel (its state and shell are kept; kitty keyboard protocol) |
+| Space 1/2/3, Space E/A/T, Ctrl+] | Without Alt (the FreeBSD console sends Alt+1 as a plain `1`): open the panels / hide them from Normal mode, and move focus on from any panel (Ctrl+] arrives as Ctrl+5 in a legacy terminal) |
 | Ctrl+Alt+1/2/3 | Same as Alt+1/2/3 |
 | `Alt+\` | AI inline suggestion at the cursor (Insert mode; Tab accepts, Esc dismisses) |
 | Ctrl+K | Command palette (every command below, plus targets, profiles, tasks and files) |
@@ -110,7 +111,7 @@ bounded slices between frames, and the reader waits for the screen instead of bu
 | Normal | `h j k l`, `w b e`, `0 $`, `gg G`, counts, `x`, `dd`, `yy`, `p`, `u`, Ctrl+R, `/ ? n N`, `v` / `V` |
 | Insert | `i a o O` enter, Esc leaves |
 | Command | `:w`, `:q`, `:q!`, `:wq`, `:<line>` (go to line, clamped), `:w <file>` / `:saveas <file>` (save as a **new** file — an existing file is never overwritten; this is also how an untitled buffer is saved), and IDE commands (below) |
-| Leader (Space) | `e` explorer · `b` build · `d` debug · `t` terminal · `s` serial · `f` find file |
+| Leader (Space) | `e` explorer · `b` build · `d` debug · `t` terminal · `s` serial · `f` find file · `1`/`2`/`3` explorer/AI/terminal focus · `a` AI panel · `E`/`A`/`T` hide explorer/AI/terminal |
 
 IDE commands in Command mode: `:build`, `:clean`, `:cancel`, `:e <file>` (also `:edit`, `:open`),
 `:help`, `:settings`, `:compilers`, `:complete`, `:explain`, `:ai <question>`, `:assistant`,
@@ -214,6 +215,10 @@ short detail (type or signature); the last line names the source.
 An automatic popup starts with **nothing selected**, so it never takes Enter or Tab away from you.
 Accepting replaces the word you typed (or the range the language server names) and is part of the
 current Insert undo step.
+
+**clangd names.** If `clangd` is not on PATH, EmbedIDE also looks for the names packages give it: `clangd21` or
+`clangd-21` on PATH, `/usr/local/llvm21/bin/clangd` (FreeBSD), `/usr/lib/llvm-21/bin/clangd` (Debian). The newest
+version found is used; set `completion.servers.c.command` to choose another.
 
 **Sources.** For Rust, C, C++ and Zig files EmbedIDE starts the matching language server the first time
 completion is needed in such a file (never when a directory is merely opened), one process per server

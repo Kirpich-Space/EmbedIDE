@@ -9,6 +9,14 @@
   project code (`-fplugin`, `-wrapper`, `-specs`, `-B…`, `-load`) are reported as warnings by `embed build` and
   `embed project info`; they stay allowed because embedded projects use `-specs=nano.specs`. Build only projects you trust.
 
+### Added
+- **Panel keys that need no Alt.** The FreeBSD console has no Alt prefix (its keymap sends Alt+1 as a plain `1`), so Alt+digit and
+  Alt+digit+Delete never reached EmbedIDE there. In Normal mode `Space 1/2/3` open the explorer / AI panel / terminal, `Space E/A/T`
+  hide them, and `Ctrl+]` (also `F6`) moves focus on from any panel, the shell included. Documented in `docs/cli/keys.md`.
+
+- **clangd under its package names.** FreeBSD installs `clangd21` and `/usr/local/llvm21/bin/clangd`, Debian `clangd-21`; EmbedIDE
+  looked only for `clangd`, so code completion fell back to words from the file. It now finds the newest versioned clangd.
+
 ### Fixed
 - **Backspace on the FreeBSD console (and any terminal with `stty erase ^H`):** the key arrives as BS (0x08, `^H`), which the
   key parser reports as Ctrl+H; no mode handled it, so nothing was deleted and the status line said "Key not handled by the

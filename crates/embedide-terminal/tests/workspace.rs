@@ -204,3 +204,43 @@ fn editing_remains_live_during_background_build_and_diagnostics_jump_to_source()
     assert_eq!(app.editor().state().position().unwrap().line, 1);
     assert!(app.editor().state().is_modified());
 }
+
+#[test]
+fn panels_work_without_the_alt_key_for_terminals_that_cannot_send_it() {
+    // The FreeBSD console sends Alt+1 as a plain "1" (its keymap has no Alt prefix), so panels also answer to
+    // the Normal-mode leader (Space) and Ctrl+] instead of Alt+digit and Alt+digit+Delete.
+    let f = Fixture::new();
+    f.write("a.c", "int main() {}");
+    let mut app = Workspace::open(&f.0, 100, 28).unwrap();
+    key(&mut app, KeyCode::Enter); // open a.c: editor focus, Normal mode
+    assert_eq!(app.focus(), Focus::Editor);
+    text(&mut app, " 1"); // Space 1: explorer
+    assert_eq!(app.focus(), Focus::Explorer);
+    ctrl(&mut app, ']'); // Ctrl+] moves focus on
+    assert_ne!(app.focus(), Focus::Explorer);
+    // back in the editor: Space 2 opens the AI panel, Space A hides it again
+    for _ in 0..4 {
+        if app.focus() == Focus::Editor {
+            break;
+        }
+        ctrl(&mut app, ']');
+    }
+    assert_eq!(app.focus(), Focus::Editor);
+    text(&mut app, " 2");
+    assert_eq!(app.focus(), Focus::Assistant);
+    ctrl(&mut app, ']');
+    assert_eq!(app.focus(), Focus::Editor);
+    text(&mut app, " A");
+    assert!(
+        !frame_text(&app.frame().unwrap()).contains("AI ·"),
+        "the AI panel is hidden"
+    );
+    // and the explorer: Space E hides it
+    text(&mut app, " E");
+    assert!(!frame_text(&app.frame().unwrap()).contains("EXPLORER"));
+    // the legacy-terminal encoding of Ctrl+] (0x1d) arrives as Ctrl+5
+    text(&mut app, " 1");
+    assert_eq!(app.focus(), Focus::Explorer);
+    ctrl(&mut app, '5');
+    assert_ne!(app.focus(), Focus::Explorer);
+}

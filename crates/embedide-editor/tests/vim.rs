@@ -413,6 +413,19 @@ fn default_leader_bindings_and_unknown_suffix() {
             Action::Ide(IdeAction::FindFile),
         ]
     );
+    // Panel chords that need no Alt key (the FreeBSD console sends Alt+1 as a plain "1").
+    assert_eq!(
+        trace(&mut input, " 1 2 3 a E A T"),
+        [
+            Action::Ide(IdeAction::FocusExplorer),
+            Action::Ide(IdeAction::FocusAssistant),
+            Action::Ide(IdeAction::Terminal),
+            Action::Ide(IdeAction::FocusAssistant),
+            Action::Ide(IdeAction::HideExplorer),
+            Action::Ide(IdeAction::HideAssistant),
+            Action::Ide(IdeAction::HideTerminal),
+        ]
+    );
     assert!(trace(&mut input, " i").is_empty());
     assert_eq!(input.mode(), Mode::Normal);
 }

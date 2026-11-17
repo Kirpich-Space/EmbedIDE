@@ -9,6 +9,9 @@ the same keys inside the IDE and `Ctrl+K` opens the command palette with every c
 |---|---|
 | `Alt+1` / `Alt+2` / `Alt+3` | explorer / AI panel / terminal; again returns to the editor (`Ctrl+Alt+1/2/3` works too) |
 | hold `Alt+<n>`, press `Delete` | hide that panel (needs the kitty keyboard protocol); use `:hide_explorer`, `:hide_assistant`, `:hide_terminal` otherwise |
+| `Space` `1` / `2` / `3` (Normal mode) | explorer / AI panel / terminal, like Alt+1/2/3 — for terminals that cannot send Alt (the FreeBSD console sends Alt+1 as a plain `1`); `Space` `a` also opens the AI panel |
+| `Space` `E` / `A` / `T` (Normal mode) | hide the explorer / AI panel / terminal, like Alt+digit+Delete |
+| `Ctrl+]` (`F6`) | move focus on, from any panel including the shell; in a legacy terminal it arrives as Ctrl+5 and is handled the same |
 | `F2` | show / hide the explorer |
 | `F3` | problems (diagnostics, search results); `Enter` jumps to the location |
 | `F4` | cycle the bottom panels (build output, task log, serial, …) |

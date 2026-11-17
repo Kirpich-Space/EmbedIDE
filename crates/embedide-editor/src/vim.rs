@@ -141,6 +141,16 @@ pub enum IdeAction {
     SerialMonitor,
     /// Open file search.
     FindFile,
+    /// Focus (or leave) the explorer, like `Alt+1`.
+    FocusExplorer,
+    /// Focus (or leave) the AI panel, like `Alt+2`.
+    FocusAssistant,
+    /// Hide the explorer, like holding `Alt+1` and pressing Delete.
+    HideExplorer,
+    /// Hide the AI panel, like holding `Alt+2` and pressing Delete.
+    HideAssistant,
+    /// Hide the terminal panel, like holding `Alt+3` and pressing Delete.
+    HideTerminal,
 }
 
 /// Supported Ex commands; arguments and shell escapes are deliberately rejected.
@@ -322,6 +332,14 @@ impl Default for Keymap {
                 ('t', IdeAction::Terminal),
                 ('s', IdeAction::SerialMonitor),
                 ('f', IdeAction::FindFile),
+                // Panels without Alt: the FreeBSD console, for one, sends Alt+1 as a plain "1".
+                ('1', IdeAction::FocusExplorer),
+                ('2', IdeAction::FocusAssistant),
+                ('3', IdeAction::Terminal),
+                ('a', IdeAction::FocusAssistant),
+                ('E', IdeAction::HideExplorer),
+                ('A', IdeAction::HideAssistant),
+                ('T', IdeAction::HideTerminal),
             ]
             .into_iter()
             .collect(),

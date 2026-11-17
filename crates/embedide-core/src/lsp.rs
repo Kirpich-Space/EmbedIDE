@@ -394,11 +394,71 @@ pub fn parse_completion(result: &Value) -> (Vec<Item>, bool) {
     (items, incomplete)
 }
 
+/// Version number of a versioned clangd name: `clangd21` and `clangd-21` give 21, anything else None.
+fn clangd_version(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("clangd")?;
+    rest.strip_prefix('-').unwrap_or(rest).parse().ok()
+}
+
+/// The newest versioned clangd among `path_dirs` (`clangd21`, `clangd-21`) and the LLVM install directories
+/// below `llvm_roots` (`/usr/local/llvm21/bin/clangd`, `/usr/lib/llvm-21/bin/clangd`).
+fn newest_clangd(path_dirs: &[PathBuf], llvm_roots: &[PathBuf]) -> Option<PathBuf> {
+    let mut found: Vec<(u32, PathBuf)> = Vec::new();
+    for dir in path_dirs {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            if let Some(v) = name.to_str().and_then(clangd_version) {
+                if entry.path().is_file() {
+                    found.push((v, entry.path()));
+                }
+            }
+        }
+    }
+    for root in llvm_roots {
+        for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            let digits = name.to_str().and_then(|n| n.strip_prefix("llvm"));
+            if let Some(v) = digits.and_then(|d| d.trim_start_matches('-').parse::<u32>().ok()) {
+                let candidate = entry.path().join("bin/clangd");
+                if candidate.is_file() {
+                    found.push((v, candidate));
+                }
+            }
+        }
+    }
+    found.into_iter().max_by_key(|(v, _)| *v).map(|(_, p)| p)
+}
+
+/// The program to start for the configured `command`. A bare `clangd` that is not on PATH is looked up under
+/// the names packages give it: FreeBSD installs `clangd21` and `/usr/local/llvm21/bin/clangd`, Debian
+/// `clangd-21` and `/usr/lib/llvm-21/bin/clangd`. The newest version found wins; anything else is used as given.
+fn resolve_program(command: &str) -> std::ffi::OsString {
+    if command != "clangd" {
+        return command.into();
+    }
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .filter(|d| d.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default();
+    if path_dirs.iter().any(|d| d.join("clangd").is_file()) {
+        return command.into();
+    }
+    let roots = [
+        PathBuf::from("/usr/local"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/lib64"),
+    ];
+    newest_clangd(&path_dirs, &roots).map_or_else(|| command.into(), Into::into)
+}
+
 impl Client {
     /// Start `server` for the workspace `root` and send `initialize`.
     /// A missing executable is an error naming the configuration key.
     pub fn start(language: &str, server: &LspServerConfig, root: &Path) -> crate::Result<Self> {
-        let mut command = Command::new(&server.command);
+        let mut command = Command::new(resolve_program(&server.command));
         command
             .args(&server.args)
             .current_dir(root)
@@ -725,5 +785,53 @@ impl Drop for Client {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod clangd_discovery_tests {
+    use super::{clangd_version, newest_clangd};
+    use std::{fs, path::PathBuf};
+
+    fn touch(path: &PathBuf) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "").unwrap();
+    }
+
+    #[test]
+    fn versioned_names_are_recognised() {
+        assert_eq!(clangd_version("clangd21"), Some(21));
+        assert_eq!(clangd_version("clangd-19"), Some(19));
+        assert_eq!(clangd_version("clangd"), None);
+        assert_eq!(clangd_version("clangd-tidy"), None);
+        assert_eq!(clangd_version("clang21"), None);
+    }
+
+    #[test]
+    fn the_newest_clangd_is_found_in_path_and_in_llvm_install_directories() {
+        let base = std::env::temp_dir().join(format!("embedide-clangd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        touch(&bin.join("clangd19"));
+        touch(&bin.join("clangd-15"));
+        touch(&bin.join("clang-format21")); // not a clangd
+        assert_eq!(
+            newest_clangd(std::slice::from_ref(&bin), &[]),
+            Some(bin.join("clangd19"))
+        );
+        // an LLVM directory with a newer version wins; one without bin/clangd is ignored
+        touch(&base.join("llvm21/bin/clangd"));
+        fs::create_dir_all(base.join("llvm22/bin")).unwrap();
+        touch(&base.join("lib/llvm-20/bin/clangd"));
+        assert_eq!(
+            newest_clangd(std::slice::from_ref(&bin), std::slice::from_ref(&base)),
+            Some(base.join("llvm21/bin/clangd"))
+        );
+        assert_eq!(
+            newest_clangd(&[], &[base.join("lib")]),
+            Some(base.join("lib/llvm-20/bin/clangd"))
+        );
+        assert_eq!(newest_clangd(&[], &[]), None);
+        let _ = fs::remove_dir_all(&base);
     }
 }

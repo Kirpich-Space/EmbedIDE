@@ -2319,6 +2319,9 @@ impl Workspace {
                 "ctrl+alt+1" => "focus_explorer",
                 "ctrl+alt+2" => "focus_assistant",
                 "ctrl+alt+3" => "focus_terminal",
+                // Ctrl+]: moves focus on, out of the shell panel too, in a terminal that has no Alt and no F-keys
+                // (the FreeBSD console). A legacy terminal sends it as 0x1d, which the key parser reports as Ctrl+5.
+                "ctrl+]" | "ctrl+5" => "focus",
                 "ctrl+p" => "find",
                 "ctrl+space" => "suggest",
                 "alt+\\" => "ai_suggest",
@@ -2819,9 +2822,9 @@ impl Workspace {
                 }
                 let shortcut = self.shortcut(key);
                 if self.focus == Focus::Terminal
-                    && !shortcut
-                        .as_deref()
-                        .is_some_and(|id| id.starts_with("focus_") || id.starts_with("hide_"))
+                    && !shortcut.as_deref().is_some_and(|id| {
+                        id == "focus" || id.starts_with("focus_") || id.starts_with("hide_")
+                    })
                 {
                     // The shell owns the keyboard: Ctrl+C, Ctrl+D, Tab, Esc, F-keys.
                     if let Some(t) = &mut self.terminal {
@@ -2982,6 +2985,11 @@ impl Workspace {
                                 IdeAction::Terminal => "focus_terminal",
                                 IdeAction::SerialMonitor => "serial",
                                 IdeAction::FindFile => "find",
+                                IdeAction::FocusExplorer => "focus_explorer",
+                                IdeAction::FocusAssistant => "focus_assistant",
+                                IdeAction::HideExplorer => "hide_explorer",
+                                IdeAction::HideAssistant => "hide_assistant",
+                                IdeAction::HideTerminal => "hide_terminal",
                             })?;
                         }
                         if self.editor().state().is_closed() {
@@ -4497,6 +4505,8 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
     let mut lines: Vec<String> = [
         "PANELS  Alt+1 explorer | Alt+2 AI assistant | Alt+3 terminal (press again to return to the editor; Ctrl+Alt works too)",
         "        Hold Alt and the digit and press Delete (Alt+1+Delete …) to hide that panel; its state is kept",
+        "        No Alt (the FreeBSD console has none)? In Normal mode: Space 1/2/3 open the panels, Space E/A/T hide them;",
+        "        Ctrl+] moves focus on from any panel, the shell included",
     ]
     .iter()
     .chain(mode)
