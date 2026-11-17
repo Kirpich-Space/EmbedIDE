@@ -279,3 +279,28 @@ fn errors_have_priority_in_narrow_status_rows_and_unsupported_chords_cancel_coun
     assert!(row(&app.frame().unwrap(), 3).starts_with("Error:"));
     assert!(row(&app.frame().unwrap(), 4).contains("missing"));
 }
+
+#[test]
+fn backspace_sent_as_ctrl_h_or_a_bs_character_deletes_like_del() {
+    // The FreeBSD console sends ^H (0x08) for Backspace; the key parser reports it as Ctrl+H.
+    for event in [
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('\u{8}'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('\u{7f}'), KeyModifiers::NONE),
+    ] {
+        let mut app = TuiEditor::new(Editor::new("abc".into()), 80, 24);
+        keys(&mut app, "A");
+        keys(&mut app, "xy");
+        assert!(app.handle(Event::Key(event)), "{event:?}");
+        assert_eq!(contents(&app), "abcx", "{event:?}");
+    }
+    // Ctrl+Backspace-like chords with other modifiers keep their old behaviour (not mistaken for Backspace).
+    let mut app = TuiEditor::new(Editor::new("abc".into()), 80, 24);
+    keys(&mut app, "Ax");
+    app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('h'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    )));
+    assert_eq!(contents(&app), "abcx");
+}

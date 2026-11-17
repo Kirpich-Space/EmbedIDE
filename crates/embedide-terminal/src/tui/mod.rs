@@ -91,6 +91,7 @@ impl TuiEditor {
                 true
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => {
+                let key = normalize_key(key);
                 if key.modifiers == KeyModifiers::CONTROL
                     && matches!(key.code, KeyCode::Char('c' | 'C'))
                 {
@@ -113,6 +114,25 @@ impl TuiEditor {
             _ => false,
         }
     }
+}
+
+/// Terminals send Backspace as DEL (0x7f) or as BS (0x08, `^H`). The FreeBSD console, and any terminal
+/// with `stty erase ^H`, use the second form, and the key parser reports it as Ctrl+H, which no mode
+/// handled ("Key not handled by the editor", nothing deleted). Ctrl+H is bound to nothing, so it, and a
+/// literal BS or DEL character, mean Backspace.
+pub(crate) fn normalize_key(mut key: KeyEvent) -> KeyEvent {
+    let plain_ctrl = key.modifiers == KeyModifiers::CONTROL;
+    match key.code {
+        KeyCode::Char('h' | 'H') if plain_ctrl => {
+            key.code = KeyCode::Backspace;
+            key.modifiers = KeyModifiers::NONE;
+        }
+        KeyCode::Char('\u{8}' | '\u{7f}') if key.modifiers.is_empty() => {
+            key.code = KeyCode::Backspace;
+        }
+        _ => {}
+    }
+    key
 }
 
 fn translate(event: KeyEvent) -> Option<Key> {

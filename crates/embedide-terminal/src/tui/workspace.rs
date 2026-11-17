@@ -5,6 +5,7 @@ use super::{
     assistant::{osc52, Assistant, EditorContext},
     guard,
     layout::{self, Frame, Row},
+    normalize_key,
     screen::{Screen, Theme},
     term::{self, TerminalPane},
     TuiEditor,
@@ -2805,6 +2806,9 @@ impl Workspace {
                 if key.kind == KeyEventKind::Release {
                     return Ok(());
                 }
+                // The shell panel gets the key as the terminal sent it; everything else sees Ctrl+H as Backspace.
+                let raw = key;
+                let key = normalize_key(key);
                 if self.dialog.is_some() {
                     return self.handle_dialog(key);
                 }
@@ -2821,7 +2825,7 @@ impl Workspace {
                 {
                     // The shell owns the keyboard: Ctrl+C, Ctrl+D, Tab, Esc, F-keys.
                     if let Some(t) = &mut self.terminal {
-                        if !t.alternate_screen() && scrollback_key(t, key) {
+                        if !t.alternate_screen() && scrollback_key(t, raw) {
                             return Ok(());
                         }
                     }
@@ -2829,7 +2833,7 @@ impl Workspace {
                         Some(t) if t.exited().is_none() => {
                             // Typing returns to the live screen, like a terminal emulator.
                             t.scroll_to_live();
-                            t.key(key);
+                            t.key(raw);
                         }
                         _ => {
                             if matches!(key.code, KeyCode::Enter) {

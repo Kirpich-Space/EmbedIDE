@@ -10,6 +10,10 @@
   `embed project info`; they stay allowed because embedded projects use `-specs=nano.specs`. Build only projects you trust.
 
 ### Fixed
+- **Backspace on the FreeBSD console (and any terminal with `stty erase ^H`):** the key arrives as BS (0x08, `^H`), which the
+  key parser reports as Ctrl+H; no mode handled it, so nothing was deleted and the status line said "Key not handled by the
+  editor". Ctrl+H (and a literal BS or DEL character) now mean Backspace everywhere except the shell panel, which still
+  receives the byte your terminal sent.
 - **FreeBSD (verified on 15.1 amd64, UFS):** the disassembly view failed because LLVM's `objdump` (the base `/usr/bin/objdump`)
   rejects the `--` argument; a `tools.make` setting in `embedide.json` was ignored because GNU make is `gmake` there; and
   saving twice in quick succession reported "file changed externally" (the change time of a freshly renamed file still moves
