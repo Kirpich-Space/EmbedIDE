@@ -21,7 +21,7 @@ embedide-workspace = { path = "crates/embedide-workspace" }
 embedide-build = { path = "crates/embedide-build" }
 embedide-ai = { path = "crates/embedide-ai" }
 toml = "1.2"
-toml_edit = "0.22"
+toml_edit = "0.25"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
