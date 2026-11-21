@@ -244,3 +244,31 @@ fn panels_work_without_the_alt_key_for_terminals_that_cannot_send_it() {
     ctrl(&mut app, '5');
     assert_ne!(app.focus(), Focus::Explorer);
 }
+
+#[test]
+fn goto_label_handles_utf8_prefix_and_reload_keeps_manifest_profile() {
+    let f = Fixture::new();
+    f.write(
+        "embedide.toml",
+        "schema = 1\n[project]\nname = \"demo\"\nlanguage = \"c\"\n[build]\nsystem = \"native\"\nsources = [\"src\"]\n[profiles.debug]\n[profiles.custom]\nflags = [\"-O2\"]\n",
+    );
+    std::fs::create_dir_all(f.0.join("src")).unwrap();
+    f.write("src/main.c", "int main(void) { return 0; }\n");
+    f.write("prog.s", "target:\n    nop\n; —target\n");
+    let mut app = Workspace::open(&f.0, 100, 28).unwrap();
+    // Opening a manifest project must not create `build/` on disk.
+    assert!(!f.0.join("build").exists());
+    app.command("profile:custom").unwrap();
+    app.command("reload").unwrap();
+    app.command("settings").unwrap();
+    assert!(
+        frame_text(&app.frame().unwrap()).contains("Profile: custom"),
+        "reload must keep the selected embedide.toml profile"
+    );
+    // `:label` with cursor right after a multi-byte UTF-8 punctuation char (`—`) must not panic.
+    app.open_file(&f.0.join("prog.s")).unwrap();
+    text(&mut app, "3G$");
+    text(&mut app, ":label");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.editor().state().position().unwrap().line, 0);
+}

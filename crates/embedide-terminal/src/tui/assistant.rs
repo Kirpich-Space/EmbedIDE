@@ -877,6 +877,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
     /// stopped the CLI child, so no process outlives the IDE.
     pub fn shutdown(&mut self) {
         self.dismiss();
+        self.engine = None;
         self.shutdown_agent();
         self.checks = None; // probes end on their own time limit
         if let Some(mut job) = self.job.take() {
@@ -903,6 +904,18 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
         self.cancel_agent();
         if let Some(job) = self.job.take() {
             job.cancel.cancel();
+            if let Some(slot) = job.slot {
+                if matches!(self.transcript.get(slot), Some((Kind::Assistant, t)) if t.is_empty()) {
+                    self.transcript.remove(slot);
+                }
+                if self
+                    .history
+                    .last()
+                    .is_some_and(|m| m.role == embedide_ai::Role::User)
+                {
+                    self.history.pop();
+                }
+            }
             self.note(Kind::Info, "Cancelled");
         }
         self.dismiss();
@@ -1061,7 +1074,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
 
     /// Scroll the transcript (positive = older).
     pub fn scroll(&mut self, delta: isize) {
-        self.scroll = (self.scroll as isize + delta).max(0) as usize;
+        self.scroll = self.scroll.saturating_add_signed(delta);
     }
 
     /// Render into `width` × `height`; returns rows and the input cursor.
@@ -1345,6 +1358,12 @@ fn wrap_into(out: &mut Vec<Line>, indent: &str, text: &str, style: Option<Paint>
         line.push_str(word);
     }
     push(line.trim_end().to_string(), out);
+}
+
+impl Drop for Assistant {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 #[cfg(test)]

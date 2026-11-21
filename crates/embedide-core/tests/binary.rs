@@ -336,4 +336,55 @@ fn disassembly_lists_symbols_and_instructions_from_objdump() {
     assert!(listing.lines.iter().any(|l| l.text.starts_with("push")
         || l.text.starts_with("endbr64")
         || l.text.starts_with("stp")));
+    assert!(
+        listing.tool.contains("-d"),
+        "tool label preserves flags: {}",
+        listing.tool
+    );
+}
+
+#[test]
+fn elf_overflow_offsets_short_disasm_args_and_utf8_pattern_escapes_never_panic() {
+    // Crafted ELF with extreme addresses/offsets must never overflow in section_at/file_offset.
+    let mut e = elf::Elf {
+        class: 64,
+        little: true,
+        kind: "EXEC".into(),
+        machine: "x86-64".into(),
+        machine_id: 62,
+        osabi: 0,
+        entry: 0,
+        segments: vec![elf::Segment {
+            kind: "LOAD".into(),
+            offset: u64::MAX - 2,
+            vaddr: u64::MAX - 10,
+            filesz: 100,
+            memsz: 100,
+            flags: "R-X".into(),
+        }],
+        sections: vec![elf::Section {
+            name: ".text".into(),
+            kind: "PROGBITS".into(),
+            flags: "AX".into(),
+            addr: u64::MAX - 4,
+            offset: 0,
+            size: 100,
+        }],
+        symbols: Vec::new(),
+        notes: Vec::new(),
+    };
+    assert!(e.section_at(u64::MAX - 1).is_some());
+    assert_eq!(e.file_offset(u64::MAX - 1), None);
+    e.segments[0].offset = 0x100;
+    assert_eq!(e.file_offset(u64::MAX - 10), Some(0x100));
+
+    // disassemble with fewer than 2 arguments must never underflow/panic.
+    let listing = disasm::disassemble(std::path::Path::new("true"), &[]).unwrap();
+    assert_eq!(listing.tool, "true");
+
+    // Non-ASCII escaped character in binary text pattern keeps full UTF-8 bytes.
+    assert_eq!(
+        embedide_core::binary::parse_pattern(r#""\ж""#).unwrap(),
+        "ж".as_bytes()
+    );
 }

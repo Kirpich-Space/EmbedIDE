@@ -113,6 +113,9 @@ pub struct Prepared {
     /// Output root that receives the clean marker (native builds).
     #[serde(skip)]
     pub(crate) output_root: Option<PathBuf>,
+    /// Output subdirectories created by [`Prepared::begin`] right before execution.
+    #[serde(skip)]
+    pub(crate) dirs: Vec<PathBuf>,
 }
 
 impl Prepared {
@@ -128,6 +131,9 @@ impl Prepared {
                     "Created by EmbedIDE; `embed clean` may delete this directory.\n",
                 )?;
             }
+        }
+        for dir in &self.dirs {
+            std::fs::create_dir_all(dir)?;
         }
         Ok(())
     }
@@ -391,6 +397,7 @@ fn external(
         up_to_date: 0,
         stamps: Vec::new(),
         output_root: None,
+        dirs: Vec::new(),
     })
 }
 

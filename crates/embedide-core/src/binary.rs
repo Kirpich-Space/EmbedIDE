@@ -352,7 +352,10 @@ pub fn parse_pattern(text: &str) -> Result<Vec<u8>> {
                             .map_err(|_| Error(format!("Bad escape \\x{hex}")))?,
                     );
                 }
-                Some(c) => out.push(c as u8),
+                Some(c) => {
+                    let mut buf = [0; 4];
+                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                }
                 None => out.push(b'\\'),
             }
         }

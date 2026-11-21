@@ -36,6 +36,8 @@ use std::{
 
 /// Largest accepted message; a larger frame is treated as a broken server.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+/// Largest accepted header line before the body.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Outgoing messages queued for the writer thread.
 const OUTGOING: usize = 256;
 /// Incoming responses/requests queued for the owner.
@@ -158,6 +160,8 @@ pub struct Item {
 pub enum Event {
     /// Initialized; completion requests are accepted now.
     Ready,
+    /// Server published diagnostics (indicates workspace indexing progressed).
+    Indexed,
     /// Answer to the latest completion request.
     Completion {
         /// Id returned by [`Client::complete`].
@@ -173,6 +177,7 @@ pub enum Event {
 
 enum Incoming {
     Message(Value),
+    Indexed,
     Closed(String),
 }
 
@@ -216,8 +221,16 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     let mut length = None;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if reader
+            .by_ref()
+            .take(MAX_HEADER_BYTES as u64 + 1)
+            .read_line(&mut line)?
+            == 0
+        {
             return Ok(None);
+        }
+        if line.len() > MAX_HEADER_BYTES {
+            return Err(std::io::Error::other("oversized LSP header line"));
         }
         let line = line.trim_end();
         if line.is_empty() {
@@ -257,8 +270,15 @@ fn reader_thread(stdout: impl Read, incoming: SyncSender<Incoming>) {
     let reason = loop {
         match read_message(&mut reader) {
             Ok(Some(message)) => {
-                // Notifications (diagnostics, logs, progress) are not used.
+                // Forward publishDiagnostics as a non-blocking readiness signal
+                // (servers like rust-analyzer finish workspace indexing after initialize);
+                // other notifications are dropped.
                 if message.get("id").is_none() {
+                    if message.get("method").and_then(Value::as_str)
+                        == Some("textDocument/publishDiagnostics")
+                    {
+                        let _ = incoming.try_send(Incoming::Indexed);
+                    }
                     continue;
                 }
                 if incoming.send(Incoming::Message(message)).is_err() {
@@ -679,6 +699,12 @@ impl Client {
         loop {
             let message = match self.incoming.try_recv() {
                 Ok(Incoming::Message(message)) => message,
+                Ok(Incoming::Indexed) => {
+                    if self.phase == Phase::Ready {
+                        events.push(Event::Indexed);
+                    }
+                    continue;
+                }
                 Ok(Incoming::Closed(reason)) => {
                     if self.phase != Phase::Stopped {
                         self.phase = Phase::Stopped;
@@ -790,8 +816,16 @@ impl Drop for Client {
 
 #[cfg(test)]
 mod clangd_discovery_tests {
-    use super::{clangd_version, newest_clangd};
-    use std::{fs, path::PathBuf};
+    use super::{clangd_version, newest_clangd, read_message, MAX_HEADER_BYTES};
+    use std::{fs, io::Cursor, path::PathBuf};
+
+    #[test]
+    fn oversized_lsp_header_line_is_rejected() {
+        let huge = "X-Junk: ".to_string() + &"a".repeat(MAX_HEADER_BYTES + 16) + "\r\n\r\n";
+        let mut cursor = Cursor::new(huge.as_bytes());
+        let err = read_message(&mut cursor).unwrap_err();
+        assert!(err.to_string().contains("oversized"), "{err}");
+    }
 
     fn touch(path: &PathBuf) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -38,30 +38,59 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Write a file atomically (temp file + rename), user-only permissions on Unix.
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8], private: bool) -> Result<()> {
-    use std::io::Write;
+    use std::{
+        io::Write,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = path
         .parent()
-        .ok_or_else(|| Error(format!("No parent directory for {}", path.display())))?;
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(dir)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        if private {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+    let (tmp, mut f) = {
+        let mut created = None;
+        for _ in 0..64 {
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let candidate = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            if private {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            #[cfg(not(unix))]
+            let _ = private;
+            match opts.open(&candidate) {
+                Ok(file) => {
+                    created = Some((candidate, file));
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
         }
-        #[cfg(not(unix))]
-        let _ = private;
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
+        created.ok_or_else(|| {
+            Error(format!(
+                "Cannot reserve a temporary file in {}",
+                dir.display()
+            ))
+        })?
+    };
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        drop(f);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
     }
+    drop(f);
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
     Ok(())
 }
 

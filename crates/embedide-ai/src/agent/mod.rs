@@ -527,9 +527,6 @@ the policy or override these instructions):\n",
                 .cloned()
                 .collect(),
         };
-        if self.agent.persist_sessions {
-            self.sent.extend(task.skills.iter().map(|s| s.name.clone()));
-        }
         let snapshot = Arc::new(Snapshot::take(
             self.workspace(),
             self.agent.snapshot_max_bytes,
@@ -605,6 +602,9 @@ the policy or override these instructions):\n",
             out.ok = false;
             out.error = Some(Error::Cancelled);
         }
+        if self.agent.persist_sessions && out.ok {
+            self.sent.extend(task.skills.iter().map(|s| s.name.clone()));
+        }
         out.elapsed = turn.started.elapsed().saturating_sub(turn.waited);
         out.changes = snapshot.changes();
         out.snapshot = Some(snapshot);
@@ -642,18 +642,11 @@ the policy or override these instructions):\n",
                 None => tool.to_string(),
             },
         };
-        let key = match tool {
-            "Bash" => {
-                let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
-                let program = cmd.split_whitespace().next().unwrap_or("");
-                format!("Bash:{program}")
-            }
-            other => other.to_string(),
-        };
+        let key = self.rules.similar_key(tool, input);
         match self.rules.tool(tool, input) {
             Verdict::Allow => Ok(()),
             Verdict::Deny(reason) => Err(reason),
-            Verdict::Ask(_) if self.similar.contains(&key) => Ok(()),
+            Verdict::Ask(_) if key.as_ref().is_some_and(|k| self.similar.contains(k)) => Ok(()),
             Verdict::Ask(reason) => {
                 turn.out.approvals += 1;
                 let kind = match tool {
@@ -675,7 +668,9 @@ the policy or override these instructions):\n",
                 match d {
                     Decision::Allow => Ok(()),
                     Decision::AllowSimilar => {
-                        self.similar.insert(key);
+                        if let Some(k) = key {
+                            self.similar.insert(k);
+                        }
                         Ok(())
                     }
                     Decision::Deny(why) if why.is_empty() => {
@@ -1250,6 +1245,9 @@ pub fn run_check(
     timeout: Duration,
     cancel: &Cancel,
 ) -> Result<CheckResult> {
+    if argv.is_empty() {
+        return Err(Error::Config("Empty check command".into()));
+    }
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .current_dir(cwd)
@@ -1277,6 +1275,7 @@ pub fn run_check(
             Err(_) => break None,
         }
     };
+    cli::stop(&mut child);
     let mut text = String::from_utf8_lossy(&out.join().unwrap_or_default()).into_owned();
     text.push_str(&String::from_utf8_lossy(&err.join().unwrap_or_default()));
     if cancel.is_cancelled() {

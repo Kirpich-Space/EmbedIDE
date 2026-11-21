@@ -6,7 +6,23 @@ use crate::{
     Role, Secret, Usage,
 };
 use serde_json::{json, Value};
-use std::{io::BufRead, time::Duration};
+use std::{
+    io::{BufRead, Read},
+    time::Duration,
+};
+
+/// Largest single SSE line accepted from an HTTP provider (4 MiB).
+const MAX_SSE_LINE: usize = 4 * 1024 * 1024;
+
+fn is_loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    ["127.0.0.1", "localhost", "[::1]"].iter().any(|host| {
+        rest.strip_prefix(host)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with([':', '/']))
+    })
+}
 
 pub(crate) struct HttpBackend {
     provider: ProviderId,
@@ -18,10 +34,7 @@ pub(crate) struct HttpBackend {
 impl HttpBackend {
     pub(crate) fn new(provider: ProviderId, base: String, key: Secret) -> Result<Self> {
         let base = base.trim_end_matches('/').to_string();
-        if !(base.starts_with("https://")
-            || base.starts_with("http://127.0.0.1")
-            || base.starts_with("http://localhost"))
-        {
+        if !(base.starts_with("https://") || is_loopback_http(&base)) {
             return Err(Error::Config(format!(
                 "Refusing non-HTTPS AI endpoint {base} (plain HTTP is allowed only for localhost)"
             )));
@@ -131,15 +144,17 @@ impl HttpBackend {
 fn parse_full(protocol: Protocol, v: &Value) -> Response {
     match protocol {
         Protocol::AnthropicMessages => Response {
-            text: v["content"]
-                .as_array()
-                .map(|blocks| {
-                    blocks
-                        .iter()
-                        .filter_map(|b| b["text"].as_str())
-                        .collect::<String>()
-                })
-                .unwrap_or_default(),
+            text: crate::cli::sanitize(
+                &v["content"]
+                    .as_array()
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(|b| b["text"].as_str())
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default(),
+            ),
             usage: Usage {
                 input_tokens: v["usage"]["input_tokens"].as_u64(),
                 output_tokens: v["usage"]["output_tokens"].as_u64(),
@@ -148,10 +163,11 @@ fn parse_full(protocol: Protocol, v: &Value) -> Response {
             model: v["model"].as_str().map(str::to_owned),
         },
         Protocol::ChatCompletions => Response {
-            text: v["choices"][0]["message"]["content"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
+            text: crate::cli::sanitize(
+                v["choices"][0]["message"]["content"]
+                    .as_str()
+                    .unwrap_or_default(),
+            ),
             usage: Usage {
                 input_tokens: v["usage"]["prompt_tokens"].as_u64(),
                 output_tokens: v["usage"]["completion_tokens"].as_u64(),
@@ -200,12 +216,28 @@ impl Backend for HttpBackend {
             stop_reason: None,
             model: None,
         };
-        let reader = std::io::BufReader::new(resp.into_reader());
-        for line in reader.lines() {
+        let mut reader = std::io::BufReader::new(resp.into_reader());
+        let mut raw_line = Vec::new();
+        loop {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let line = line.map_err(|e| Error::Network(e.to_string()))?;
+            raw_line.clear();
+            let n = reader
+                .by_ref()
+                .take(MAX_SSE_LINE as u64 + 1)
+                .read_until(b'\n', &mut raw_line)
+                .map_err(|e| Error::Network(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            if raw_line.len() > MAX_SSE_LINE {
+                return Err(Error::Network(format!(
+                    "Provider stream line exceeded {MAX_SSE_LINE} bytes"
+                )));
+            }
+            let line = String::from_utf8_lossy(&raw_line);
+            let line = line.trim_end_matches(['\n', '\r']);
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
@@ -224,8 +256,11 @@ impl Backend for HttpBackend {
                     }
                     Some("content_block_delta") => {
                         if let Some(t) = v["delta"]["text"].as_str() {
-                            out.text.push_str(t);
-                            on_delta(t);
+                            let clean = crate::cli::sanitize(t);
+                            out.text.push_str(&clean);
+                            if !clean.is_empty() {
+                                on_delta(&clean);
+                            }
                         }
                     }
                     Some("message_delta") => {
@@ -251,8 +286,11 @@ impl Backend for HttpBackend {
                         out.model = v["model"].as_str().map(str::to_owned);
                     }
                     if let Some(t) = v["choices"][0]["delta"]["content"].as_str() {
-                        out.text.push_str(t);
-                        on_delta(t);
+                        let clean = crate::cli::sanitize(t);
+                        out.text.push_str(&clean);
+                        if !clean.is_empty() {
+                            on_delta(&clean);
+                        }
                     }
                     if let Some(r) = v["choices"][0]["finish_reason"].as_str() {
                         out.stop_reason = Some(r.to_string());

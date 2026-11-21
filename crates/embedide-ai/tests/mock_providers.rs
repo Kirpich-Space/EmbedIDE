@@ -275,14 +275,33 @@ fn auth_and_rate_limit_errors_are_structured_and_redacted() {
 
 #[test]
 fn non_https_endpoints_are_refused_and_cancel_is_honoured_before_sending() {
-    assert!(matches!(
-        api_backend(
-            ProviderId::Openai,
-            "http://example.com/v1",
-            Secret::new(KEY)
-        ),
-        Err(Error::Config(_))
-    ));
+    for bad in [
+        "http://example.com/v1",
+        "http://localhost.evil.com/v1",
+        "http://127.0.0.1.evil.com/v1",
+    ] {
+        assert!(
+            matches!(
+                api_backend(ProviderId::Openai, bad, Secret::new(KEY)),
+                Err(Error::Config(_))
+            ),
+            "{bad} must be refused"
+        );
+    }
+    // Streaming and non-streaming HTTP replies must strip terminal escapes.
+    let (base, _) = serve(vec![json_ok(json!({
+        "model": "m",
+        "choices": [{"message": {"content": "ok\x1b[31mred\x1b]52;c;evil\x07!"}, "finish_reason": "stop"}]
+    }))]);
+    let b = api_backend(ProviderId::Openai, &base, Secret::new(KEY)).unwrap();
+    let r = b
+        .send(
+            &chat::request("m", &[], "q", None, 8, false),
+            &Cancel::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+    assert_eq!(r.text, "okred!");
     let (base, log) = serve(vec![json_ok(json!({}))]);
     let b = api_backend(ProviderId::Openai, &base, Secret::new(KEY)).unwrap();
     let c = Cancel::default();

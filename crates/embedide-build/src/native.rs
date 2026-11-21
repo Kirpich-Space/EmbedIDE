@@ -124,6 +124,7 @@ pub(crate) fn parse_depfile(text: &str) -> Vec<PathBuf> {
 }
 
 fn stale(
+    root: &Path,
     obj: &Path,
     src: &Path,
     dep: Option<&Path>,
@@ -147,12 +148,19 @@ fn stale(
             return true;
         };
         for d in parse_depfile(&text) {
-            let d = if d.is_absolute() {
+            // Compilers emit depfile paths relative to their working directory (`root`);
+            // fall back to `src.parent()` if needed.
+            let resolved = if d.is_absolute() {
                 d
             } else {
-                src.parent().unwrap_or(Path::new(".")).join(d)
+                let from_root = root.join(&d);
+                if from_root.exists() {
+                    from_root
+                } else {
+                    src.parent().unwrap_or(root).join(d)
+                }
             };
-            if mtime(&d).is_none_or(|t| t > obj_t) {
+            if mtime(&resolved).is_none_or(|t| t > obj_t) {
                 return true;
             }
         }
@@ -280,7 +288,6 @@ pub(crate) fn prepare(
                 args.extend(["--target".into(), t.into()]);
             }
         }
-        std::fs::create_dir_all(&out)?;
         return Ok(Prepared {
             root: root.to_path_buf(),
             system: BuildKind::Native,
@@ -295,6 +302,7 @@ pub(crate) fn prepare(
             up_to_date: 0,
             stamps: Vec::new(),
             output_root: Some(output_root),
+            dirs: vec![out],
         });
     }
 
@@ -459,6 +467,7 @@ pub(crate) fn prepare(
         let text = cmd_text(&spec);
         let extra = fortran_deps.get(src).map(Vec::as_slice).unwrap_or(&[]);
         if stale(
+            root,
             &obj,
             src,
             uses_dep.then_some(dep.as_path()),
@@ -514,17 +523,26 @@ pub(crate) fn prepare(
     };
     let link_text = cmd_text(&link);
     let link_cmd = out.join(format!("{default_name}.cmd"));
+    let artifact_t = mtime(&artifact);
+    let linker_script_stale = m.build.linker_script.as_ref().is_some_and(|ls| {
+        let script_t = mtime(&root.join(ls));
+        match (script_t, artifact_t) {
+            (Some(s), Some(a)) => s > a,
+            _ => true,
+        }
+    });
     let link_stale = any_compiled
-        || mtime(&artifact).is_none()
+        || artifact_t.is_none()
+        || linker_script_stale
         || std::fs::read_to_string(&link_cmd).ok().as_deref() != Some(link_text.as_str())
-        || objects.iter().any(|o| mtime(o) > mtime(&artifact));
+        || objects.iter().any(|o| mtime(o) > artifact_t);
     if link_stale {
         steps.push(link);
         stamps.push((link_cmd, link_text));
     }
-    std::fs::create_dir_all(&obj_dir)?;
+    let mut dirs = vec![obj_dir];
     if needed.contains(&SourceKind::Fortran) {
-        std::fs::create_dir_all(&mod_dir)?;
+        dirs.push(mod_dir);
     }
     let mut toolchains: Vec<Selection> = sel.into_values().collect();
     if !toolchains.iter().any(|t| t.id == linker.id) {
@@ -541,6 +559,7 @@ pub(crate) fn prepare(
         up_to_date,
         stamps,
         output_root: Some(output_root),
+        dirs,
     })
 }
 
@@ -572,5 +591,99 @@ mod tests {
         assert_eq!(classify(Path::new("a.asm")), Some(SourceKind::Nasm));
         assert_eq!(classify(Path::new("a.F90")), Some(SourceKind::Fortran));
         assert_eq!(classify(Path::new("a.h")), None);
+    }
+
+    #[test]
+    fn prepare_does_not_create_output_dirs_and_tracks_depfile_cwd_and_linker_script() {
+        let dir = std::env::temp_dir().join(format!("embedide-native-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("include")).unwrap();
+        std::fs::write(dir.join("src/main.c"), "int main(void){return 0;}\n").unwrap();
+        std::fs::write(dir.join("include/a.h"), "#define X 1\n").unwrap();
+        std::fs::write(dir.join("linker.ld"), "SECTIONS {}\n").unwrap();
+        let mut m = Manifest::new("demo", Language::C, BuildKind::Native);
+        m.build.linker_script = Some("linker.ld".into());
+        m.toolchain.insert("c".into(), "gcc".into());
+        let tc = Toolchain {
+            id: "gcc".into(),
+            kind: "gcc",
+            family: Family::Gcc,
+            languages: vec![Language::C, Language::Asm],
+            program: PathBuf::from("/usr/bin/gcc"),
+            prefix_args: Vec::new(),
+            version: Some("gcc 14".into()),
+            target: None,
+            cross: false,
+            origin: embedide_toolchains::Origin::Path,
+            problem: None,
+        };
+        let prepared = prepare(
+            &dir,
+            &m,
+            &UserConfig::default(),
+            std::slice::from_ref(&tc),
+            &Request::default(),
+        )
+        .unwrap();
+        assert!(
+            !dir.join("build").exists(),
+            "prepare() must not create output directories on disk before begin()"
+        );
+        prepared.begin().unwrap();
+        assert!(dir.join("build/debug/obj").is_dir());
+
+        // CWD-relative depfile (`include/a.h`) must resolve against `dir`, not `src/`.
+        let obj = dir.join("build/debug/obj/src__main.c.o");
+        let dep = dir.join("build/debug/obj/src__main.c.d");
+        let cmd_file = dir.join("build/debug/obj/src__main.c.cmd");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&obj, b"obj").unwrap();
+        std::fs::write(&dep, "obj: src/main.c include/a.h\n").unwrap();
+        let compile_cmd = cmd_text(&prepared.steps[0]);
+        std::fs::write(&cmd_file, &compile_cmd).unwrap();
+        assert!(
+            !stale(
+                &dir,
+                &obj,
+                &dir.join("src/main.c"),
+                Some(&dep),
+                &[],
+                &cmd_file,
+                &compile_cmd,
+            ),
+            "CWD-relative header in depfile should be found under project root"
+        );
+
+        // Touching the linker script must mark the link step stale.
+        let artifact = dir.join("build/debug/demo");
+        let link_cmd_file = dir.join("build/debug/demo.cmd");
+        std::fs::write(&artifact, b"bin").unwrap();
+        std::fs::write(&link_cmd_file, cmd_text(prepared.steps.last().unwrap())).unwrap();
+        let up_to_date = prepare(
+            &dir,
+            &m,
+            &UserConfig::default(),
+            std::slice::from_ref(&tc),
+            &Request::default(),
+        )
+        .unwrap();
+        assert!(up_to_date.steps.is_empty(), "everything is up to date");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.join("linker.ld"), "SECTIONS { /* changed */ }\n").unwrap();
+        let relink = prepare(
+            &dir,
+            &m,
+            &UserConfig::default(),
+            std::slice::from_ref(&tc),
+            &Request::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            relink.steps.len(),
+            1,
+            "linker script change must trigger relink"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

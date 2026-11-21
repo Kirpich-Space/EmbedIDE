@@ -932,7 +932,11 @@ impl Workspace {
             let text = state.buffer().slice(line.clone())?;
             let at = cursor - line.start;
             let is_label = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$');
-            let start = text[..at].rfind(|c| !is_label(c)).map_or(0, |i| i + 1);
+            let start = text[..at]
+                .char_indices()
+                .rev()
+                .find(|&(_, c)| !is_label(c))
+                .map_or(0, |(i, c)| i + c.len_utf8());
             let end = text[at..]
                 .find(|c| !is_label(c))
                 .map_or(text.len(), |i| at + i);
@@ -1544,6 +1548,9 @@ impl Workspace {
                 if path.exists() {
                     self.open_file(&path)?;
                 } else {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
                     // A new buffer bound to the path; nothing is written before :w.
                     let doc = self.new_document(crate::open(&path)?);
                     self.documents.push(doc);
@@ -1837,14 +1844,32 @@ impl Workspace {
                 self.config_notes.extend(unknown_key_commands(&self.config));
                 self.select_compilers();
                 self.target = self.target.filter(|i| *i < self.config.targets.len());
-                if !self.config.profiles.contains_key(&self.profile) {
-                    self.profile = self
-                        .config
-                        .profiles
-                        .keys()
-                        .next()
-                        .expect("validated profile")
-                        .clone();
+                let valid_profile = match &self.manifest {
+                    Some(m) => {
+                        m.profiles.contains_key(&self.profile)
+                            || (m.profiles.is_empty() && self.profile == "debug")
+                    }
+                    None => self.config.profiles.contains_key(&self.profile),
+                };
+                if !valid_profile {
+                    self.profile = match &self.manifest {
+                        Some(m) if m.profiles.contains_key("debug") || m.profiles.is_empty() => {
+                            "debug".into()
+                        }
+                        Some(m) => m
+                            .profiles
+                            .keys()
+                            .next()
+                            .cloned()
+                            .unwrap_or_else(|| "debug".into()),
+                        None => self
+                            .config
+                            .profiles
+                            .keys()
+                            .next()
+                            .expect("validated profile")
+                            .clone(),
+                    };
                 }
                 for doc in &mut self.documents {
                     doc.viewport.set_tab_width(self.config.tab_width);
@@ -2726,7 +2751,22 @@ impl Workspace {
                 .is_some_and(|p| p.server.as_deref() == Some(&key));
             match event {
                 lsp::Event::Ready => {
+                    if self.notification.starts_with(&format!("Starting {name} ")) {
+                        self.notification = format!("{name} ready");
+                        changed = true;
+                    }
                     if ours && self.popup.as_ref().is_some_and(|p| p.request.is_none()) {
+                        self.request_completion(None);
+                        changed = true;
+                    }
+                }
+                lsp::Event::Indexed => {
+                    if ours
+                        && self
+                            .popup
+                            .as_ref()
+                            .is_some_and(|p| !p.semantic && p.request.is_none())
+                    {
                         self.request_completion(None);
                         changed = true;
                     }
@@ -3080,14 +3120,6 @@ impl Workspace {
                         t.scroll_to_live();
                         t.paste(&text);
                     }
-                } else if self.dialog.is_none() && self.focus == Focus::Assistant {
-                    let room = 16384usize.saturating_sub(self.assistant.input.len());
-                    self.assistant.input.extend(
-                        text.chars()
-                            .map(|c| if c == '\n' { ' ' } else { c })
-                            .filter(|c| !c.is_control())
-                            .take(room),
-                    );
                 }
             }
             _ => {}
@@ -3187,7 +3219,11 @@ impl Workspace {
                             file: Some(path.into()),
                             line: row as usize,
                             column: data["submatches"][0]["start"].as_u64().map_or(1, |byte| {
-                                text[..(byte as usize).min(text.len())].chars().count() + 1
+                                let mut end = (byte as usize).min(text.len());
+                                while !text.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                text[..end].chars().count() + 1
                             }),
                             code: None,
                             source: "rg".into(),
@@ -4205,11 +4241,14 @@ fn draw_popup(popup: &Popup, area: Area, cursor: (u16, u16), rows: &mut [Row]) {
         return;
     }
     let word = UnicodeWidthStr::width(popup.query());
-    let column = x.saturating_sub(word).max(left).min(left + width - w);
+    let column = x
+        .saturating_sub(word)
+        .max(left)
+        .min(left + width.saturating_sub(w));
     let first = if room == below {
         y + 1
     } else {
-        y - lines.len()
+        y.saturating_sub(lines.len())
     };
     for (i, line) in lines.iter().enumerate() {
         if let Some(row) = rows.get_mut(first + i) {

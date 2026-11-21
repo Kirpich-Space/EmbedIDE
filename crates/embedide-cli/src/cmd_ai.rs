@@ -396,7 +396,7 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
         }
         AiCmd::Login { provider } => {
             if std::io::stdin().is_terminal() {
-                eprintln!("Paste the {} API key and press Enter (it will be visible; to avoid that, pipe it: `printf %s \"$KEY\" | embedide ai login {}`):", provider.info().name, provider.id());
+                eprintln!("Paste the {} API key and press Enter (it will be visible; to avoid that, pipe it: `printf %s \"$KEY\" | embed ai login {}`):", provider.info().name, provider.id());
             }
             let mut line = String::new();
             std::io::stdin()

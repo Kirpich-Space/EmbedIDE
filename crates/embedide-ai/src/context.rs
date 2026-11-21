@@ -59,30 +59,77 @@ pub struct Context {
 }
 
 /// Simple glob: `*` (no `/`), `**` (anything), `?` (one char).
+/// Runs in O(pattern * path) time with no exponential backtracking.
 pub fn glob_match(pattern: &str, path: &str) -> bool {
-    fn rec(p: &[u8], s: &[u8]) -> bool {
-        match (p.first(), s.first()) {
-            (None, None) => true,
-            (None, Some(_)) => false,
-            (Some(b'*'), _) if p.get(1) == Some(&b'*') => {
-                let rest = if p.get(2) == Some(&b'/') {
-                    &p[3..]
-                } else {
-                    &p[2..]
-                };
-                (0..=s.len()).any(|i| rec(rest, &s[i..]))
-            }
-            (Some(b'*'), _) => (0..=s.len())
-                .take_while(|i| *i == 0 || s[i - 1] != b'/')
-                .any(|i| rec(&p[1..], &s[i..])),
-            (Some(b'?'), Some(c)) if *c != b'/' => rec(&p[1..], &s[1..]),
-            (Some(a), Some(b)) if a == b => rec(&p[1..], &s[1..]),
-            _ => false,
+    fn match_bytes(p: &[u8], s: &[u8]) -> bool {
+        #[derive(Clone, Copy)]
+        enum Tok {
+            StarStar,
+            Star,
+            Any,
+            Lit(u8),
         }
+        let mut toks = Vec::with_capacity(p.len());
+        let mut i = 0;
+        while i < p.len() {
+            if p[i] == b'*' && p.get(i + 1) == Some(&b'*') {
+                toks.push(Tok::StarStar);
+                i += if p.get(i + 2) == Some(&b'/') { 3 } else { 2 };
+            } else if p[i] == b'*' {
+                toks.push(Tok::Star);
+                i += 1;
+            } else if p[i] == b'?' {
+                toks.push(Tok::Any);
+                i += 1;
+            } else {
+                toks.push(Tok::Lit(p[i]));
+                i += 1;
+            }
+        }
+        let mut dp = vec![false; s.len() + 1];
+        dp[0] = true;
+        for tok in toks {
+            let mut next = vec![false; s.len() + 1];
+            match tok {
+                Tok::StarStar => {
+                    let mut seen = false;
+                    for j in 0..=s.len() {
+                        seen |= dp[j];
+                        next[j] = seen;
+                    }
+                }
+                Tok::Star => {
+                    let mut seen = false;
+                    for j in 0..=s.len() {
+                        if j > 0 && s[j - 1] == b'/' {
+                            seen = false;
+                        }
+                        seen |= dp[j];
+                        next[j] = seen;
+                    }
+                }
+                Tok::Any => {
+                    for j in 0..s.len() {
+                        if dp[j] && s[j] != b'/' {
+                            next[j + 1] = true;
+                        }
+                    }
+                }
+                Tok::Lit(ch) => {
+                    for j in 0..s.len() {
+                        if dp[j] && s[j] == ch {
+                            next[j + 1] = true;
+                        }
+                    }
+                }
+            }
+            dp = next;
+        }
+        dp[s.len()]
     }
     let name = path.rsplit('/').next().unwrap_or(path);
-    rec(pattern.as_bytes(), path.as_bytes())
-        || (!pattern.contains('/') && rec(pattern.as_bytes(), name.as_bytes()))
+    match_bytes(pattern.as_bytes(), path.as_bytes())
+        || (!pattern.contains('/') && match_bytes(pattern.as_bytes(), name.as_bytes()))
 }
 
 fn shown_path(root: Option<&Path>, p: &Path) -> String {
@@ -119,7 +166,22 @@ pub fn gather(
             });
             continue;
         }
-        let bytes = std::fs::read(f)
+        let file = std::fs::File::open(f)
+            .map_err(|e| Error::Config(format!("Cannot read {}: {e}", f.display())))?;
+        let meta = file
+            .metadata()
+            .map_err(|e| Error::Config(format!("Cannot read {}: {e}", f.display())))?;
+        if !meta.is_file() {
+            ctx.refused.push(Refused {
+                path: shown,
+                reason: "not a regular file".into(),
+            });
+            continue;
+        }
+        // Bound the read so huge binary files cannot exhaust memory.
+        let read_cap = budget.clamp(8192, 16 * 1024 * 1024).saturating_add(1);
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(file, read_cap as u64), &mut bytes)
             .map_err(|e| Error::Config(format!("Cannot read {}: {e}", f.display())))?;
         if bytes.contains(&0) {
             ctx.refused.push(Refused {
@@ -135,6 +197,7 @@ pub fn gather(
             });
             continue;
         }
+        let more_on_disk = meta.len() > bytes.len() as u64;
         let text = String::from_utf8_lossy(&bytes);
         let mut take = text.len().min(budget);
         while !text.is_char_boundary(take) {
@@ -146,7 +209,7 @@ pub fn gather(
         ctx.files.push(ContextFile {
             path: shown,
             bytes: take,
-            truncated: take < text.len(),
+            truncated: more_on_disk || take < text.len(),
         });
     }
     Ok(ctx)
@@ -166,6 +229,11 @@ mod tests {
         assert!(!glob_match("src/*.c", "src/sub/main.c"));
         assert!(glob_match("src/**/*.c", "src/sub/main.c"));
         assert!(!glob_match("*.pem", "notes.txt"));
+        // Pathological pattern must complete instantly (no exponential backtracking).
+        assert!(!glob_match(
+            "**/**/**/**/**/**/**/**/**/x",
+            "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/y"
+        ));
     }
 
     #[test]

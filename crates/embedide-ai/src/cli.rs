@@ -411,7 +411,7 @@ pub(crate) fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
     let mut attempts = 0;
     loop {
         match cmd.spawn() {
-            Err(e) if e.raw_os_error() == Some(26) && attempts < 20 => {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
                 attempts += 1;
                 thread::sleep(Duration::from_millis(10));
             }
@@ -796,14 +796,33 @@ struct WorkDir(PathBuf);
 impl WorkDir {
     fn new() -> Result<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "embedide-ai-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| Error::Config(format!("Cannot create {}: {e}", dir.display())))?;
-        Ok(Self(dir))
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        for _ in 0..32 {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("embedide-ai-{}-{stamp:x}-{n}", std::process::id(),));
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(Error::Config(format!(
+                        "Cannot create {}: {e}",
+                        dir.display()
+                    )))
+                }
+            }
+        }
+        Err(Error::Config(
+            "Cannot create a private temporary directory for the AI CLI".into(),
+        ))
     }
 }
 impl Drop for WorkDir {

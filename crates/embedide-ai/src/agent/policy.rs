@@ -173,7 +173,6 @@ const DEV_COMMANDS: &[&str] = &[
     "make",
     "gmake",
     "bmake",
-    "gmake",
     "cmake",
     "ctest",
     "ninja",
@@ -565,8 +564,9 @@ impl Rules {
         }
     }
 
-    /// Why an argument word needs approval: a path outside the workspace, or
-    /// a path built from a variable the rules cannot resolve.
+    /// Why an argument word needs approval: a path outside the workspace, a
+    /// sensitive file (`.env`, `.git`, keys, or a symlink escaping the
+    /// workspace), or a path built from a variable the rules cannot resolve.
     fn word_issue(&self, cwd: &Path, word: &str) -> Option<String> {
         if word.contains("$HOME") || word.contains("${HOME") {
             return Some(format!("{word} points into the home directory"));
@@ -574,7 +574,10 @@ impl Rules {
         if word.contains('$') && word.contains('/') {
             return Some(format!("{word} is a path built from a variable"));
         }
-        if looks_like_path(word) {
+        if word.is_empty() {
+            return None;
+        }
+        if looks_like_path(word) || !word.starts_with('-') {
             return self.path_issue(cwd, word);
         }
         None
@@ -653,15 +656,25 @@ impl Rules {
             if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 break;
             }
-            if [
-                "LD_PRELOAD",
-                "LD_LIBRARY_PATH",
-                "PATH",
-                "HOME",
-                "BASH_ENV",
-                "ENV",
-            ]
-            .contains(&name)
+            if name.starts_with("LD_")
+                || name.starts_with("DYLD_")
+                || [
+                    "PATH",
+                    "HOME",
+                    "SHELL",
+                    "IFS",
+                    "BASH_ENV",
+                    "ENV",
+                    "COMPILER_PATH",
+                    "GCC_EXEC_PREFIX",
+                    "PYTHONPATH",
+                    "PYTHONSTARTUP",
+                    "NODE_OPTIONS",
+                    "PERL5OPT",
+                    "RUSTC_WRAPPER",
+                    "GIT_SSH_COMMAND",
+                ]
+                .contains(&name)
             {
                 return CommandClass::Sensitive(format!("changes {name}"));
             }
@@ -900,6 +913,85 @@ impl Rules {
             },
         }
     }
+    /// Scoped key for "allow similar" decisions. Returns `None` for requests
+    /// that must always be approved individually: out-of-workspace or sensitive
+    /// file accesses, compound/redirected shell pipelines, and privileged,
+    /// shell, network or hardware commands.
+    pub fn similar_key(&self, tool: &str, input: &Value) -> Option<String> {
+        let cwd = self.workspace.clone();
+        let path_of = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|k| input.get(*k).and_then(Value::as_str))
+                .map(str::to_string)
+        };
+        match tool {
+            "Read" | "Glob" | "Grep" | "LS" | "NotebookRead" | "Edit" | "Write" | "MultiEdit"
+            | "NotebookEdit" => {
+                let p = path_of(&["file_path", "notebook_path", "path"])?;
+                matches!(self.path(&cwd, &p), PathClass::Inside).then(|| format!("{tool}:inside"))
+            }
+            "Bash" => {
+                let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
+                let tokens = tokenize(cmd)?;
+                if tokens
+                    .iter()
+                    .any(|t| matches!(t, Token::Sep | Token::Redirect(_)))
+                {
+                    return None;
+                }
+                let words: Vec<String> = tokens
+                    .into_iter()
+                    .filter_map(|t| match t {
+                        Token::Word(w) => Some(w),
+                        _ => None,
+                    })
+                    .collect();
+                let mut i = 0;
+                while let Some(w) = words.get(i) {
+                    if let Some((name, _)) = w.split_once('=') {
+                        if !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                let program = words.get(i)?;
+                let args = &words[i + 1..];
+                let name = program.rsplit('/').next().unwrap_or(program);
+                if PRIVILEGE.contains(&name)
+                    || SHELLS.contains(&name)
+                    || NETWORK.contains(&name)
+                    || HARDWARE.contains(&name)
+                    || WRAPPERS.contains(&name)
+                {
+                    return None;
+                }
+                for a in args {
+                    let candidate = if a.starts_with('-') {
+                        match (a.find('='), a.find('/')) {
+                            (Some(eq), _) => &a[eq + 1..],
+                            (None, Some(slash)) if slash <= 3 => &a[slash..],
+                            _ => continue,
+                        }
+                    } else {
+                        a.as_str()
+                    };
+                    if self.word_issue(&cwd, candidate).is_some() {
+                        return None;
+                    }
+                }
+                match self.command(cmd) {
+                    CommandClass::Read => Some(format!("Bash:read:{name}")),
+                    CommandClass::Dev => Some(format!("Bash:dev:{name}")),
+                    CommandClass::Sensitive(_) => Some(format!("Bash:sensitive:{name}")),
+                }
+            }
+            other => Some(other.to_string()),
+        }
+    }
 }
 
 /// Keep the most restrictive class.
@@ -935,6 +1027,33 @@ fn embed_command(args: &[String]) -> CommandClass {
 }
 
 fn git(args: &[String]) -> CommandClass {
+    for a in args {
+        if matches!(
+            a.as_str(),
+            "-c" | "--config-env"
+                | "--exec-path"
+                | "--git-dir"
+                | "--work-tree"
+                | "--upload-pack"
+                | "--receive-pack"
+                | "--ext-diff"
+        ) || a.starts_with("-c") && a.len() > 2 && !a.starts_with("--")
+            || [
+                "--config-env=",
+                "--exec-path=",
+                "--git-dir=",
+                "--work-tree=",
+                "--upload-pack=",
+                "--receive-pack=",
+            ]
+            .iter()
+            .any(|p| a.starts_with(p))
+        {
+            return CommandClass::Sensitive(format!(
+                "git option '{a}' can run commands or change the repository location"
+            ));
+        }
+    }
     let sub = args
         .iter()
         .find(|a| !a.starts_with('-'))
@@ -1132,5 +1251,71 @@ mod tests {
             assert_eq!(p.id().parse::<Policy>().unwrap(), p);
         }
         assert!("yolo".parse::<Policy>().is_err());
+    }
+
+    #[test]
+    fn relative_sensitive_paths_symlinks_git_options_and_similar_keys_are_guarded() {
+        let (r, dir) = rules(Policy::WorkspaceWrite);
+        // Relative .env, .git internals, keys, and dangerous git options must ask.
+        for cmd in [
+            "cat .env",
+            "cat .git/config",
+            "cp a .git/hooks/pre-commit",
+            "cat id_rsa",
+            "git -c core.pager=evil log",
+            "git --exec-path=. status",
+            "LD_AUDIT=evil.so ./app",
+            "PYTHONPATH=. python3 -m unittest",
+        ] {
+            assert!(
+                matches!(r.command(cmd), CommandClass::Sensitive(_)),
+                "{cmd}: {:?}",
+                r.command(cmd)
+            );
+        }
+        #[cfg(unix)]
+        {
+            let link = dir.join("sym-etc");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink("/etc", &link).unwrap();
+            assert!(
+                matches!(r.command("cat sym-etc/hosts"), CommandClass::Sensitive(_)),
+                "relative symlink escaping workspace must ask"
+            );
+            std::fs::remove_file(&link).unwrap();
+        }
+        // AllowSimilar keys must never broaden in-workspace Edit to outside/sensitive files,
+        // nor broaden single commands to compound/outside/privileged pipelines.
+        let inside_edit = json!({"file_path": dir.join("src/a.c").display().to_string()});
+        let outside_edit = json!({"file_path": "/etc/hosts"});
+        let env_edit = json!({"file_path": dir.join(".env").display().to_string()});
+        assert_eq!(
+            r.similar_key("Edit", &inside_edit).as_deref(),
+            Some("Edit:inside")
+        );
+        assert_eq!(r.similar_key("Edit", &outside_edit), None);
+        assert_eq!(r.similar_key("Edit", &env_edit), None);
+        assert_eq!(
+            r.similar_key("Bash", &json!({"command": "make -j4"}))
+                .as_deref(),
+            Some("Bash:dev:make")
+        );
+        assert_eq!(
+            r.similar_key("Bash", &json!({"command": "make && rm -rf /"})),
+            None
+        );
+        assert_eq!(
+            r.similar_key("Bash", &json!({"command": "rm /etc/hosts"})),
+            None
+        );
+        assert_eq!(
+            r.similar_key("Bash", &json!({"command": "sudo make"})),
+            None
+        );
+        assert_eq!(
+            r.similar_key("Bash", &json!({"command": "rm build/a.o"}))
+                .as_deref(),
+            Some("Bash:sensitive:rm")
+        );
     }
 }

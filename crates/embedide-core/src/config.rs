@@ -398,6 +398,28 @@ impl NativeConfig {
                 return Err(Error("Target name must not be empty".into()));
             }
         }
+        for (k, v) in &config.environment {
+            if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+                return Err(Error(format!("Invalid environment variable '{k}'")));
+            }
+            if k.starts_with("LD_")
+                || k.starts_with("DYLD_")
+                || matches!(
+                    k.as_str(),
+                    "PATH"
+                        | "SHELL"
+                        | "IFS"
+                        | "BASH_ENV"
+                        | "ENV"
+                        | "COMPILER_PATH"
+                        | "GCC_EXEC_PREFIX"
+                )
+            {
+                return Err(Error(format!(
+                    "native.environment.{k} cannot be set in project configuration: it controls which programs or libraries processes load"
+                )));
+            }
+        }
         Ok(config)
     }
     /// Extend the existing adapter plan with explicit target/profile/tool overrides.
@@ -498,5 +520,37 @@ mod configured_tool_tests {
         assert!(configured_tool(&tools, "cargo").is_none());
         tools.insert("gmake".to_string(), "/opt/gmake".to_string());
         assert_eq!(configured_tool(&tools, "gmake").unwrap(), "/opt/gmake");
+    }
+
+    #[test]
+    fn project_environment_refuses_loader_and_path_hijack_variables() {
+        let dir = std::env::temp_dir().join(format!("embedide-core-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PATH",
+            "SHELL",
+        ] {
+            std::fs::write(
+                dir.join("embedide.json"),
+                format!(r#"{{"version":1,"native":{{"environment":{{"{name}":"/tmp/evil"}}}}}}"#),
+            )
+            .unwrap();
+            let err = super::NativeConfig::load(&dir).unwrap_err().0;
+            assert!(err.contains(name), "{name}: {err}");
+        }
+        std::fs::write(
+            dir.join("embedide.json"),
+            r#"{"version":1,"native":{"environment":{"MY_FLAG":"1"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::NativeConfig::load(&dir).unwrap().environment["MY_FLAG"],
+            "1"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -568,16 +568,17 @@ pub fn run_capture(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Cannot run {}: {e}", program.display()))?;
-    let mut out = child.stdout.take().expect("piped");
-    let mut err = child.stderr.take().expect("piped");
+    const MAX_PROBE_BYTES: u64 = 1024 * 1024;
+    let out = child.stdout.take().expect("piped");
+    let err = child.stderr.take().expect("piped");
     let ro = thread::spawn(move || {
         let mut s = Vec::new();
-        let _ = out.read_to_end(&mut s);
+        let _ = out.take(MAX_PROBE_BYTES).read_to_end(&mut s);
         s
     });
     let re = thread::spawn(move || {
         let mut s = Vec::new();
-        let _ = err.read_to_end(&mut s);
+        let _ = err.take(MAX_PROBE_BYTES).read_to_end(&mut s);
         s
     });
     let start = Instant::now();

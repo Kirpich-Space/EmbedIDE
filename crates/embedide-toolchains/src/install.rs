@@ -32,6 +32,31 @@ use std::{
 
 /// Hard limit on a download (bytes).
 pub const MAX_DOWNLOAD: u64 = 4 << 30;
+/// Hard limit on a decompressed xz tar stream (bytes).
+const MAX_DECOMPRESSED: u64 = 8 << 30;
+
+struct LimitedWriter<W> {
+    inner: W,
+    written: u64,
+    limit: u64,
+}
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let next = self.written.saturating_add(buf.len() as u64);
+        if next > self.limit {
+            return Err(std::io::Error::other(format!(
+                "decompressed archive exceeded the {} GiB limit",
+                self.limit >> 30
+            )));
+        }
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 /// File written into a finished install; its presence means the directory is complete.
 const MARKER: &str = ".embedide-installed";
@@ -382,9 +407,13 @@ pub fn install(
             let mut input = BufReader::new(
                 File::open(&archive_path).map_err(|e| io_err("Cannot reopen the download", e))?,
             );
-            let mut tar_out = BufWriter::new(
-                File::create(&tar_path).map_err(|e| io_err("Cannot create the tar file", e))?,
-            );
+            let mut tar_out = LimitedWriter {
+                inner: BufWriter::new(
+                    File::create(&tar_path).map_err(|e| io_err("Cannot create the tar file", e))?,
+                ),
+                written: 0,
+                limit: MAX_DECOMPRESSED,
+            };
             lzma_rs::xz_decompress(&mut input, &mut tar_out)
                 .map_err(|e| format!("Cannot decompress the xz archive: {e}"))?;
             tar_out
@@ -485,6 +514,36 @@ fn check_link(entry_rel: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Verify that no existing ancestor component of `rel` inside `dest` is a symlink,
+/// preventing multi-entry tar-slip escapes (`a/b -> ..`, then `a/b/esc -> ..`).
+fn ensure_real_ancestors(dest: &Path, rel: &Path) -> Result<(), String> {
+    let mut cur = dest.to_path_buf();
+    let comps: Vec<_> = rel.components().collect();
+    for c in &comps[..comps.len().saturating_sub(1)] {
+        cur.push(c.as_os_str());
+        match fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(format!(
+                    "Archive entry {} traverses a symlink at {}",
+                    rel.display(),
+                    cur.display()
+                ));
+            }
+            Ok(meta) if !meta.is_dir() => {
+                return Err(format!(
+                    "Archive entry {} has non-directory ancestor {}",
+                    rel.display(),
+                    cur.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(io_err(&format!("Cannot inspect {}", cur.display()), e)),
+        }
+    }
+    Ok(())
+}
+
 fn unpack<R: Read>(reader: R, dest: &Path, strip: usize) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
     archive.set_preserve_permissions(true);
@@ -501,6 +560,7 @@ fn unpack<R: Read>(reader: R, dest: &Path, strip: usize) -> Result<(), String> {
         let Some(rel) = stripped(&raw, strip)? else {
             continue;
         };
+        ensure_real_ancestors(dest, &rel)?;
         let target = dest.join(&rel);
         let kind = entry.header().entry_type();
         if let Some(parent) = target.parent() {
@@ -508,9 +568,21 @@ fn unpack<R: Read>(reader: R, dest: &Path, strip: usize) -> Result<(), String> {
                 .map_err(|e| io_err(&format!("Cannot create {}", parent.display()), e))?;
         }
         if kind.is_dir() {
+            if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(format!(
+                    "Archive directory {} conflicts with an existing symlink",
+                    rel.display()
+                ));
+            }
             fs::create_dir_all(&target)
                 .map_err(|e| io_err(&format!("Cannot create {}", target.display()), e))?;
         } else if kind.is_file() {
+            if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(format!(
+                    "Archive file {} conflicts with an existing symlink",
+                    rel.display()
+                ));
+            }
             let mode = entry.header().mode().unwrap_or(0o644);
             entry
                 .unpack(&target)
@@ -548,7 +620,20 @@ fn unpack<R: Read>(reader: R, dest: &Path, strip: usize) -> Result<(), String> {
             let Some(src_rel) = stripped(&link, strip)? else {
                 continue;
             };
-            let src = dest.join(src_rel);
+            ensure_real_ancestors(dest, &src_rel)?;
+            let src = dest.join(&src_rel);
+            let src_meta = fs::symlink_metadata(&src).map_err(|e| {
+                io_err(
+                    &format!("Cannot inspect hard link target {}", src_rel.display()),
+                    e,
+                )
+            })?;
+            if src_meta.file_type().is_symlink() || !src_meta.is_file() {
+                return Err(format!(
+                    "Archive hard link {} does not point to a regular file",
+                    rel.display()
+                ));
+            }
             let _ = fs::remove_file(&target);
             fs::hard_link(&src, &target)
                 .or_else(|_| fs::copy(&src, &target).map(|_| ()))
@@ -692,5 +777,41 @@ mod tests {
             .unwrap_err()
             .contains("leaves the install directory"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_nested_symlink_traversal_escape() {
+        let base = std::env::temp_dir().join(format!("embedide-slip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dest = base.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        let mut slip = Vec::new();
+        {
+            let mut b = tar::Builder::new(&mut slip);
+            let mut l1 = tar::Header::new_gnu();
+            l1.set_entry_type(tar::EntryType::Symlink);
+            l1.set_path("top/a/b").unwrap();
+            l1.set_link_name("..").unwrap();
+            l1.set_size(0);
+            l1.set_cksum();
+            b.append(&l1, std::io::empty()).unwrap();
+            let mut l2 = tar::Header::new_gnu();
+            l2.set_entry_type(tar::EntryType::Symlink);
+            l2.set_path("top/a/b/esc").unwrap();
+            l2.set_link_name("..").unwrap();
+            l2.set_size(0);
+            l2.set_cksum();
+            b.append(&l2, std::io::empty()).unwrap();
+            let mut f = tar::Header::new_gnu();
+            f.set_path("top/a/b/esc/pwned").unwrap();
+            f.set_size(4);
+            f.set_cksum();
+            b.append(&f, &b"evil"[..]).unwrap();
+            b.finish().unwrap();
+        }
+        let err = unpack(&slip[..], &dest, 1).unwrap_err();
+        assert!(err.contains("traverses a symlink"), "{err}");
+        assert!(!base.join("pwned").exists());
+        let _ = fs::remove_dir_all(&base);
     }
 }

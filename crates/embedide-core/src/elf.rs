@@ -266,7 +266,10 @@ impl Reader<'_> {
                 Some(0) | None => break,
                 Some(b) => out.push(b),
             }
-            pos += 1;
+            let Some(next) = pos.checked_add(1) else {
+                break;
+            };
+            pos = next;
         }
         String::from_utf8_lossy(&out).into_owned()
     }
@@ -452,7 +455,8 @@ fn parse_source(data: &dyn Source) -> Result<Elf> {
         .iter()
         .map(|s| Section {
             name: names
-                .map(|base| r.cstr(base + u64::from(s.name)))
+                .and_then(|base| base.checked_add(u64::from(s.name)))
+                .map(|off| r.cstr(off))
                 .unwrap_or_default(),
             kind: match s.kind {
                 0 => "NULL".into(),
@@ -538,7 +542,10 @@ fn parse_source(data: &dyn Source) -> Result<Elf> {
                 break;
             };
             symbols.push(Symbol {
-                name: r.cstr(strtab + u64::from(name)),
+                name: strtab
+                    .checked_add(u64::from(name))
+                    .map(|off| r.cstr(off))
+                    .unwrap_or_default(),
                 value,
                 size,
                 kind: match info & 0xf {
@@ -585,14 +592,16 @@ impl Elf {
     pub fn section_at(&self, addr: u64) -> Option<&Section> {
         self.sections
             .iter()
-            .find(|s| s.addr != 0 && addr >= s.addr && addr < s.addr + s.size.max(1))
+            .find(|s| s.addr != 0 && addr >= s.addr && addr < s.addr.saturating_add(s.size.max(1)))
     }
     /// File offset of a virtual address, through the program headers.
     pub fn file_offset(&self, addr: u64) -> Option<u64> {
         self.segments
             .iter()
-            .find(|s| s.kind == "LOAD" && addr >= s.vaddr && addr < s.vaddr + s.filesz)
-            .map(|s| s.offset + (addr - s.vaddr))
+            .find(|s| {
+                s.kind == "LOAD" && addr >= s.vaddr && addr < s.vaddr.saturating_add(s.filesz)
+            })
+            .and_then(|s| s.offset.checked_add(addr - s.vaddr))
     }
     /// A function or object symbol by name.
     pub fn symbol(&self, name: &str) -> Option<&Symbol> {

@@ -108,11 +108,17 @@ fn path_argument(path: &Path) -> String {
 
 /// Run the disassembler (bounded in time and size) and parse its output.
 pub fn disassemble(program: &Path, args: &[String]) -> Result<Listing> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| Error(format!("Cannot run {}: {e}", program.display())))?;
     let mut out = child.stdout.take().expect("piped");
@@ -135,6 +141,16 @@ pub fn disassemble(program: &Path, args: &[String]) -> Result<Listing> {
             Ok(Some(status)) => break status,
             Ok(None) if start.elapsed() < TIMEOUT => thread::sleep(Duration::from_millis(20)),
             _ => {
+                #[cfg(unix)]
+                {
+                    use nix::{
+                        sys::signal::{killpg, Signal},
+                        unistd::Pid,
+                    };
+                    if let Ok(pid) = i32::try_from(child.id()) {
+                        let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+                    }
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(Error(format!(
@@ -148,7 +164,10 @@ pub fn disassemble(program: &Path, args: &[String]) -> Result<Listing> {
     let stderr = String::from_utf8_lossy(&err_reader.join().unwrap_or_default())
         .trim()
         .to_string();
-    if !status.success() {
+    let truncated = data.len() > MAX_OUTPUT;
+    // If output hit MAX_OUTPUT, dropping stdout closes the pipe and the disassembler
+    // may terminate via SIGPIPE (non-zero status with empty stderr); keep the truncated listing.
+    if !status.success() && !(truncated && stderr.is_empty()) {
         return Err(Error(format!(
             "{} failed: {}",
             program.display(),
@@ -159,13 +178,18 @@ pub fn disassemble(program: &Path, args: &[String]) -> Result<Listing> {
             }
         )));
     }
-    let truncated = data.len() > MAX_OUTPUT;
     let text = String::from_utf8_lossy(&data[..data.len().min(MAX_OUTPUT)]);
     let mut lines = parse(&text);
     let truncated = truncated || lines.len() > MAX_LINES;
     lines.truncate(MAX_LINES);
+    let flags = args[..args.len().saturating_sub(1)].join(" ");
+    let tool = if flags.is_empty() {
+        program.display().to_string()
+    } else {
+        format!("{} {flags}", program.display())
+    };
     Ok(Listing {
-        tool: format!("{} {}", program.display(), args[..args.len() - 2].join(" ")),
+        tool,
         lines,
         truncated,
     })
