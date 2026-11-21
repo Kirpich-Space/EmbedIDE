@@ -29,7 +29,7 @@ never flashes anything on its own.
 <table>
 <tr>
 <td width="50%"><img alt="Codex CLI agent editing a project and running make" src="docs/img/agent-codex.png"><br><sub><b>Agent mode</b> — Codex CLI creates <code>add.c</code>, builds with <code>make</code>, runs the program; every step and file change is shown, reviewable and revertible.</sub></td>
-<td width="50%"><img alt="Disassembly of a function in the built ELF" src="docs/img/disassembly.png"><br><sub><b>Binary view</b> — HEX, ELF inspector and disassembly of the program you just built (objdump).</sub></td>
+<td width="50%"><img alt="Disassembly of a function in the built ELF" src="docs/img/disassembly.png"><br><sub><b>Binary view</b> — HEX, ELF inspector and built-in x86/x86-64 disassembly of the program you just built.</sub></td>
 </tr>
 </table>
 
@@ -49,7 +49,7 @@ An **alpha**: usable for real work in the terminal, with rough edges. What was c
 
 | Status | What |
 |---|---|
-| **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, explorer, search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo) and C + GNU assembly with GCC; ELF inspector, HEX viewer/editor, disassembly (objdump); AI panel with Claude Code as agent (run live) and chat; skills; official Carbon/Bone theme |
+| **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, explorer, search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo) and C + GNU assembly with GCC; ELF inspector, HEX viewer/editor, built-in x86/x86-64 disassembler (`objdump` fallback for other architectures); AI panel with Claude Code as agent (run live) and chat; skills; official Carbon/Bone theme |
 | **Experimental** (implemented, verified only with mocks or not at all) | Codex CLI as agent (mock CLI; the live run was blocked by a broken local Codex install); API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig and Fortran builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (clangd, rust-analyzer, zls); FreeBSD (compiled and linted, never run), Linux musl |
 | **Planned** | Native Rust GUI (not started — the TUI is the interface of this release); DWARF source mapping in the binary view; warm completion sessions |
 
@@ -114,7 +114,8 @@ file). See [the TUI guide](docs/cli/tui.md).
   highlighting, labels (`:label`), completion of labels/instructions/registers, assembler errors in
   PROBLEMS; [examples/asm](examples/asm).
 - **Binary files** — HEX viewer with search and a confirmed, undoable edit mode; ELF inspector (headers,
-  segments, sections, symbols); disassembly via objdump/llvm-objdump. See
+  segments, sections, symbols); built-in x86/x86-64 disassembler (`iced-x86`), with `objdump`/`llvm-objdump`
+  fallback for other architectures. See
   [binary files](docs/cli/tui.md#binary-files-hex-elf-and-disassembly).
 
 You choose the compilers. EmbedIDE detects what is installed — GCC, Clang, `zig cc` / `zig c++`,

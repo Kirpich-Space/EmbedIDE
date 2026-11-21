@@ -104,6 +104,25 @@ impl SyntaxFormatter {
     }
 }
 
+fn collect_symbols(elf: &Elf, section_filter: Option<u16>) -> Vec<(u64, String)> {
+    let mut syms: Vec<(u64, String, bool, bool)> = elf
+        .symbols
+        .iter()
+        .filter(|s| {
+            !s.name.is_empty()
+                && s.section != 0
+                && s.section < 0xff00
+                && s.kind != "FILE"
+                && s.kind != "SECTION"
+                && section_filter.is_none_or(|idx| s.section == idx)
+        })
+        .map(|s| (s.value, s.name.clone(), s.dynamic, s.kind != "FUNC"))
+        .collect();
+    syms.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+    syms.dedup_by_key(|a| a.0);
+    syms.into_iter().map(|(a, n, _, _)| (a, n)).collect()
+}
+
 /// Disassemble executable sections of an x86 / x86-64 ELF file using the
 /// built-in pure-Rust `iced-x86` decoder (no external `objdump` process).
 pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listing> {
@@ -123,22 +142,22 @@ pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listin
         .map_err(|e| Error(format!("Cannot stat {}: {e}", path.display())))?
         .len();
 
-    let mut syms: Vec<(u64, String, bool, bool)> = elf
-        .symbols
-        .iter()
-        .filter(|s| !s.name.is_empty() && s.value != 0 && s.kind != "FILE" && s.kind != "SECTION")
-        .map(|s| (s.value, s.name.clone(), s.dynamic, s.kind != "FUNC"))
-        .collect();
-    syms.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
-    syms.dedup_by_key(|a| a.0);
-    let syms: Vec<(u64, String)> = syms.into_iter().map(|(a, n, _, _)| (a, n)).collect();
-
-    let mut formatter = SyntaxFormatter::new(intel, syms.clone());
+    let is_rel = elf.kind == "REL";
+    let global_syms = if is_rel {
+        Vec::new()
+    } else {
+        collect_symbols(elf, None)
+    };
+    let mut global_formatter = if is_rel {
+        None
+    } else {
+        Some(SyntaxFormatter::new(intel, global_syms.clone()))
+    };
     let mut lines = Vec::new();
     let mut total_read = 0usize;
     let mut truncated = false;
 
-    for sec in &elf.sections {
+    for (sec_idx, sec) in elf.sections.iter().enumerate() {
         if !sec.executable() || sec.kind == "NOBITS" || sec.size == 0 {
             continue;
         }
@@ -173,6 +192,22 @@ pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listin
             break;
         }
 
+        let rel_syms;
+        let mut rel_formatter;
+        let (syms, formatter): (&[(u64, String)], &mut SyntaxFormatter) = if is_rel {
+            rel_syms = u16::try_from(sec_idx)
+                .ok()
+                .map(|idx| collect_symbols(elf, Some(idx)))
+                .unwrap_or_default();
+            rel_formatter = SyntaxFormatter::new(intel, rel_syms.clone());
+            (&rel_syms, &mut rel_formatter)
+        } else {
+            (
+                &global_syms,
+                global_formatter.as_mut().expect("non-rel formatter"),
+            )
+        };
+
         let sec_end = sec.addr.saturating_add(want as u64);
         let mut sym_idx = syms.partition_point(|(a, _)| *a < sec.addr);
         let mut decoder = Decoder::with_ip(bitness, &buf, sec.addr, DecoderOptions::NONE);
@@ -180,8 +215,10 @@ pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listin
         let mut text = String::new();
 
         while decoder.can_decode() {
+            let offset = decoder.position();
             let ip = decoder.ip();
-            while sym_idx < syms.len() && syms[sym_idx].0 <= ip && syms[sym_idx].0 < sec_end {
+            let cur_addr = sec.addr.saturating_add(offset as u64);
+            while sym_idx < syms.len() && syms[sym_idx].0 <= cur_addr && syms[sym_idx].0 < sec_end {
                 lines.push(Line {
                     kind: Kind::Symbol,
                     addr: Some(syms[sym_idx].0),
@@ -198,9 +235,8 @@ pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listin
                 break;
             }
             let instr = decoder.decode();
-            let offset = (ip - sec.addr) as usize;
             let len = instr.len();
-            let slice = &buf[offset..offset + len];
+            let slice = buf.get(offset..offset + len).unwrap_or(&[]);
             bytes_str.clear();
             for (i, b) in slice.iter().enumerate() {
                 if i > 0 {

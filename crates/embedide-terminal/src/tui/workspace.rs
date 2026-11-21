@@ -2152,6 +2152,7 @@ impl Workspace {
                 if let Some(view) = &mut self.binary {
                     let n = view.file.changed();
                     view.file.save().map_err(service_error)?;
+                    view.invalidate_analysis();
                     view.editing = false;
                     view.message =
                         format!("Wrote {n} changed bytes; untouched bytes were copied unchanged");

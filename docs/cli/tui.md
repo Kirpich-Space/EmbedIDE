@@ -336,8 +336,9 @@ section in HEX, and an executable section or function symbol in the disassembly.
 files show what could be read, with notes; nothing is executed. The reader is EmbedIDE's own
 bounds-checked parser (no extra dependency).
 
-**Disassembly** (`d`): runs `objdump -d -w` (GNU binutils) for x86 binaries and `llvm-objdump -d` for
-other architectures (AArch64, RISC-V, ARM, …), each falling back to the other; the program is never run.
+**Disassembly** (`d`): uses the built-in pure-Rust `iced-x86` disassembler for x86 / x86-64 binaries (no
+external `objdump` required), and falls back to `llvm-objdump -d` / `objdump -d -w` for other architectures
+(AArch64, RISC-V, ARM, …) or when custom paths are configured; the program is never run.
 Each line shows address, instruction bytes and the instruction; symbols (`<main>:`) and sections are
 headers. `g` goes to an address (hex), `/` searches instructions or `<symbol>`, `n` repeats, `m` jumps to
 `main`, `[` / `]` previous / next section, `s` toggles Intel / AT&T syntax on x86, Enter shows the bytes in

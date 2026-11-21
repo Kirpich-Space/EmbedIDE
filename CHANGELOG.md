@@ -1,15 +1,27 @@
 # Changelog
 
-## Unreleased
+## `embed` 0.1.0-alpha.1 — update of 2026-11-22 (same version, rebuilt archives)
+
+The `0.1.0-alpha.1` release was updated in place: its archives were rebuilt with the changes below. The
+version string is unchanged, so check `SHA256SUMS` to tell the builds apart.
 
 ### Security
-- **A project manifest can no longer choose what the build loads.** `embedide.toml` `[env]` refuses `LD_*`, `DYLD_*`,
-  `PATH`, `SHELL`, `IFS`, `BASH_ENV`, `ENV`, `COMPILER_PATH` and `GCC_EXEC_PREFIX` (an `LD_PRELOAD` in a cloned
-  project's manifest used to run its library inside the compiler on F5 or `embed build`). Compiler flags that load or run
-  project code (`-fplugin`, `-wrapper`, `-specs`, `-B…`, `-load`) are reported as warnings by `embed build` and
-  `embed project info`; they stay allowed because embedded projects use `-specs=nano.specs`. Build only projects you trust.
+- **A project manifest can no longer choose what the build loads.** `embedide.toml` `[env]` and `embedide.json`
+  `native.environment` refuse `LD_*`, `DYLD_*`, `PATH`, `SHELL`, `IFS`, `BASH_ENV`, `ENV`, `COMPILER_PATH` and
+  `GCC_EXEC_PREFIX` (an `LD_PRELOAD` in a cloned project's manifest used to run its library inside the compiler
+  on F5 or `embed build`). Compiler flags that load or run project code (`-fplugin`, `-wrapper`, `-specs`,
+  `-B…`, `-load`) are reported as warnings by `embed build` and `embed project info`; they stay allowed
+  because embedded projects use `-specs=nano.specs`. Build only projects you trust.
+- **Additional hardening:** expanded blocked environment variables and sensitive-path / `similar_key` checks in
+  the AI agent policy; bounded decompressed xz/tar size (8 GiB) in toolchain downloads; bounded LSP header line
+  size (64 KiB) and toolchain probe output (1 MiB); replaced exponential backtracking in `glob_match` with
+  `O(pattern * path)` matching; ensured timed-out `objdump` process groups are killed cleanly.
 
 ### Added
+- **Built-in x86 / x86-64 disassembler (`iced-x86`).** Executable sections of x86 and x86-64 ELF binaries (both
+  executables and `.o` objects) are now disassembled directly inside `embed` with AT&T and Intel syntax and
+  symbol resolution, requiring no external `objdump`. `objdump` / `llvm-objdump` remains as a fallback for other
+  architectures (ARM, AArch64, RISC-V, …) or when explicitly configured.
 - **Panel keys that need no Alt.** The FreeBSD console has no Alt prefix (its keymap sends Alt+1 as a plain `1`), so Alt+digit and
   Alt+digit+Delete never reached EmbedIDE there. In Normal mode `Space 1/2/3` open the explorer / AI panel / terminal, `Space E/A/T`
   hide them, and `Ctrl+]` (also `F6`) moves focus on from any panel, the shell included. Documented in `docs/cli/keys.md`.
@@ -18,6 +30,12 @@
   looked only for `clangd`, so code completion fell back to words from the file. It now finds the newest versioned clangd.
 
 ### Fixed
+- **Binary view cache invalidation:** saving patched bytes in HEX mode now invalidates cached ELF and
+  disassembly data so switching to ELF or DISASM reflects the updated binary.
+- **TUI, build and binary edge cases:** UTF-8 boundary handling in `:label` and binary pattern escapes,
+  automatic parent directory creation on `:e`, `Drop` shutdown and `/cancel` cleanup in the AI panel, depfile
+  resolution relative to the project root, deferred output directory creation on build start, and `checked_add`
+  bounds in the ELF reader.
 - **Backspace on the FreeBSD console (and any terminal with `stty erase ^H`):** the key arrives as BS (0x08, `^H`), which the
   key parser reports as Ctrl+H; no mode handled it, so nothing was deleted and the status line said "Key not handled by the
   editor". Ctrl+H (and a literal BS or DEL character) now mean Backspace everywhere except the shell panel, which still

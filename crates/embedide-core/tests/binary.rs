@@ -408,10 +408,14 @@ fn builtin_disassembler_decodes_x86_64_elf_in_att_and_intel_without_external_too
         att.lines[main_idx].addr,
         Some(e.symbol("main").unwrap().value)
     );
-    assert!(att.lines[main_idx + 1..]
+    let att_body: Vec<&disasm::Line> = att.lines[main_idx + 1..].iter().take(6).collect();
+    assert!(att_body
         .iter()
-        .take(3)
         .all(|l| l.kind == disasm::Kind::Instruction && !l.bytes.is_empty()));
+    assert!(
+        att_body.iter().any(|l| l.text.contains('%')),
+        "AT&T syntax uses % registers: {att_body:?}"
+    );
 
     let intel = disasm::disassemble_builtin(&e, &path, true).unwrap();
     assert!(intel.tool.contains("intel"));
@@ -421,4 +425,58 @@ fn builtin_disassembler_decodes_x86_64_elf_in_att_and_intel_without_external_too
         .position(|l| l.kind == disasm::Kind::Symbol && l.text == "main")
         .expect("main symbol in intel");
     assert_eq!(intel.lines[intel_main].addr, att.lines[main_idx].addr);
+    let intel_body: Vec<&disasm::Line> = intel.lines[intel_main + 1..].iter().take(6).collect();
+    assert!(
+        intel_body.iter().all(|l| !l.text.contains('%')),
+        "Intel syntax omits % registers: {intel_body:?}"
+    );
+
+    // ET_REL (.o) object file: symbol at offset 0 must still be emitted and scoped to its section.
+    let src = d.0.join("obj.c");
+    let obj = d.0.join("obj.o");
+    std::fs::write(&src, "int first_fn(int x) { return x + 1; }\n").unwrap();
+    let status = Command::new("gcc")
+        .args(["-O0", "-c", "-o"])
+        .arg(&obj)
+        .arg(&src)
+        .status();
+    if status.is_ok_and(|s| s.success()) {
+        let rel = elf::read(&obj).unwrap();
+        let listing = disasm::disassemble_builtin(&rel, &obj, true).unwrap();
+        let sym = listing
+            .lines
+            .iter()
+            .find(|l| l.kind == disasm::Kind::Symbol && l.text == "first_fn")
+            .expect("first_fn at offset 0 in ET_REL");
+        assert_eq!(sym.addr, Some(0));
+    }
+
+    // Crafted ELF whose section address wraps past u64::MAX must never panic.
+    let raw = d.0.join("wrap.bin");
+    std::fs::write(&raw, [0x90u8; 16]).unwrap();
+    let crafted = elf::Elf {
+        class: 64,
+        little: true,
+        kind: "EXEC".into(),
+        machine: "x86-64".into(),
+        machine_id: 62,
+        osabi: 0,
+        entry: 0,
+        segments: Vec::new(),
+        sections: vec![elf::Section {
+            name: ".text".into(),
+            kind: "PROGBITS".into(),
+            flags: "AX".into(),
+            addr: u64::MAX - 4,
+            offset: 0,
+            size: 16,
+        }],
+        symbols: Vec::new(),
+        notes: Vec::new(),
+    };
+    let wrapped = disasm::disassemble_builtin(&crafted, &raw, true).unwrap();
+    assert!(wrapped
+        .lines
+        .iter()
+        .any(|l| l.kind == disasm::Kind::Instruction && l.text == "nop"));
 }

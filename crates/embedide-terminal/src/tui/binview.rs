@@ -137,6 +137,12 @@ impl BinaryView {
         self.file.path()
     }
 
+    /// Drop cached ELF/disassembly state after saving patched bytes to disk.
+    pub fn invalidate_analysis(&mut self) {
+        self.elf = None;
+        self.disasm = Disasm::None;
+    }
+
     fn elf(&mut self) -> Result<&elf::Elf, String> {
         if self.elf.is_none() {
             self.elf = Some(elf::read(self.file.path()).map_err(|e| e.0));
