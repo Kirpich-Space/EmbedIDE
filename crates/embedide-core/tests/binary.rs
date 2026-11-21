@@ -388,3 +388,37 @@ fn elf_overflow_offsets_short_disasm_args_and_utf8_pattern_escapes_never_panic()
         "ж".as_bytes()
     );
 }
+
+#[test]
+fn builtin_disassembler_decodes_x86_64_elf_in_att_and_intel_without_external_tools() {
+    let d = Dir::new();
+    let Some(path) = gcc_binary(&d) else { return };
+    let e = elf::read(&path).unwrap();
+    if !disasm::supports_builtin(&e) {
+        return;
+    }
+    let att = disasm::disassemble_builtin(&e, &path, false).unwrap();
+    assert!(att.tool.contains("built-in"));
+    let main_idx = att
+        .lines
+        .iter()
+        .position(|l| l.kind == disasm::Kind::Symbol && l.text == "main")
+        .expect("main symbol");
+    assert_eq!(
+        att.lines[main_idx].addr,
+        Some(e.symbol("main").unwrap().value)
+    );
+    assert!(att.lines[main_idx + 1..]
+        .iter()
+        .take(3)
+        .all(|l| l.kind == disasm::Kind::Instruction && !l.bytes.is_empty()));
+
+    let intel = disasm::disassemble_builtin(&e, &path, true).unwrap();
+    assert!(intel.tool.contains("intel"));
+    let intel_main = intel
+        .lines
+        .iter()
+        .position(|l| l.kind == disasm::Kind::Symbol && l.text == "main")
+        .expect("main symbol in intel");
+    assert_eq!(intel.lines[intel_main].addr, att.lines[main_idx].addr);
+}

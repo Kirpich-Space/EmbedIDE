@@ -1,12 +1,17 @@
-//! Disassembly through an installed disassembler: GNU `objdump` for x86
-//! binaries, `llvm-objdump` for other architectures (it reads the machine
-//! from the ELF header), each falling back to the other. The binary is only
-//! read, never executed. Output is parsed into addresses, instruction bytes
-//! and text, with symbol and section headers; source mappings are never
-//! invented (stripped binaries simply have no symbols).
+//! Disassembly: built-in pure-Rust decoder (`iced-x86`) for x86 / x86-64
+//! ELF binaries, with GNU `objdump` / `llvm-objdump` fallback for other
+//! architectures or explicit tool overrides. The binary is only read, never
+//! executed. Output is parsed into addresses, instruction bytes and text, with
+//! symbol and section headers; source mappings are never invented (stripped
+//! binaries simply have no symbols).
 use crate::{elf::Elf, Error, Result};
+use iced_x86::{
+    Decoder, DecoderOptions, Formatter, GasFormatter, IntelFormatter, SymbolResolver, SymbolResult,
+};
 use std::{
-    io::Read,
+    fmt::Write as _,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -53,6 +58,179 @@ pub struct Listing {
     pub lines: Vec<Line>,
     /// The listing was cut at the size limit.
     pub truncated: bool,
+}
+
+/// Whether the built-in pure-Rust disassembler supports this ELF machine.
+pub fn supports_builtin(elf: &Elf) -> bool {
+    matches!(elf.machine_id, 3 | 62)
+}
+
+struct ElfSymbols(Vec<(u64, String)>);
+
+impl SymbolResolver for ElfSymbols {
+    fn symbol(
+        &mut self,
+        _instruction: &iced_x86::Instruction,
+        _operand: u32,
+        _instruction_operand: Option<u32>,
+        address: u64,
+        _address_size: u32,
+    ) -> Option<SymbolResult<'_>> {
+        let idx = self.0.binary_search_by_key(&address, |(a, _)| *a).ok()?;
+        Some(SymbolResult::with_str(address, &self.0[idx].1))
+    }
+}
+
+enum SyntaxFormatter {
+    Gas(GasFormatter),
+    Intel(IntelFormatter),
+}
+
+impl SyntaxFormatter {
+    fn new(intel: bool, syms: Vec<(u64, String)>) -> Self {
+        let resolver = Box::new(ElfSymbols(syms));
+        if intel {
+            Self::Intel(IntelFormatter::with_options(Some(resolver), None))
+        } else {
+            Self::Gas(GasFormatter::with_options(Some(resolver), None))
+        }
+    }
+
+    fn format(&mut self, instr: &iced_x86::Instruction, out: &mut String) {
+        match self {
+            Self::Gas(f) => f.format(instr, out),
+            Self::Intel(f) => f.format(instr, out),
+        }
+    }
+}
+
+/// Disassemble executable sections of an x86 / x86-64 ELF file using the
+/// built-in pure-Rust `iced-x86` decoder (no external `objdump` process).
+pub fn disassemble_builtin(elf: &Elf, path: &Path, intel: bool) -> Result<Listing> {
+    let bitness = match elf.machine_id {
+        3 => 32,
+        62 => 64,
+        other => {
+            return Err(Error(format!(
+                "Built-in disassembler does not support ELF machine {other}"
+            )));
+        }
+    };
+    let mut file =
+        File::open(path).map_err(|e| Error(format!("Cannot read {}: {e}", path.display())))?;
+    let file_len = file
+        .metadata()
+        .map_err(|e| Error(format!("Cannot stat {}: {e}", path.display())))?
+        .len();
+
+    let mut syms: Vec<(u64, String, bool, bool)> = elf
+        .symbols
+        .iter()
+        .filter(|s| !s.name.is_empty() && s.value != 0 && s.kind != "FILE" && s.kind != "SECTION")
+        .map(|s| (s.value, s.name.clone(), s.dynamic, s.kind != "FUNC"))
+        .collect();
+    syms.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+    syms.dedup_by_key(|a| a.0);
+    let syms: Vec<(u64, String)> = syms.into_iter().map(|(a, n, _, _)| (a, n)).collect();
+
+    let mut formatter = SyntaxFormatter::new(intel, syms.clone());
+    let mut lines = Vec::new();
+    let mut total_read = 0usize;
+    let mut truncated = false;
+
+    for sec in &elf.sections {
+        if !sec.executable() || sec.kind == "NOBITS" || sec.size == 0 {
+            continue;
+        }
+        if lines.len() >= MAX_LINES || total_read >= MAX_OUTPUT {
+            truncated = true;
+            break;
+        }
+        let avail = file_len.saturating_sub(sec.offset);
+        let budget = (MAX_OUTPUT - total_read) as u64;
+        let want = sec.size.min(avail).min(budget) as usize;
+        if (want as u64) < sec.size {
+            truncated = true;
+        }
+        if want == 0 {
+            continue;
+        }
+        file.seek(SeekFrom::Start(sec.offset))
+            .map_err(|e| Error(format!("Cannot seek {}: {e}", path.display())))?;
+        let mut buf = vec![0u8; want];
+        file.read_exact(&mut buf)
+            .map_err(|e| Error(format!("Cannot read {}: {e}", path.display())))?;
+        total_read += want;
+
+        lines.push(Line {
+            kind: Kind::Section,
+            addr: None,
+            bytes: String::new(),
+            text: sec.name.clone(),
+        });
+        if lines.len() >= MAX_LINES {
+            truncated = true;
+            break;
+        }
+
+        let sec_end = sec.addr.saturating_add(want as u64);
+        let mut sym_idx = syms.partition_point(|(a, _)| *a < sec.addr);
+        let mut decoder = Decoder::with_ip(bitness, &buf, sec.addr, DecoderOptions::NONE);
+        let mut bytes_str = String::new();
+        let mut text = String::new();
+
+        while decoder.can_decode() {
+            let ip = decoder.ip();
+            while sym_idx < syms.len() && syms[sym_idx].0 <= ip && syms[sym_idx].0 < sec_end {
+                lines.push(Line {
+                    kind: Kind::Symbol,
+                    addr: Some(syms[sym_idx].0),
+                    bytes: String::new(),
+                    text: syms[sym_idx].1.clone(),
+                });
+                sym_idx += 1;
+                if lines.len() >= MAX_LINES {
+                    truncated = true;
+                    break;
+                }
+            }
+            if truncated {
+                break;
+            }
+            let instr = decoder.decode();
+            let offset = (ip - sec.addr) as usize;
+            let len = instr.len();
+            let slice = &buf[offset..offset + len];
+            bytes_str.clear();
+            for (i, b) in slice.iter().enumerate() {
+                if i > 0 {
+                    bytes_str.push(' ');
+                }
+                let _ = write!(bytes_str, "{b:02x}");
+            }
+            text.clear();
+            formatter.format(&instr, &mut text);
+            lines.push(Line {
+                kind: Kind::Instruction,
+                addr: Some(ip),
+                bytes: bytes_str.clone(),
+                text: text.clone(),
+            });
+            if lines.len() >= MAX_LINES {
+                truncated = true;
+                break;
+            }
+        }
+    }
+
+    Ok(Listing {
+        tool: format!(
+            "built-in (iced-x86, {})",
+            if intel { "intel" } else { "att" }
+        ),
+        lines,
+        truncated,
+    })
 }
 
 fn on_path(name: &str) -> Option<PathBuf> {

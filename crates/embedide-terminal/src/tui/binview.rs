@@ -164,25 +164,35 @@ impl BinaryView {
 
     fn start_disasm(&mut self) {
         let path = self.file.path().to_path_buf();
-        let command = self.elf().cloned().and_then(|e| {
-            disasm::command(
-                &e,
-                &path,
-                self.settings.intel,
-                self.settings.objdump.as_deref(),
-                self.settings.llvm_objdump.as_deref(),
-            )
-            .map_err(|e| e.0)
-        });
-        match command {
-            Ok((program, args)) => {
+        let intel = self.settings.intel;
+        let has_override = self.settings.objdump.is_some() || self.settings.llvm_objdump.is_some();
+        match self.elf().cloned() {
+            Ok(elf) if disasm::supports_builtin(&elf) && !has_override => {
                 let (tx, rx) = mpsc::channel();
                 thread::spawn(move || {
-                    let _ = tx.send(disasm::disassemble(&program, &args).map_err(|e| e.0));
+                    let _ =
+                        tx.send(disasm::disassemble_builtin(&elf, &path, intel).map_err(|e| e.0));
                 });
                 self.disasm = Disasm::Running(rx);
                 self.message = "Disassembling…".into();
             }
+            Ok(elf) => match disasm::command(
+                &elf,
+                &path,
+                intel,
+                self.settings.objdump.as_deref(),
+                self.settings.llvm_objdump.as_deref(),
+            ) {
+                Ok((program, args)) => {
+                    let (tx, rx) = mpsc::channel();
+                    thread::spawn(move || {
+                        let _ = tx.send(disasm::disassemble(&program, &args).map_err(|e| e.0));
+                    });
+                    self.disasm = Disasm::Running(rx);
+                    self.message = "Disassembling…".into();
+                }
+                Err(e) => self.disasm = Disasm::Failed(e.0),
+            },
             Err(e) => self.disasm = Disasm::Failed(e),
         }
     }

@@ -82,7 +82,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "disasm",
-        "Disassemble Binary (objdump / llvm-objdump; :disasm <path>)",
+        "Disassemble Binary (built-in x86/x86-64, objdump fallback; :disasm <path>)",
     ),
     ("close_binary", "Close Binary View"),
     ("build", "Build Project"),
