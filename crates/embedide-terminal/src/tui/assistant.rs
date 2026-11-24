@@ -1123,7 +1123,7 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             } else if self.job.is_some() {
                 "/cancel stops the answer".to_string()
             } else if self.provider.is_none() {
-                "/provider claude-code  or  /provider codex-cli".to_string()
+                "/provider claude-code, codex-cli or antigravity (agy)".to_string()
             } else if self.agent_active() {
                 format!("Task for the {who} agent · Enter runs · /mode chat · /help")
             } else {

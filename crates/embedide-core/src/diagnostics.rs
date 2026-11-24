@@ -97,7 +97,44 @@ pub fn parse(line: &str) -> Option<Diagnostic> {
             source: "cmake".into(),
         });
     }
+    // R `parse(file=...)` errors: `Error in parse(...) : file.R:3:1: unexpected symbol`
+    // or continuation line `  file.R:3:1: unexpected symbol`.
+    if let Some(diag) = parse_r_location_message(line) {
+        return Some(diag);
+    }
     None
+}
+
+/// Parse R `parse()` diagnostics: `[Error in parse(...) : ]path.R:line:col: message`.
+fn parse_r_location_message(line: &str) -> Option<Diagnostic> {
+    let trimmed = line.trim();
+    let body = if let Some(rest) = trimmed.strip_prefix("Error in ") {
+        rest.split_once(" : ").map(|(_, tail)| tail.trim())?
+    } else if line.starts_with(' ') {
+        trimmed
+    } else {
+        return None;
+    };
+    let (loc, message) = body.split_once(": ")?;
+    let mut parts = loc.rsplitn(3, ':');
+    let col = parts.next()?.trim().parse::<usize>().ok()?;
+    let row = parts.next()?.trim().parse::<usize>().ok()?;
+    let file = parts.next()?;
+    let lower = file.to_ascii_lowercase();
+    if file.is_empty()
+        || (!lower.ends_with(".r") && !lower.ends_with(".rmd") && !lower.ends_with(".qmd"))
+    {
+        return None;
+    }
+    Some(Diagnostic {
+        severity: "error".into(),
+        message: message.trim().into(),
+        file: Some(PathBuf::from(file)),
+        line: row.max(1),
+        column: col.max(1),
+        code: None,
+        source: "R".into(),
+    })
 }
 
 /// Stateful line parser. It understands everything [`parse`] does and also gfortran's layout, where
@@ -262,5 +299,33 @@ mod tests {
         ]);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].file.as_deref().unwrap().to_str().unwrap(), "a.c");
+    }
+
+    #[test]
+    fn r_parse_errors_single_and_multiline() {
+        let d = feed_all(&[
+            "Error in parse(file = commandArgs(trailingOnly = TRUE)[1]) : ",
+            "  main.R:4:7: unexpected symbol",
+            "Error in parse(file = \"a.R\") : a.R:2:1: unexpected ')'",
+        ]);
+        assert_eq!(d.len(), 2);
+        assert_eq!(
+            (
+                d[0].file.as_deref().unwrap().to_str().unwrap(),
+                d[0].line,
+                d[0].column,
+                d[0].message.as_str()
+            ),
+            ("main.R", 4, 7, "unexpected symbol")
+        );
+        assert_eq!(
+            (
+                d[1].file.as_deref().unwrap().to_str().unwrap(),
+                d[1].line,
+                d[1].column,
+                d[1].message.as_str()
+            ),
+            ("a.R", 2, 1, "unexpected ')'")
+        );
     }
 }

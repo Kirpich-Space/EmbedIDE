@@ -27,8 +27,34 @@ use std::{
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+/// Current stage of a toolchain archive installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Connecting to the download server.
+    Connecting,
+    /// Streaming archive bytes while computing SHA-256.
+    Downloading,
+    /// Verifying the archive SHA-256 digest.
+    Verifying,
+    /// Unpacking the verified archive into the private toolchain directory.
+    Unpacking,
+}
+
+/// Live progress update emitted by [`install_with_progress`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Progress {
+    /// Toolchain entry name.
+    pub name: String,
+    /// Current installation stage.
+    pub phase: Phase,
+    /// Archive bytes received so far.
+    pub downloaded: u64,
+    /// Total archive size from `Content-Length`, if known.
+    pub total: Option<u64>,
+}
 
 /// Hard limit on a download (bytes).
 pub const MAX_DOWNLOAD: u64 = 4 << 30;
@@ -290,6 +316,37 @@ pub fn install(
     spec: &InstallSpec,
     progress: &mut dyn FnMut(&str),
 ) -> Result<PathBuf, String> {
+    let mut next_mib_report = 0u64;
+    let dest = install_with_progress(name, spec, &mut |p| match p.phase {
+        Phase::Connecting => progress(&format!("Downloading {name} from {}", spec.url)),
+        Phase::Downloading => {
+            if p.downloaded >= next_mib_report {
+                match p.total {
+                    Some(t) if t > 0 => progress(&format!(
+                        "  {name}: {} of {} MiB ({}%)",
+                        p.downloaded >> 20,
+                        t >> 20,
+                        p.downloaded * 100 / t
+                    )),
+                    _ => progress(&format!("  {name}: {} MiB", p.downloaded >> 20)),
+                }
+                next_mib_report = p.downloaded + (8 << 20);
+            }
+        }
+        Phase::Verifying => progress(&format!("Verifying SHA-256 of {name}")),
+        Phase::Unpacking => progress(&format!("Verified SHA-256 of {name}; unpacking")),
+    })?;
+    progress(&format!("Installed {name} into {}", dest.display()));
+    Ok(dest)
+}
+
+/// Download, verify and unpack `spec` into [`install_dir`], emitting structured byte-level
+/// [`Progress`] updates for live progress bars and animations.
+pub fn install_with_progress(
+    name: &str,
+    spec: &InstallSpec,
+    on_progress: &mut dyn FnMut(Progress),
+) -> Result<PathBuf, String> {
     validate_spec(name, spec)?;
     let dest = install_dir(name, spec).ok_or(
         "Cannot determine the install directory; set EMBEDIDE_DATA_DIR to an absolute path",
@@ -313,7 +370,12 @@ pub fn install(
     let archive_path = scratch.0.join("archive");
 
     // 1. Download while hashing.
-    progress(&format!("Downloading {name} from {}", spec.url));
+    on_progress(Progress {
+        name: name.to_string(),
+        phase: Phase::Connecting,
+        downloaded: 0,
+        total: None,
+    });
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
         .timeout_read(Duration::from_secs(60))
@@ -337,8 +399,9 @@ pub fn install(
         File::create(&archive_path).map_err(|e| io_err("Cannot create the download file", e))?,
     );
     let mut ctx = digest::Context::new(&digest::SHA256);
-    let mut buf = vec![0u8; 256 * 1024];
-    let (mut got, mut next_report) = (0u64, 0u64);
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut got = 0u64;
+    let mut last_emit = Instant::now() - Duration::from_secs(1);
     loop {
         let n = reader
             .read(&mut buf)
@@ -356,17 +419,14 @@ pub fn install(
         ctx.update(&buf[..n]);
         out.write_all(&buf[..n])
             .map_err(|e| io_err("Cannot write the download", e))?;
-        if got >= next_report {
-            match total {
-                Some(t) if t > 0 => progress(&format!(
-                    "  {name}: {} of {} MiB ({}%)",
-                    got >> 20,
-                    t >> 20,
-                    got * 100 / t
-                )),
-                _ => progress(&format!("  {name}: {} MiB", got >> 20)),
-            }
-            next_report = got + (8 << 20);
+        if last_emit.elapsed() >= Duration::from_millis(80) || total.is_some_and(|t| got >= t) {
+            on_progress(Progress {
+                name: name.to_string(),
+                phase: Phase::Downloading,
+                downloaded: got,
+                total,
+            });
+            last_emit = Instant::now();
         }
     }
     out.flush()
@@ -374,6 +434,12 @@ pub fn install(
     drop(out);
 
     // 2. Verify before anything is unpacked.
+    on_progress(Progress {
+        name: name.to_string(),
+        phase: Phase::Verifying,
+        downloaded: got,
+        total: total.or(Some(got)),
+    });
     let actual = hex(ctx.finish().as_ref());
     if !actual.eq_ignore_ascii_case(&spec.sha256) {
         return Err(format!(
@@ -381,7 +447,12 @@ pub fn install(
             spec.url, spec.sha256
         ));
     }
-    progress(&format!("Verified SHA-256 of {name}; unpacking"));
+    on_progress(Progress {
+        name: name.to_string(),
+        phase: Phase::Unpacking,
+        downloaded: got,
+        total: total.or(Some(got)),
+    });
 
     // 3. Unpack into the scratch directory, then move it into place.
     let unpacked = scratch.0.join("unpacked");
@@ -449,7 +520,6 @@ pub fn install(
             e,
         )
     })?;
-    progress(&format!("Installed {name} into {}", dest.display()));
     Ok(dest)
 }
 

@@ -165,6 +165,28 @@ pub struct Item {
     pub range: Option<LspRange>,
 }
 
+/// Convert a `file://` URI back to a local filesystem path (percent-decoding `%XX`).
+pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            if let Ok(val) = u8::from_str_radix(hex, 16) {
+                out.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let s = String::from_utf8(out).ok()?;
+    Some(PathBuf::from(s))
+}
+
 /// Something the owner should know about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -172,6 +194,13 @@ pub enum Event {
     Ready,
     /// Server published diagnostics (indicates workspace indexing progressed).
     Indexed,
+    /// Diagnostics published by the server for one document.
+    Diagnostics {
+        /// Document path decoded from the server's `file://` URI.
+        path: PathBuf,
+        /// Current diagnostics for `path` (replaces any previous list for this file).
+        items: Vec<crate::diagnostics::Diagnostic>,
+    },
     /// Answer to the latest completion request.
     Completion {
         /// Id returned by [`Client::complete`].
@@ -187,7 +216,7 @@ pub enum Event {
 
 enum Incoming {
     Message(Value),
-    Indexed,
+    Diagnostics(Value),
     Closed(String),
 }
 
@@ -287,7 +316,7 @@ fn reader_thread(stdout: impl Read, incoming: SyncSender<Incoming>) {
                     if message.get("method").and_then(Value::as_str)
                         == Some("textDocument/publishDiagnostics")
                     {
-                        let _ = incoming.try_send(Incoming::Indexed);
+                        let _ = incoming.try_send(Incoming::Diagnostics(message));
                     }
                     continue;
                 }
@@ -300,6 +329,65 @@ fn reader_thread(stdout: impl Read, incoming: SyncSender<Incoming>) {
         }
     };
     let _ = incoming.send(Incoming::Closed(reason));
+}
+
+/// Parse LSP `textDocument/publishDiagnostics` params into `(path, diagnostics)`.
+fn parse_diagnostics(
+    params: &Value,
+    server: &str,
+) -> Option<(PathBuf, Vec<crate::diagnostics::Diagnostic>)> {
+    let uri = params.get("uri").and_then(Value::as_str)?;
+    let path = uri_to_path(uri)?;
+    let list = params
+        .get("diagnostics")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .take(200)
+                .filter_map(|d| {
+                    let message = d.get("message").and_then(Value::as_str)?.trim();
+                    if message.is_empty() {
+                        return None;
+                    }
+                    let start = &d["range"]["start"];
+                    let line = start.get("line").and_then(Value::as_u64)? as usize + 1;
+                    let column =
+                        start.get("character").and_then(Value::as_u64).unwrap_or(0) as usize + 1;
+                    let severity = match d.get("severity").and_then(Value::as_u64).unwrap_or(1) {
+                        1 => "error",
+                        2 => "warning",
+                        _ => "note",
+                    };
+                    let code = d.get("code").and_then(|c| {
+                        c.as_str()
+                            .map(str::to_string)
+                            .or_else(|| c.as_i64().map(|n| n.to_string()))
+                    });
+                    let source = d
+                        .get("source")
+                        .and_then(Value::as_str)
+                        .unwrap_or(server)
+                        .to_string();
+                    Some(crate::diagnostics::Diagnostic {
+                        severity: severity.into(),
+                        message: message
+                            .lines()
+                            .next()
+                            .unwrap_or(message)
+                            .chars()
+                            .take(240)
+                            .collect(),
+                        file: Some(path.clone()),
+                        line,
+                        column,
+                        code,
+                        source,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((path, list))
 }
 
 fn kind_name(kind: u64) -> &'static str {
@@ -692,6 +780,20 @@ impl Client {
         self.utf8
     }
 
+    /// Tell the server a document was saved (syncs content first if needed).
+    pub fn notify_saved(&mut self, path: &Path, language: &str, state: &EditorState) {
+        if self.phase != Phase::Ready {
+            return;
+        }
+        if self.sync(path, language, state) {
+            let uri = file_uri(path);
+            self.notify(
+                "textDocument/didSave",
+                json!({ "textDocument": { "uri": uri } }),
+            );
+        }
+    }
+
     /// Tell the server a document was closed.
     pub fn close(&mut self, path: &Path) {
         if self.documents.remove(path).is_some() {
@@ -709,9 +811,13 @@ impl Client {
         loop {
             let message = match self.incoming.try_recv() {
                 Ok(Incoming::Message(message)) => message,
-                Ok(Incoming::Indexed) => {
+                Ok(Incoming::Diagnostics(notif)) => {
                     if self.phase == Phase::Ready {
                         events.push(Event::Indexed);
+                        if let Some((path, items)) = parse_diagnostics(&notif["params"], &self.name)
+                        {
+                            events.push(Event::Diagnostics { path, items });
+                        }
                     }
                     continue;
                 }

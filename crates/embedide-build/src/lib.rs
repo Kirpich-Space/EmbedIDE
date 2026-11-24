@@ -259,10 +259,7 @@ fn builtin_matches_host(
     if user_specs.contains_key(name) {
         return true;
     }
-    match name {
-        "zig" => cfg!(all(target_os = "linux", target_arch = "x86_64")),
-        _ => true,
-    }
+    name != "zig" || cfg!(all(target_os = "linux", target_arch = "x86_64"))
 }
 
 /// Inspect what toolchains are missing at IDE startup (pure filesystem check; never touches the
@@ -283,6 +280,54 @@ pub fn startup_install_plan(user: &UserConfig, manifest: Option<&Manifest>) -> S
             Err(e) => plan.error = Some(e),
         }
     }
+    // Check every compiler explicitly chosen in user `[toolchains.defaults]` or project
+    // `[toolchain]` / `[profiles.*.toolchain]`: if not on disk, auto-download from matching
+    // `[toolchains.install.*]` (or built-in) spec, or record an OS package hint.
+    let mut configured_choices: Vec<(&str, &str)> = user
+        .toolchains
+        .defaults
+        .iter()
+        .map(|(l, id)| (l.as_str(), id.as_str()))
+        .collect();
+    if let Some(m) = manifest {
+        for (l, id) in &m.toolchain {
+            configured_choices.push((l.as_str(), id.as_str()));
+        }
+        for profile in m.profiles.values() {
+            for (l, id) in &profile.toolchain {
+                configured_choices.push((l.as_str(), id.as_str()));
+            }
+        }
+    }
+    let family = embedide_toolchains::package_family();
+    for (lang_str, chosen_id) in configured_choices {
+        if ids.contains(&chosen_id) {
+            continue;
+        }
+        let candidate = specs.iter().find(|(name, spec)| {
+            builtin_matches_host(name, &user.toolchains.install)
+                && !embedide_toolchains::install::is_installed(name, spec)
+                && (name.as_str() == chosen_id || spec.provides.iter().any(|p| p == chosen_id))
+        });
+        if let Some((name, spec)) = candidate {
+            if !plan.downloadable.iter().any(|(n, _)| n == name) {
+                plan.downloadable.push((name.clone(), spec.clone()));
+            }
+        } else if let Ok(lang) = lang_str.parse::<embedide_toolchains::Language>() {
+            if !plan.os_hints.iter().any(|(l, _)| *l == lang) {
+                let hint = embedide_toolchains::recommend(lang, family)
+                    .into_iter()
+                    .find(|r| r.kind == chosen_id)
+                    .and_then(|r| r.command)
+                    .or_else(|| {
+                        embedide_toolchains::recommend(lang, family)
+                            .into_iter()
+                            .find_map(|r| r.command)
+                    });
+                plan.os_hints.push((lang, hint));
+            }
+        }
+    }
     if let Some(m) = manifest {
         if let Ok(lang) = m.language() {
             let have_compiler = detected
@@ -301,8 +346,7 @@ pub fn startup_install_plan(user: &UserConfig, manifest: Option<&Manifest>) -> S
                     if !plan.downloadable.iter().any(|(n, _)| n == name) {
                         plan.downloadable.push((name.clone(), spec.clone()));
                     }
-                } else {
-                    let family = embedide_toolchains::package_family();
+                } else if !plan.os_hints.iter().any(|(l, _)| *l == lang) {
                     let hint = embedide_toolchains::recommend(lang, family)
                         .into_iter()
                         .find_map(|r| r.command);
@@ -675,5 +719,27 @@ mod startup_install_tests {
         bad_user.toolchains.require = vec!["no-such-spec".into()];
         let bad_plan = startup_install_plan(&bad_user, None);
         assert!(bad_plan.error.is_some());
+
+        // Choosing a missing compiler in `[toolchains.defaults]` automatically queues its pinned spec.
+        let mut chosen_user = UserConfig::default();
+        chosen_user
+            .toolchains
+            .defaults
+            .insert("c".into(), "missing-custom-cc".into());
+        chosen_user.toolchains.install.insert(
+            "my-cc".into(),
+            embedide_toolchains::InstallSpec {
+                url: "https://example.org/my-cc.tar.xz".into(),
+                sha256: "b".repeat(64),
+                archive: None,
+                strip: 1,
+                bin: vec!["bin".into()],
+                provides: vec!["missing-custom-cc".into()],
+            },
+        );
+        let chosen_plan = startup_install_plan(&chosen_user, None);
+        assert!(chosen_plan.error.is_none());
+        assert_eq!(chosen_plan.downloadable.len(), 1);
+        assert_eq!(chosen_plan.downloadable[0].0, "my-cc");
     }
 }

@@ -3,6 +3,7 @@ pub mod assistant;
 pub mod binview;
 mod guard;
 pub mod layout;
+pub(crate) mod livecheck;
 pub mod popup;
 pub mod screen;
 pub mod term;
@@ -31,6 +32,7 @@ pub struct TuiEditor {
     size: (u16, u16),
     ide_action: Option<IdeAction>,
     host_command: Option<String>,
+    saved: bool,
 }
 impl TuiEditor {
     /// Start a presentation session without entering raw mode (also testable headlessly).
@@ -41,6 +43,7 @@ impl TuiEditor {
             size: (width, height),
             ide_action: None,
             host_command: None,
+            saved: false,
         }
     }
     /// Shared document and parser state; no terminal coordinates enter this API.
@@ -68,12 +71,17 @@ impl TuiEditor {
     pub fn take_host_command(&mut self) -> Option<String> {
         self.host_command.take()
     }
+    /// True once after the editor wrote the document to disk (`:w`, `:wq`).
+    pub fn take_saved(&mut self) -> bool {
+        std::mem::take(&mut self.saved)
+    }
     fn feed_key(&mut self, key: Key) {
         self.session.message.clear();
         match self.session.editor.feed(key) {
             Ok(Effect::Ide(action)) => self.ide_action = Some(action),
             Ok(Effect::Command(command)) => self.host_command = Some(command),
             Ok(Effect::Saved(report)) => {
+                self.saved = true;
                 self.session.message =
                     format!("Saved; directory_synced={}", report.directory_synced)
             }

@@ -254,6 +254,10 @@ impl EditorState {
     pub fn is_closed(&self) -> bool {
         self.closed
     }
+    /// Re-open a session whose quit was intercepted by the host (e.g. unsaved other tabs).
+    pub fn clear_closed(&mut self) {
+        self.closed = false;
+    }
     /// Previous literal searches, newest last, bounded to 32 entries.
     pub fn search_history(&self) -> impl Iterator<Item = (&str, bool)> {
         self.searches

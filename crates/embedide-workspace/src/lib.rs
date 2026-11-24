@@ -11,7 +11,7 @@ pub mod launch;
 pub mod manifest;
 pub mod templates;
 
-pub use config::{config_dir, ConfigFile, UserConfig};
+pub use config::{config_dir, ConfigFile, EditorConfig, UserConfig};
 pub use launch::{resolve_launch, Launch, LaunchFile};
 pub use manifest::{BuildKind, Manifest, Profile, MANIFEST_FILE};
 

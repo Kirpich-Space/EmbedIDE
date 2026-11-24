@@ -979,7 +979,8 @@ class EmbedContracts(unittest.TestCase):
         # Many lines of history first, so Shift+PageUp would scroll if it were taken.
         ide.type("seq -f 'HIST_%03g' 1 100\r")
         ide.until(b"HIST_100")
-        ide.type("less pages.txt\r" if pager == "less" else "vim -u NONE -N -n pages.txt\r")
+        less_cmd = "TERM=xterm-clear less pages.txt\r" if os.uname().sysname == "FreeBSD" else "less pages.txt\r"
+        ide.type(less_cmd if pager == "less" else "vim -u NONE -N -n pages.txt\r")
         ide.until(b"PAGE_001")
         # The program owns the alternate screen: Shift+PageUp is its key, not history.
         ide.keys(b"\x1b[5;2~")
@@ -1015,7 +1016,7 @@ class EmbedContracts(unittest.TestCase):
             ide.pump(0.1)
             del ide.output[:-200000]                  # the driver keeps only the tail
             ide.offset = 0
-        rss = int(re.search(rb"VmRSS:\s+(\d+)", Path(f"/proc/{ide.process.pid}/status").read_bytes()).group(1))
+        rss = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(ide.process.pid)]).strip())
         self.assertLess(rss, 200 * 1024, f"RSS {rss} KiB while flooding")
         started = time.monotonic()
         ide.keys(ide.ctrl("c"))
@@ -1052,7 +1053,7 @@ class EmbedContracts(unittest.TestCase):
         ide.panel("3")
         ide.until(b"> TERMINAL")
         ide.type("seq -f 'FILL_%03g' 1 60; make\r")
-        ide.until(b"hello] Error 1")              # gcc colours "error:", make does not
+        ide.latest(rb"(?:hello\] Error 1|Error code 1)")  # GNU make / BSD make
         # 9. scroll through history to the start of the output and back
         ide.keys(b"\x1b[5;2~", b"\x1b[1;2H")         # Shift+PageUp, Shift+Home
         ide.until(b"FILL_001")

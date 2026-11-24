@@ -521,8 +521,9 @@ impl Replies {
 }
 
 impl Drop for TerminalPane {
-    /// Hang up the foreground job, then the shell (SIGHUP, which shells pass
-    /// on to their jobs; SIGKILL after a short grace period), and reap it.
+    /// Hang up every job in the shell's PTY session (including background jobs
+    /// that shells like FreeBSD `/bin/sh` place in separate process groups),
+    /// wait briefly for a clean exit, then force-kill any survivors and reap.
     fn drop(&mut self) {
         #[cfg(unix)]
         if self.exited.is_none() {
@@ -530,11 +531,41 @@ impl Drop for TerminalPane {
                 sys::signal::{killpg, Signal},
                 unistd::Pid,
             };
+            let signal_session = |sid: i32, sig: &str| {
+                let _ = std::process::Command::new("pkill")
+                    .args([sig, "-s", &sid.to_string()])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            };
             let shell = self.child.process_id().and_then(|p| i32::try_from(p).ok());
-            if let Some(group) = self.master.process_group_leader() {
-                if group > 0 && Some(group) != shell {
-                    let _ = killpg(Pid::from_raw(group), Signal::SIGHUP);
+            let fg_group = self.master.process_group_leader();
+            if let Some(group) = fg_group.filter(|&g| g > 0) {
+                let _ = killpg(Pid::from_raw(group), Signal::SIGHUP);
+            }
+            if let Some(pid) = shell.filter(|&p| p > 0) {
+                let _ = killpg(Pid::from_raw(pid), Signal::SIGHUP);
+                signal_session(pid, "-HUP");
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+            let mut shell_reaped = false;
+            while std::time::Instant::now() < deadline {
+                if matches!(self.child.try_wait(), Ok(Some(_))) {
+                    shell_reaped = true;
+                    break;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if let Some(group) = fg_group.filter(|&g| g > 0) {
+                let _ = killpg(Pid::from_raw(group), Signal::SIGKILL);
+            }
+            if let Some(pid) = shell.filter(|&p| p > 0) {
+                let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+                signal_session(pid, "-KILL");
+            }
+            if shell_reaped {
+                return;
             }
         }
         let _ = self.child.kill();

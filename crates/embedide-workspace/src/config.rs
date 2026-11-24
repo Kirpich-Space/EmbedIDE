@@ -269,6 +269,34 @@ impl Default for AiConfig {
     }
 }
 
+/// `[editor]`: live syntax diagnostics and auto-save behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct EditorConfig {
+    /// Run fast background syntax/compiler checks while editing when no ready LSP covers the file.
+    pub live_diagnostics: bool,
+    /// Idle delay before running live diagnostics, in milliseconds.
+    pub live_diagnostics_delay_ms: u64,
+    /// Automatically save modified text buffers (never binaries or untitled buffers) after an idle delay.
+    pub auto_save: bool,
+    /// Idle delay before auto-saving a modified text buffer, in milliseconds.
+    pub auto_save_delay_ms: u64,
+    /// Automatically save modified text buffers before starting a build (`F5` / `:build`).
+    pub auto_save_on_build: bool,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self {
+            live_diagnostics: true,
+            live_diagnostics_delay_ms: 450,
+            auto_save: false,
+            auto_save_delay_ms: 1000,
+            auto_save_on_build: true,
+        }
+    }
+}
+
 /// Everything in `config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -277,6 +305,8 @@ pub struct UserConfig {
     pub toolchains: ToolchainsConfig,
     /// `[ai]`
     pub ai: AiConfig,
+    /// `[editor]`
+    pub editor: EditorConfig,
 }
 
 impl UserConfig {
@@ -343,6 +373,16 @@ impl UserConfig {
         if c.ai.agent.timeout_secs == 0 || c.ai.completion.timeout_secs == 0 {
             return Err(Error(
                 "ai.agent.timeout_secs and ai.completion.timeout_secs must be positive".into(),
+            ));
+        }
+        if !(100..=30_000).contains(&c.editor.live_diagnostics_delay_ms) {
+            return Err(Error(
+                "editor.live_diagnostics_delay_ms must be 100..=30000".into(),
+            ));
+        }
+        if !(200..=60_000).contains(&c.editor.auto_save_delay_ms) {
+            return Err(Error(
+                "editor.auto_save_delay_ms must be 200..=60000".into(),
             ));
         }
         Ok(c)
@@ -575,5 +615,29 @@ mod tests {
         assert!(UserConfig::parse("[ai.agent]\npolicy = \"yolo\"\n").is_err());
         assert!(UserConfig::parse("[ai.completion]\nmode = \"always\"\n").is_err());
         assert!(UserConfig::parse("[ai.agent]\nunknown = 1\n").is_err());
+    }
+
+    #[test]
+    fn editor_live_diagnostics_and_auto_save_settings_parse_and_validate() {
+        let defaults = UserConfig::parse("").unwrap();
+        assert!(defaults.editor.live_diagnostics);
+        assert_eq!(defaults.editor.live_diagnostics_delay_ms, 450);
+        assert!(!defaults.editor.auto_save);
+        assert_eq!(defaults.editor.auto_save_delay_ms, 1000);
+        assert!(defaults.editor.auto_save_on_build);
+
+        let custom = UserConfig::parse(
+            "[editor]\nlive_diagnostics = false\nlive_diagnostics_delay_ms = 600\n\
+             auto_save = true\nauto_save_delay_ms = 1500\nauto_save_on_build = false\n",
+        )
+        .unwrap();
+        assert!(!custom.editor.live_diagnostics);
+        assert_eq!(custom.editor.live_diagnostics_delay_ms, 600);
+        assert!(custom.editor.auto_save);
+        assert_eq!(custom.editor.auto_save_delay_ms, 1500);
+        assert!(!custom.editor.auto_save_on_build);
+
+        assert!(UserConfig::parse("[editor]\nlive_diagnostics_delay_ms = 50\n").is_err());
+        assert!(UserConfig::parse("[editor]\nauto_save_delay_ms = 100\n").is_err());
     }
 }

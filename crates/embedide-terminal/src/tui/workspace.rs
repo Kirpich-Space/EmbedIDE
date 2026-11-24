@@ -1,5 +1,6 @@
 //! Project workspace adapter. Services and document mutations remain outside widgets.
 use super::binview;
+use super::livecheck;
 use super::popup::{self, Popup};
 use super::{
     assistant::{osc52, Assistant, EditorContext},
@@ -134,6 +135,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install_toolchains", "Install Missing Required Toolchains"),
     ("edit_project_config", "Edit Project Config (embedide.toml)"),
     ("edit_user_config", "Edit User Config (config.toml)"),
+    ("autosave", "Toggle Auto-Save (persisted in config.toml)"),
+    ("livecheck", "Toggle Live Diagnostics While Editing"),
     ("reload", "Reload Settings"),
     ("theme", "Cycle Theme"),
     (
@@ -371,6 +374,8 @@ pub struct Workspace {
     installer: Option<std::sync::mpsc::Receiver<PrepMsg>>,
     /// Automatic toolchain installer started when the workspace opens.
     startup_installer: Option<std::sync::mpsc::Receiver<StartupInstallMsg>>,
+    /// Live animated progress state while a toolchain archive is downloading/verifying/unpacking.
+    install_state: Option<InstallState>,
     /// Reads multi-line compiler diagnostics (gfortran) across output lines.
     diag_parser: core::diagnostics::Parser,
     build_log: Log,
@@ -395,7 +400,7 @@ pub struct Workspace {
     assistant_visible: bool,
     terminal: Option<TerminalPane>,
     keyboard_enhanced: bool,
-    held_panel: Option<String>,
+    held_panel: Option<(String, Instant)>,
     /// Mouse capture requested (config `mouse` or `:mouse`).
     pub mouse: bool,
     /// Text to hand to the terminal clipboard (OSC 52) after this event.
@@ -404,8 +409,20 @@ pub struct Workspace {
     popup: Option<Popup>,
     /// Binary file shown in the editor area (HEX / ELF / disassembly).
     binary: Option<binview::BinaryView>,
+    /// True while the editor area displays `binary` instead of `documents[active]`.
+    binary_active: bool,
     /// Language servers by command line (clangd serves C and C++).
     lsp: BTreeMap<String, LspSlot>,
+    /// Live diagnostics published by language servers, keyed by canonical file path.
+    lsp_diagnostics: BTreeMap<PathBuf, Vec<Diagnostic>>,
+    /// Live syntax/compiler diagnostics for edited buffers, keyed by canonical file path.
+    live_diagnostics: BTreeMap<PathBuf, Vec<Diagnostic>>,
+    /// Debounced background syntax checker for dynamic in-editor diagnostics.
+    live_check: livecheck::Runner,
+    /// Deadline for automatic saving of modified text documents when `editor.auto_save` is on.
+    auto_save_due: Option<Instant>,
+    /// Pause retries after an auto-save failure until the next user edit.
+    auto_save_blocked: bool,
     hits: Hits,
     user: UserConfig,
     manifest: Option<Manifest>,
@@ -422,8 +439,230 @@ enum PrepMsg {
 }
 /// Progress and result of automatic toolchain installation started on workspace open.
 enum StartupInstallMsg {
-    Line(String),
+    Progress {
+        index: usize,
+        total_items: usize,
+        progress: embedide_toolchains::install::Progress,
+    },
     Done(Result<Vec<String>, String>),
+}
+
+/// Live animation state for an in-flight toolchain download/unpack.
+struct InstallState {
+    index: usize,
+    total_items: usize,
+    name: String,
+    phase: embedide_toolchains::install::Phase,
+    downloaded: u64,
+    total_bytes: Option<u64>,
+    started: Instant,
+    frame: usize,
+    last_tick: Instant,
+}
+
+impl InstallState {
+    const SPINNER: [&'static str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+    fn new(name: String, total_items: usize) -> Self {
+        let now = Instant::now();
+        Self {
+            index: 1,
+            total_items: total_items.max(1),
+            name,
+            phase: embedide_toolchains::install::Phase::Connecting,
+            downloaded: 0,
+            total_bytes: None,
+            started: now,
+            frame: 0,
+            last_tick: now,
+        }
+    }
+
+    fn update(
+        &mut self,
+        index: usize,
+        total_items: usize,
+        p: embedide_toolchains::install::Progress,
+    ) {
+        if self.name != p.name {
+            self.started = Instant::now();
+        }
+        self.index = index;
+        self.total_items = total_items.max(1);
+        self.name = p.name;
+        self.phase = p.phase;
+        self.downloaded = p.downloaded;
+        self.total_bytes = p.total;
+    }
+
+    fn tick(&mut self) -> bool {
+        if self.last_tick.elapsed() >= Duration::from_millis(85) {
+            self.frame = self.frame.wrapping_add(1);
+            self.last_tick = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn spinner(&self) -> &'static str {
+        Self::SPINNER[self.frame % Self::SPINNER.len()]
+    }
+
+    fn phase_label(&self) -> &'static str {
+        match self.phase {
+            embedide_toolchains::install::Phase::Connecting => "Connecting",
+            embedide_toolchains::install::Phase::Downloading => "Downloading",
+            embedide_toolchains::install::Phase::Verifying => "Verifying SHA-256",
+            embedide_toolchains::install::Phase::Unpacking => "Unpacking",
+        }
+    }
+
+    /// Build `(prefix_bar, active_bar, suffix_bar, percent)` for a bar of `cells` columns.
+    fn bar_parts(&self, cells: usize) -> (String, String, String, Option<u64>) {
+        if cells == 0 {
+            return (String::new(), String::new(), String::new(), None);
+        }
+        if self.phase == embedide_toolchains::install::Phase::Downloading {
+            if let Some(total) = self.total_bytes.filter(|&t| t > 0) {
+                let clamped = self.downloaded.min(total);
+                let pct = clamped.saturating_mul(100) / total;
+                // Sub-cell 8-step Unicode block fill for silky-smooth progress.
+                const PARTIALS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+                let eighths = (clamped.saturating_mul((cells * 8) as u64) / total) as usize;
+                let full = (eighths / 8).min(cells);
+                let rem = eighths % 8;
+                let mut active = "█".repeat(full);
+                let mut used = full;
+                if full < cells && rem > 0 {
+                    active.push(PARTIALS[rem]);
+                    used += 1;
+                }
+                let rest = "░".repeat(cells.saturating_sub(used));
+                return (String::new(), active, rest, Some(pct));
+            }
+        }
+        // Smooth bouncing pulse wave for connecting / indeterminate / verifying / unpacking.
+        let pulse = cells.min(5);
+        let travel = cells.saturating_sub(pulse);
+        let pos = if travel == 0 {
+            0
+        } else {
+            let period = travel * 2;
+            let step = self.frame % period;
+            if step <= travel {
+                step
+            } else {
+                period - step
+            }
+        };
+        let left = "░".repeat(pos);
+        let active = match pulse {
+            0 => String::new(),
+            1 => "█".into(),
+            2 => "▓▓".into(),
+            n => format!("▓{}▓", "█".repeat(n - 2)),
+        };
+        let right = "░".repeat(cells.saturating_sub(pos + pulse));
+        (left, active, right, None)
+    }
+
+    fn transfer_summary(&self) -> String {
+        let mib = |b: u64| b as f64 / (1024.0 * 1024.0);
+        match (self.phase, self.total_bytes) {
+            (embedide_toolchains::install::Phase::Downloading, Some(t)) if t > 0 => {
+                let secs = self.started.elapsed().as_secs_f64().max(0.05);
+                let speed = mib(self.downloaded) / secs;
+                format!(
+                    "{:.1}/{:.1} MiB · {:.1} MiB/s",
+                    mib(self.downloaded),
+                    mib(t),
+                    speed
+                )
+            }
+            (embedide_toolchains::install::Phase::Downloading, None) if self.downloaded > 0 => {
+                let secs = self.started.elapsed().as_secs_f64().max(0.05);
+                let speed = mib(self.downloaded) / secs;
+                format!("{:.1} MiB · {:.1} MiB/s", mib(self.downloaded), speed)
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn compact_status(&self) -> String {
+        let (left, active, right, pct) = self.bar_parts(16);
+        let pct_str = pct.map(|p| format!(" {p:>3}%")).unwrap_or_default();
+        let xfer = self.transfer_summary();
+        let xfer_str = if xfer.is_empty() {
+            String::new()
+        } else {
+            format!(" · {xfer}")
+        };
+        format!(
+            "{} [{}/{}] {} {} [{left}{active}{right}]{pct_str}{xfer_str}",
+            self.spinner(),
+            self.index,
+            self.total_items,
+            self.phase_label(),
+            self.name
+        )
+    }
+
+    fn render_row(&self, width: usize) -> Row {
+        let mut r = Row::default();
+        let bar_cells = if width >= 72 {
+            24
+        } else if width >= 48 {
+            16
+        } else {
+            10
+        };
+        let (left, active, right, pct) = self.bar_parts(bar_cells);
+        let head = format!(
+            " {} [{}/{}] {} {}  ",
+            self.spinner(),
+            self.index,
+            self.total_items,
+            self.phase_label(),
+            self.name
+        );
+        let pct_str = pct.map(|p| format!(" {p:>3}%")).unwrap_or_default();
+        let xfer = self.transfer_summary();
+        let tail = if xfer.is_empty() {
+            pct_str
+        } else {
+            format!("{pct_str}  {xfer}")
+        };
+        let mut used = 0usize;
+        let mut push = |text: &str, style: Option<Paint>| {
+            if used >= width {
+                return;
+            }
+            let mut out = String::new();
+            for ch in text.chars() {
+                if ch.is_control() {
+                    continue;
+                }
+                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if used + w > width {
+                    break;
+                }
+                used += w;
+                out.push(ch);
+            }
+            if !out.is_empty() {
+                r.push_styled(&out, false, style);
+            }
+        };
+        push(&head, Some(Role::Ai.into()));
+        push("[", Some(Role::Muted.into()));
+        push(&left, Some(Role::Muted.into()));
+        push(&active, Some(Role::Accent.into()));
+        push(&right, Some(Role::Muted.into()));
+        push("]", Some(Role::Muted.into()));
+        push(&tail, Some(Role::Success.into()));
+        r
+    }
 }
 
 fn service_error(error: impl std::fmt::Display) -> FrontendError {
@@ -496,6 +735,7 @@ impl Workspace {
             problems: Vec::new(),
             installer: None,
             startup_installer: None,
+            install_state: None,
             diag_parser: core::diagnostics::Parser::default(),
             build_log: Log::default(),
             task_log: Log::default(),
@@ -524,7 +764,13 @@ impl Workspace {
             clipboard: None,
             popup: None,
             binary: None,
+            binary_active: false,
             lsp: BTreeMap::new(),
+            lsp_diagnostics: BTreeMap::new(),
+            live_diagnostics: BTreeMap::new(),
+            live_check: livecheck::Runner::default(),
+            auto_save_due: None,
+            auto_save_blocked: false,
             hits: Hits::default(),
             user,
             manifest,
@@ -606,17 +852,33 @@ impl Workspace {
         }
         let (tx, rx) = mpsc::channel();
         let todo = plan.downloadable;
+        let total_items = todo.len();
+        let first_name = names[0].clone();
         self.tools_log.push(&format!(
             "Auto-installing missing toolchains: {}…",
             names.join(", ")
         ));
-        self.notification = format!("Installing toolchains: {}…", names.join(", "));
+        let state = InstallState::new(first_name, total_items);
+        self.notification = state.compact_status();
+        self.install_state = Some(state);
+        // Surface the live progress panel without stealing focus from the editor or explorer.
+        self.panel = Panel::Tools;
+        self.panel_visible = true;
         thread::spawn(move || {
             let mut installed = Vec::new();
-            for (name, spec) in todo {
-                match embedide_toolchains::install::install(&name, &spec, &mut |line| {
-                    let _ = tx.send(StartupInstallMsg::Line(line.to_string()));
-                }) {
+            for (idx, (name, spec)) in todo.into_iter().enumerate() {
+                let item_index = idx + 1;
+                match embedide_toolchains::install::install_with_progress(
+                    &name,
+                    &spec,
+                    &mut |progress| {
+                        let _ = tx.send(StartupInstallMsg::Progress {
+                            index: item_index,
+                            total_items,
+                            progress,
+                        });
+                    },
+                ) {
                     Ok(_) => installed.push(name),
                     Err(err) => {
                         let _ = tx.send(StartupInstallMsg::Done(Err(err)));
@@ -790,27 +1052,24 @@ impl Workspace {
                 (Focus::Assistant, "AI panel hidden, chat kept", '2')
             }
             _ => {
-                if self.panel == Panel::Terminal {
-                    self.panel_visible = false;
-                }
+                self.panel_visible = false;
                 (Focus::Terminal, "Terminal hidden, shell running", '3')
             }
         };
-        if self.focus == focus {
+        if self.focus == focus || (id == "hide_terminal" && self.focus == Focus::Panel) {
             self.focus = Focus::Editor;
         }
         self.notification = format!("{name} ({} reopens)", self.panel_key(digit));
     }
     /// Tell the workspace whether the terminal reports kitty keyboard events
-    /// (press/repeat/release). Without them a held key cannot be observed.
+    /// (press/repeat/release). Without them, Alt+digit+Delete uses a short chord window.
     pub fn set_keyboard_enhanced(&mut self, enhanced: bool) {
         self.keyboard_enhanced = enhanced;
         self.held_panel = None;
     }
-    /// Alt+1/2/3 (or Ctrl+Alt+1/2/3) open a panel (again: back to the editor). With the digit
-    /// still held, Delete hides that panel. "Held" is known only from kitty
-    /// keyboard release events, so the hide chord is never inferred from a
-    /// sequence of separate presses. Returns None when the key is not a chord.
+    /// Alt+1/2/3 (or Ctrl+Alt+1/2/3) open a panel (again: back to the editor). Pressing Delete
+    /// while holding Alt+digit (or immediately after in terminals without key-release events)
+    /// hides that panel (Explorer, AI, or Terminal). Returns None when the key is not a chord.
     fn panel_chord(&mut self, key: KeyEvent) -> Option<Result<(), FrontendError>> {
         let chord = key.modifiers == KeyModifiers::ALT
             || key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT;
@@ -818,7 +1077,11 @@ impl Workspace {
             let id = self.shortcut(key).filter(|id| id.starts_with("focus_"));
             match key.kind {
                 KeyEventKind::Release => {
-                    if self.held_panel.is_some() && self.held_panel == id {
+                    if self
+                        .held_panel
+                        .as_ref()
+                        .is_some_and(|(h, _)| id.as_deref() == Some(h.as_str()))
+                    {
                         self.held_panel = None;
                     }
                     return Some(Ok(()));
@@ -830,17 +1093,22 @@ impl Workspace {
                 if self.dialog.is_some() {
                     return None;
                 }
-                self.held_panel = self.keyboard_enhanced.then(|| id.clone());
+                self.held_panel = Some((id.clone(), Instant::now()));
                 return Some(self.command(&id));
             }
         }
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if chord && key.code == KeyCode::Delete && self.dialog.is_none() {
-            if let Some(held) = self.held_panel.clone() {
-                self.hide_panel(&held.replacen("focus_", "hide_", 1));
-                return Some(Ok(()));
+        let delete_chord = (chord || self.keyboard_enhanced)
+            && key.code == KeyCode::Delete
+            && self.dialog.is_none();
+        if delete_chord {
+            if let Some((held, at)) = self.held_panel.take() {
+                if self.keyboard_enhanced || at.elapsed() <= Duration::from_millis(1200) {
+                    self.hide_panel(&held.replacen("focus_", "hide_", 1));
+                    return Some(Ok(()));
+                }
             }
         }
         self.held_panel = None;
@@ -891,6 +1159,8 @@ impl Workspace {
                 };
                 self.generate_makefile(output, name == "makefile!")
             }
+            "autosave" => self.configure_auto_save(arg),
+            "livecheck" => self.configure_live_check(arg),
             line if !line.is_empty()
                 && line.bytes().all(|b| b.is_ascii_digit())
                 && arg.is_empty() =>
@@ -951,6 +1221,10 @@ impl Workspace {
         let _ = self.refresh();
         Ok(())
     }
+    /// True when the editor pane is currently showing the binary view.
+    fn viewing_binary(&self) -> bool {
+        self.binary_active && self.binary.is_some()
+    }
     /// Show a file in the binary view (read-only until `i`).
     fn open_binary(&mut self, path: &Path) -> Result<(), FrontendError> {
         let path = if path.is_absolute() {
@@ -958,10 +1232,30 @@ impl Workspace {
         } else {
             self.root.join(path)
         };
-        if self.binary.as_ref().is_some_and(|b| b.file.is_modified()) {
-            return Err(service_error(
-                "The open binary has unsaved changes: w saves, q closes (asks first)",
-            ));
+        let path = path.canonicalize().unwrap_or(path);
+        // Re-selecting the currently open modified binary switches straight back to it without losing edits.
+        if let Some(existing) = &self.binary {
+            let same = existing
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| existing.path().to_path_buf())
+                == path;
+            if same && existing.file.is_modified() {
+                self.binary_active = true;
+                self.popup = None;
+                self.focus = Focus::Editor;
+                self.notification = format!(
+                    "Switched back to edited binary {} ({} changed bytes): w writes, q closes",
+                    path.display(),
+                    existing.file.changed()
+                );
+                return Ok(());
+            }
+            if !same && existing.file.is_modified() {
+                return Err(service_error(
+                    "The open binary has unsaved changes: w saves, q closes (asks first)",
+                ));
+            }
         }
         let b = &self.config.binary;
         let settings = binview::Settings {
@@ -973,11 +1267,12 @@ impl Workspace {
         };
         let view = binview::BinaryView::open(&path, settings).map_err(service_error)?;
         self.notification = format!(
-            "Opened {} as binary ({} bytes, read-only): Tab/e/d ELF and disassembly, i edits, q closes",
+            "Opened {} as binary ({} bytes): i edits, w saves, Tab/e/d ELF/disasm, Explorer/F10 returns to code",
             path.display(),
             view.file.len()
         );
         self.binary = Some(view);
+        self.binary_active = true;
         self.popup = None;
         self.focus = Focus::Editor;
         Ok(())
@@ -990,6 +1285,7 @@ impl Workspace {
                 "disasm" => binview::Mode::Disasm,
                 _ => binview::Mode::Hex,
             });
+            self.binary_active = true;
             self.focus = Focus::Editor;
         }
     }
@@ -1006,7 +1302,10 @@ impl Workspace {
                     action: Confirm::CloseBinary,
                 })
             }
-            _ => self.binary = None,
+            _ => {
+                self.binary = None;
+                self.binary_active = false;
+            }
         }
     }
     /// Keys for the binary view (after global shortcuts).
@@ -1162,8 +1461,10 @@ impl Workspace {
                 self.active = self.documents.len() - 1;
             }
         }
+        self.binary_active = false;
         self.focus = Focus::Editor;
         self.notification = format!("Opened {}", path.display());
+        self.schedule_live_check(true);
         Ok(())
     }
     /// Open the document named on the command line: an existing file, or a new
@@ -1483,6 +1784,9 @@ impl Workspace {
     fn command_inner(&mut self, id: &str) -> Result<(), FrontendError> {
         match id {
             "build" | "check" => {
+                if self.user.editor.auto_save_on_build {
+                    self.save_modified_text_documents(false)?;
+                }
                 if self
                     .documents
                     .iter()
@@ -1567,10 +1871,12 @@ impl Workspace {
                 }
             }
             "makefile" => self.generate_makefile(PathBuf::from("Makefile"), false)?,
+            "autosave" => self.configure_auto_save("")?,
+            "livecheck" => self.configure_live_check("")?,
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
             "suggest" => self.suggest(true, None)?,
             "ai_suggest" => {
-                if self.binary.is_some() {
+                if self.viewing_binary() {
                     self.notification = "AI suggestions work in text files".into();
                 } else if self.editor().input().mode() != Mode::Insert {
                     self.notification =
@@ -1582,7 +1888,7 @@ impl Workspace {
                 }
             }
             "hex" | "elf" | "disasm" => {
-                if self.binary.is_none() {
+                if !self.viewing_binary() {
                     let path = self
                         .editor()
                         .state()
@@ -1606,6 +1912,7 @@ impl Workspace {
             }
             "lsp_restart" => {
                 self.lsp.clear();
+                self.lsp_diagnostics.clear();
                 if let Some(popup) = &mut self.popup {
                     popup.request = None;
                 }
@@ -2026,7 +2333,7 @@ impl Workspace {
                 .into()
             }
             "help" => self.show_panel(Panel::Help),
-            "close" if self.binary.is_some() => self.close_binary(),
+            "close" if self.viewing_binary() => self.close_binary(),
             "close" => {
                 if self.editor().state().is_modified() {
                     self.dialog = Some(Dialog::Confirm {
@@ -2300,7 +2607,10 @@ impl Workspace {
                     self.notification = format!("Saved {}", view.path().display());
                 }
             }
-            Confirm::CloseBinary => self.binary = None,
+            Confirm::CloseBinary => {
+                self.binary = None;
+                self.binary_active = false;
+            }
             Confirm::Quit => self.closed = true,
             Confirm::Flash(plan) => {
                 // Revalidate the ELF and exact target at the moment of confirmation.
@@ -2402,8 +2712,9 @@ impl Workspace {
     }
     fn jump_problem(&mut self) -> Result<(), FrontendError> {
         let diagnostic = self
-            .problems
+            .all_problems()
             .get(self.problem)
+            .copied()
             .ok_or_else(|| service_error("No diagnostic selected"))?
             .clone();
         let path = diagnostic
@@ -3006,6 +3317,21 @@ impl Workspace {
             popup.request = client.complete(path, language, state, trigger);
         }
     }
+    /// Notify a running language server that the active document was saved so it refreshes
+    /// live diagnostics without waiting for a completion request.
+    fn notify_lsp_saved(&mut self) {
+        let state = self.documents[self.active].session.editor.state();
+        let (Some(path), Some(language)) = (state.path(), lsp_language(state.path())) else {
+            return;
+        };
+        let Some(server) = lsp::server_for(language, &self.config.completion) else {
+            return;
+        };
+        let key = server_key(&server);
+        if let Some(LspSlot::Running(client)) = self.lsp.get_mut(&key) {
+            client.notify_saved(path, language, state);
+        }
+    }
     /// Language-server events: readiness, answers, crashes. Never blocks.
     fn poll_lsp(&mut self) -> bool {
         let mut events = Vec::new();
@@ -3043,6 +3369,16 @@ impl Workspace {
                         self.request_completion(None);
                         changed = true;
                     }
+                }
+                lsp::Event::Diagnostics { path, items } => {
+                    let key = path.canonicalize().unwrap_or(path);
+                    self.live_diagnostics.remove(&key);
+                    if items.is_empty() {
+                        self.lsp_diagnostics.remove(&key);
+                    } else {
+                        self.lsp_diagnostics.insert(key, items);
+                    }
+                    changed = true;
                 }
                 lsp::Event::Completion {
                     request,
@@ -3172,6 +3508,11 @@ impl Workspace {
                         }
                         "save" => {
                             self.documents[self.active].session.editor.save()?;
+                            self.auto_save_due = None;
+                            self.auto_save_blocked = false;
+                            self.notify_lsp_saved();
+                            self.schedule_live_check(true);
+                            let _ = self.refresh();
                             self.notification = "Saved".into();
                         }
                         "focus" => {
@@ -3201,7 +3542,16 @@ impl Workspace {
                             self.panel_scroll = 0;
                         }
                         "next_document" => {
-                            self.active = (self.active + 1) % self.documents.len();
+                            if self.binary_active {
+                                self.binary_active = false;
+                                self.active = 0;
+                            } else if self.active + 1 == self.documents.len()
+                                && self.binary.is_some()
+                            {
+                                self.binary_active = true;
+                            } else {
+                                self.active = (self.active + 1) % self.documents.len();
+                            }
                             self.focus = Focus::Editor;
                         }
                         _ => self.command(&id)?,
@@ -3247,7 +3597,7 @@ impl Workspace {
                             self.assistant.edit_key(key);
                         }
                     },
-                    Focus::Editor if self.binary.is_some() => {
+                    Focus::Editor if self.viewing_binary() => {
                         if let Some(result) = self.binary_key(key) {
                             return result;
                         }
@@ -3284,6 +3634,13 @@ impl Workspace {
                             self.notification = "AI suggestion cancelled".into();
                         }
                         self.documents[self.active].handle(Event::Key(key));
+                        if self.documents[self.active].take_saved() {
+                            self.auto_save_due = None;
+                            self.auto_save_blocked = false;
+                            self.notify_lsp_saved();
+                            self.schedule_live_check(true);
+                            let _ = self.refresh();
+                        }
                         if let Some(command) = self.documents[self.active].take_host_command() {
                             self.host_command(&command)?;
                         }
@@ -3306,7 +3663,27 @@ impl Workspace {
                             })?;
                         }
                         if self.editor().state().is_closed() {
-                            self.close_document();
+                            if self.editor().state().is_modified() {
+                                // `:q!` force-quits the entire IDE immediately.
+                                self.closed = true;
+                            } else {
+                                let other_modified =
+                                    self.documents.iter().enumerate().any(|(i, d)| {
+                                        i != self.active && d.editor().state().is_modified()
+                                    }) || self
+                                        .binary
+                                        .as_ref()
+                                        .is_some_and(|b| b.file.is_modified());
+                                if other_modified {
+                                    self.documents[self.active].session.editor.clear_closed();
+                                    self.dialog = Some(Dialog::Confirm {
+                                        text: "Discard ALL unsaved documents and quit? y confirms; Esc cancels.".into(),
+                                        action: Confirm::Quit,
+                                    });
+                                } else {
+                                    self.closed = true;
+                                }
+                            }
                         }
                     }
                     Focus::Explorer => match key.code {
@@ -3349,8 +3726,8 @@ impl Workspace {
                             self.problem = self.problem.saturating_sub(1)
                         }
                         KeyCode::Down | KeyCode::Char('j') if self.panel == Panel::Problems => {
-                            self.problem =
-                                (self.problem + 1).min(self.problems.len().saturating_sub(1))
+                            let count = self.all_problems().len();
+                            self.problem = (self.problem + 1).min(count.saturating_sub(1))
                         }
                         KeyCode::Enter if self.panel == Panel::Problems => self.jump_problem()?,
                         KeyCode::Up | KeyCode::Char('k') => {
@@ -3458,6 +3835,10 @@ impl Workspace {
         }
         let edited = mark.0 == self.edit_mark.0 && mark.1 != self.edit_mark.1;
         self.edit_mark = mark;
+        if edited {
+            self.schedule_live_check(false);
+            self.schedule_auto_save();
+        }
         if edited && self.assistant.suggestion.is_some() {
             // Typing the start of the suggestion keeps the rest on screen.
             let state = self.editor().state();
@@ -3558,20 +3939,60 @@ impl Workspace {
             while let Ok(msg) = rx.try_recv() {
                 changed = true;
                 match msg {
-                    StartupInstallMsg::Line(line) => {
-                        self.tools_log.push(&line);
-                        self.notification = line;
+                    StartupInstallMsg::Progress {
+                        index,
+                        total_items,
+                        progress,
+                    } => {
+                        let phase_changed = self
+                            .install_state
+                            .as_ref()
+                            .is_none_or(|s| s.name != progress.name || s.phase != progress.phase);
+                        if phase_changed {
+                            let note = match progress.phase {
+                                embedide_toolchains::install::Phase::Connecting => {
+                                    format!("Connecting to download {}…", progress.name)
+                                }
+                                embedide_toolchains::install::Phase::Downloading => {
+                                    format!("Downloading {}…", progress.name)
+                                }
+                                embedide_toolchains::install::Phase::Verifying => {
+                                    format!("Verifying SHA-256 of {}…", progress.name)
+                                }
+                                embedide_toolchains::install::Phase::Unpacking => {
+                                    format!("Unpacking {}…", progress.name)
+                                }
+                            };
+                            self.tools_log.push(&note);
+                        }
+                        match &mut self.install_state {
+                            Some(st) => st.update(index, total_items, progress),
+                            None => {
+                                let mut st = InstallState::new(progress.name.clone(), total_items);
+                                st.update(index, total_items, progress);
+                                self.install_state = Some(st);
+                            }
+                        }
                     }
                     StartupInstallMsg::Done(result) => startup_done = Some(result),
                 }
             }
         }
+        if let Some(st) = &mut self.install_state {
+            if st.tick() {
+                changed = true;
+            }
+            if changed {
+                self.notification = st.compact_status();
+            }
+        }
         if let Some(result) = startup_done {
             self.startup_installer = None;
+            self.install_state = None;
             match result {
                 Ok(installed) if !installed.is_empty() => {
                     self.select_compilers();
-                    let msg = format!("Installed toolchains: {} (ready)", installed.join(", "));
+                    let msg = format!("✓ Installed toolchains: {} (ready)", installed.join(", "));
                     self.tools_log.push(&msg);
                     self.notification = msg;
                 }
@@ -3613,6 +4034,8 @@ impl Workspace {
             (None, None) => {}
         }
         changed |= self.poll_lsp();
+        changed |= self.poll_live_check();
+        changed |= self.poll_auto_save();
         if let Some(view) = &mut self.binary {
             changed |= view.tick();
         }
@@ -3676,6 +4099,7 @@ impl Workspace {
                                     }
                                 }
                             }
+                            let _ = self.refresh();
                         }
                         if matches!(running.kind, Operation::Build | Operation::Flash) {
                             self.build_log.push(&message);
@@ -3828,22 +4252,27 @@ impl Workspace {
     fn panel_lines(&self) -> Vec<String> {
         match self.panel {
             Panel::Problems => {
-                if self.problems.is_empty() {
+                let items = self.all_problems();
+                if items.is_empty() {
                     return vec![
                         "No diagnostics / matches. Enter jumps to selected source location.".into(),
                     ];
                 }
-                self.problems
+                items
                     .iter()
                     .enumerate()
                     .map(|(i, d)| {
+                        let shown_file = d.file.as_ref().map_or(String::new(), |p| {
+                            p.strip_prefix(&self.root)
+                                .unwrap_or(p)
+                                .display()
+                                .to_string()
+                        });
                         format!(
                             "{} {} {}:{}:{} {}",
                             if i == self.problem { ">" } else { " " },
                             d.severity,
-                            d.file
-                                .as_ref()
-                                .map_or(String::new(), |p| p.display().to_string()),
+                            shown_file,
                             d.line,
                             d.column,
                             d.message
@@ -3893,7 +4322,7 @@ impl Workspace {
                     UserConfig::path().map_or_else(|e| e.0, |p| p.display().to_string());
                 let project = self.root.join("embedide.toml");
                 let mut lines = vec![
-                    "Compilers are chosen in configuration files, never installed or downloaded automatically:".into(),
+                    "Compilers are chosen in configuration files (pinned [toolchains.install.*] entries auto-install when toolchains.auto_install = true):".into(),
                     format!("  project: {} {}", project.display(), if self.manifest.is_some() { "([toolchain], [profiles.<name>.toolchain])" } else { "(absent: legacy embedide.json adapters are used)" }),
                     format!("  user:    {user_path} ([toolchains] search_dirs, custom, defaults; [ai])"),
                     "  legacy:  embedide.json / embedide.local.json (theme, keys, targets, serial, debug)".into(),
@@ -3907,6 +4336,14 @@ impl Workspace {
                         c.program.display()
                     ));
                 }
+                lines.push(format!(
+                    "Editor: live_diagnostics={} ({}ms) | auto_save={} ({}ms) | auto_save_on_build={}",
+                    if self.user.editor.live_diagnostics { "on" } else { "off" },
+                    self.user.editor.live_diagnostics_delay_ms,
+                    if self.user.editor.auto_save { "on" } else { "off" },
+                    self.user.editor.auto_save_delay_ms,
+                    if self.user.editor.auto_save_on_build { "on" } else { "off" },
+                ));
                 lines.push(format!(
                     "AI: {} | inline suggestions: {} (ai.completion.mode; Alt+\\ asks)",
                     self.assistant.status(),
@@ -3988,7 +4425,13 @@ impl Workspace {
                     .contains(&self.output_filter.to_lowercase())
             });
         }
-        let count = height.saturating_sub(1);
+        let mut count = height.saturating_sub(1);
+        if let Some(st) = &self.install_state {
+            if count > 0 && matches!(self.panel, Panel::Tools | Panel::Build) {
+                rows.push(st.render_row(width));
+                count -= 1;
+            }
+        }
         let start = if self.panel == Panel::Problems {
             self.problem
                 .saturating_sub(count.saturating_sub(1))
@@ -4019,15 +4462,17 @@ impl Workspace {
         if height == 0 {
             return rows;
         }
-        rows.push(layout::label(
-            if self.focus == Focus::Explorer {
-                "> EXPLORER"
-            } else {
-                "EXPLORER"
-            },
-            width,
-            true,
-        ));
+        let root_name = self
+            .root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(".");
+        let header = if self.focus == Focus::Explorer {
+            format!("> EXPLORER · {root_name}/")
+        } else {
+            format!("EXPLORER · {root_name}/")
+        };
+        rows.push(layout::label(&header, width, true));
         let count = height.saturating_sub(1);
         if self.selected < self.tree_top {
             self.tree_top = self.selected;
@@ -4035,13 +4480,20 @@ impl Workspace {
         if self.selected >= self.tree_top + count {
             self.tree_top = self.selected.saturating_sub(count.saturating_sub(1));
         }
-        let active_path = self.editor().state().path().map(Path::to_path_buf);
-        let modified_paths: std::collections::HashSet<&Path> = self
+        let active_path = if self.viewing_binary() {
+            self.binary.as_ref().map(|b| b.path().to_path_buf())
+        } else {
+            self.editor().state().path().map(Path::to_path_buf)
+        };
+        let mut modified_paths: std::collections::HashSet<&Path> = self
             .documents
             .iter()
             .filter(|d| d.editor().state().is_modified())
             .filter_map(|d| d.editor().state().path())
             .collect();
+        if let Some(b) = self.binary.as_ref().filter(|b| b.file.is_modified()) {
+            modified_paths.insert(b.path());
+        }
         let has_sibling_after = |idx: usize, depth: usize| -> bool {
             for next in &self.tree[idx + 1..] {
                 if next.depth < depth {
@@ -4061,24 +4513,21 @@ impl Workspace {
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy();
-            let mut prefix = String::new();
             let depth = node.depth.min(16);
-            if depth > 0 {
-                for d in 1..depth {
-                    prefix.push_str(if has_sibling_after(i, d) { "| " } else { "  " });
-                }
-                prefix.push_str(if has_sibling_after(i, depth) {
-                    "|-"
+            let mut prefix = String::new();
+            for d in 0..depth {
+                prefix.push_str(if has_sibling_after(i, d) {
+                    "│  "
                 } else {
-                    "`-"
+                    "   "
                 });
             }
-            let mut r = Row::default();
-            let cursor_mark = if selected && self.focus == Focus::Explorer {
-                ">"
+            prefix.push_str(if has_sibling_after(i, depth) {
+                "├─ "
             } else {
-                " "
-            };
+                "└─ "
+            });
+            let mut r = Row::default();
             let mut used = 0usize;
             let mut push_clipped = |text: &str, style: Option<Paint>| {
                 if used >= width {
@@ -4100,17 +4549,7 @@ impl Workspace {
                     r.push_styled(&out, selected, style);
                 }
             };
-            push_clipped(
-                cursor_mark,
-                if selected {
-                    Some(Role::Accent.into())
-                } else {
-                    None
-                },
-            );
-            if !prefix.is_empty() {
-                push_clipped(&prefix, Some(Role::Muted.into()));
-            }
+            push_clipped(&prefix, Some(Role::Muted.into()));
             if node.entry.directory {
                 let tag = if node.expanded { "[-] " } else { "[+] " };
                 push_clipped(tag, Some(Role::Ai.into()));
@@ -4120,15 +4559,6 @@ impl Workspace {
                     .as_deref()
                     .is_some_and(|p| p == node.entry.path.as_path());
                 let is_modified = modified_paths.contains(node.entry.path.as_path());
-                let mark = if is_active { "* " } else { "  " };
-                push_clipped(
-                    mark,
-                    if is_active {
-                        Some(Role::Accent.into())
-                    } else {
-                        Some(Role::Muted.into())
-                    },
-                );
                 let style = if is_modified {
                     Some(Role::Warning.into())
                 } else if is_active {
@@ -4137,6 +4567,9 @@ impl Workspace {
                     None
                 };
                 push_clipped(&name, style);
+                if is_active {
+                    push_clipped(" *", Some(Role::Accent.into()));
+                }
                 if is_modified {
                     push_clipped(" [M]", Some(Role::Warning.into()));
                 }
@@ -4154,8 +4587,10 @@ impl Workspace {
     }
     /// Mode | file | language | compiler | position | focus | message.
     fn status_line(&self) -> String {
-        if let (Some(view), Focus::Editor) = (&self.binary, self.focus) {
-            return format!("{} | Ctrl+K commands", view.status());
+        if self.viewing_binary() && self.focus == Focus::Editor {
+            if let Some(view) = &self.binary {
+                return format!("{} | Ctrl+K commands", view.status());
+            }
         }
         let state = self.editor().state();
         let mode = match self.editor().input().mode() {
@@ -4191,15 +4626,543 @@ impl Workspace {
             other => format!("{} · {mode}", format!("{other:?}").to_uppercase()),
         };
         let info = format!(
-            "{file}{} | {language} | {} | {position}",
+            "{file}{} | {language} | {} | {position}{}{}",
             if state.is_modified() { " [+]" } else { "" },
             self.compiler_label(language),
+            self.diagnostic_badge(),
+            if self.user.editor.auto_save {
+                " | auto-save"
+            } else {
+                ""
+            },
         );
         // Errors must stay readable on an 80-column terminal.
         if self.notification.starts_with("Error") {
             format!("{place} | {} | {info} | {hint}", self.notification)
         } else {
             format!("{place} | {info} | {hint} | {}", self.notification)
+        }
+    }
+    /// All workspace diagnostics (latest build/search matches plus live LSP and syntax diagnostics).
+    fn all_problems(&self) -> Vec<&Diagnostic> {
+        let mut out: Vec<&Diagnostic> = self.problems.iter().collect();
+        for list in self
+            .lsp_diagnostics
+            .values()
+            .chain(self.live_diagnostics.values())
+        {
+            for d in list {
+                let duplicate = out
+                    .iter()
+                    .any(|e| e.line == d.line && e.message == d.message && e.file == d.file);
+                if !duplicate {
+                    out.push(d);
+                }
+            }
+        }
+        out
+    }
+    /// Diagnostics (from the latest build, LSP, and live syntax checks) that belong to the active file.
+    fn active_diagnostics(&self) -> Vec<&Diagnostic> {
+        let Some(active) = self.editor().state().path() else {
+            return Vec::new();
+        };
+        let active_canon = active
+            .canonicalize()
+            .unwrap_or_else(|_| active.to_path_buf());
+        let mut out: Vec<&Diagnostic> = self
+            .problems
+            .iter()
+            .filter(|d| d.severity != "match")
+            .filter(|d| {
+                d.file.as_ref().is_some_and(|f| {
+                    let resolved = if f.is_absolute() {
+                        f.clone()
+                    } else {
+                        self.root.join(f)
+                    };
+                    resolved == active
+                        || resolved == active_canon
+                        || resolved.canonicalize().is_ok_and(|c| c == active_canon)
+                })
+            })
+            .collect();
+        for source in [
+            self.lsp_diagnostics.get(&active_canon),
+            self.live_diagnostics.get(&active_canon),
+            (active != active_canon.as_path())
+                .then(|| self.live_diagnostics.get(active))
+                .flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for d in source {
+                let duplicate = out
+                    .iter()
+                    .any(|e| e.line == d.line && e.message == d.message);
+                if !duplicate {
+                    out.push(d);
+                }
+            }
+        }
+        out
+    }
+    /// Whether a ready LSP server already owns diagnostics for `path`.
+    fn lsp_ready_for(&self, path: &Path) -> bool {
+        let Some(language) = lsp_language(Some(path)) else {
+            return false;
+        };
+        let Some(server) = lsp::server_for(language, &self.config.completion) else {
+            return false;
+        };
+        matches!(
+            self.lsp.get(&server_key(&server)),
+            Some(LspSlot::Running(client)) if client.is_ready()
+        )
+    }
+    /// Queue a background syntax check for the active document.
+    fn schedule_live_check(&mut self, immediate: bool) {
+        if !self.user.editor.live_diagnostics || self.viewing_binary() {
+            return;
+        }
+        let Some(path) = self.editor().state().path().map(Path::to_path_buf) else {
+            return;
+        };
+        let language = language_of(Some(&path));
+        if language == "text" {
+            return;
+        }
+        let key = path.canonicalize().unwrap_or(path);
+        let delay = if immediate {
+            Duration::from_millis(0)
+        } else {
+            Duration::from_millis(self.user.editor.live_diagnostics_delay_ms)
+        };
+        self.live_check.schedule(key, language.into(), delay);
+    }
+    /// Launch any debounced live check whose timer elapsed and apply finished live diagnostics.
+    fn poll_live_check(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(result) = self.live_check.poll_result() {
+            // Drop stale build diagnostics for this file now that fresh live diagnostics arrived.
+            let target = result.path.clone();
+            self.problems.retain(|d| {
+                if d.severity == "match" {
+                    return true;
+                }
+                let matches = d.file.as_ref().is_some_and(|f| {
+                    let resolved = if f.is_absolute() {
+                        f.clone()
+                    } else {
+                        self.root.join(f)
+                    };
+                    resolved == target || resolved.canonicalize().is_ok_and(|c| c == target)
+                });
+                !matches
+            });
+            if result.items.is_empty() {
+                self.live_diagnostics.remove(&result.path);
+            } else {
+                self.live_diagnostics.insert(result.path, result.items);
+            }
+            changed = true;
+        }
+        if !self.user.editor.live_diagnostics {
+            return changed;
+        }
+        if let Some((generation, path, language)) = self.live_check.take_due() {
+            if self.lsp_ready_for(&path) {
+                return changed;
+            }
+            let Some(doc) = self.documents.iter().find(|d| {
+                d.editor()
+                    .state()
+                    .path()
+                    .is_some_and(|p| p == path || p.canonicalize().is_ok_and(|c| c == path))
+            }) else {
+                return changed;
+            };
+            let state = doc.editor().state();
+            if state.buffer().byte_len() > livecheck::MAX_BUFFER_BYTES {
+                return changed;
+            }
+            let contents = state.buffer().contents();
+            self.live_check.spawn(livecheck::CheckJob {
+                generation,
+                path,
+                root: self.root.clone(),
+                language,
+                contents,
+                compilers: self.compilers.clone(),
+            });
+        }
+        changed
+    }
+    /// Arm the idle auto-save timer if `editor.auto_save` is enabled.
+    fn schedule_auto_save(&mut self) {
+        self.auto_save_blocked = false;
+        if !self.user.editor.auto_save {
+            self.auto_save_due = None;
+            return;
+        }
+        if self.editor().state().path().is_some() && self.editor().state().is_modified() {
+            self.auto_save_due =
+                Some(Instant::now() + Duration::from_millis(self.user.editor.auto_save_delay_ms));
+        }
+    }
+    /// Save all modified text documents that already have a path (never binaries or `[untitled]`).
+    fn save_modified_text_documents(&mut self, quiet: bool) -> Result<usize, FrontendError> {
+        let mut saved_names = Vec::new();
+        for idx in 0..self.documents.len() {
+            let needs_save = {
+                let st = self.documents[idx].editor().state();
+                st.is_modified() && st.path().is_some()
+            };
+            if !needs_save {
+                continue;
+            }
+            let path = self.documents[idx]
+                .editor()
+                .state()
+                .path()
+                .map(Path::to_path_buf);
+            self.documents[idx].session.editor.save()?;
+            if let Some(p) = path {
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                saved_names.push(name);
+            }
+        }
+        let count = saved_names.len();
+        if count > 0 {
+            self.notify_lsp_saved();
+            let _ = self.refresh();
+            if !quiet {
+                self.notification = if count == 1 {
+                    format!("Auto-saved {}", saved_names[0])
+                } else {
+                    format!("Auto-saved {count} files")
+                };
+            }
+        }
+        Ok(count)
+    }
+    /// Perform a due idle auto-save if safe to do so.
+    fn poll_auto_save(&mut self) -> bool {
+        if !self.user.editor.auto_save || self.auto_save_blocked {
+            return false;
+        }
+        let Some(due) = self.auto_save_due else {
+            return false;
+        };
+        if Instant::now() < due
+            || self.dialog.is_some()
+            || self.editor().input().command_prompt().is_some()
+        {
+            return false;
+        }
+        self.auto_save_due = None;
+        match self.save_modified_text_documents(false) {
+            Ok(saved) => saved > 0,
+            Err(error) => {
+                self.auto_save_blocked = true;
+                self.notification = format!("Auto-save skipped: {error}");
+                true
+            }
+        }
+    }
+    /// `:autosave [on|off|<delay_ms>]` — toggle or configure idle auto-save and persist to `config.toml`.
+    fn configure_auto_save(&mut self, arg: &str) -> Result<(), FrontendError> {
+        let trimmed = arg.trim();
+        let (enabled, delay) = if trimmed.is_empty() {
+            (
+                !self.user.editor.auto_save,
+                self.user.editor.auto_save_delay_ms,
+            )
+        } else if matches!(trimmed, "on" | "true" | "1") {
+            (true, self.user.editor.auto_save_delay_ms)
+        } else if matches!(trimmed, "off" | "false" | "0") {
+            (false, self.user.editor.auto_save_delay_ms)
+        } else if let Ok(ms) = trimmed.parse::<u64>() {
+            if !(200..=60_000).contains(&ms) {
+                return Err(service_error("Auto-save delay must be 200..=60000 ms"));
+            }
+            (true, ms)
+        } else {
+            return Err(service_error("Usage: :autosave [on|off|<delay_ms>]"));
+        };
+        self.user.editor.auto_save = enabled;
+        self.user.editor.auto_save_delay_ms = delay;
+        self.auto_save_blocked = false;
+        if enabled {
+            self.schedule_auto_save();
+        } else {
+            self.auto_save_due = None;
+        }
+        let persisted = UserConfig::path()
+            .and_then(|p| {
+                let mut f = embedide_workspace::ConfigFile::open(&p)?;
+                f.set("editor.auto_save", if enabled { "true" } else { "false" })?;
+                f.set("editor.auto_save_delay_ms", &delay.to_string())?;
+                f.save(|t| UserConfig::parse(t).map(|_| ()))
+            })
+            .is_ok();
+        self.notification = if enabled {
+            format!(
+                "Auto-save ON ({delay}ms){}",
+                if persisted {
+                    " · saved to config.toml"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "Auto-save OFF{}",
+                if persisted {
+                    " · saved to config.toml"
+                } else {
+                    ""
+                }
+            )
+        };
+        Ok(())
+    }
+    /// `:livecheck [on|off]` — toggle dynamic syntax/compiler diagnostics and persist to `config.toml`.
+    fn configure_live_check(&mut self, arg: &str) -> Result<(), FrontendError> {
+        let trimmed = arg.trim();
+        let enabled = if trimmed.is_empty() {
+            !self.user.editor.live_diagnostics
+        } else if matches!(trimmed, "on" | "true" | "1") {
+            true
+        } else if matches!(trimmed, "off" | "false" | "0") {
+            false
+        } else {
+            return Err(service_error("Usage: :livecheck [on|off]"));
+        };
+        self.user.editor.live_diagnostics = enabled;
+        if enabled {
+            self.schedule_live_check(true);
+        } else {
+            self.live_check.cancel();
+            self.live_diagnostics.clear();
+        }
+        let persisted = UserConfig::path()
+            .and_then(|p| {
+                let mut f = embedide_workspace::ConfigFile::open(&p)?;
+                f.set(
+                    "editor.live_diagnostics",
+                    if enabled { "true" } else { "false" },
+                )?;
+                f.save(|t| UserConfig::parse(t).map(|_| ()))
+            })
+            .is_ok();
+        self.notification = if enabled {
+            format!(
+                "Live diagnostics ON{}",
+                if persisted {
+                    " · saved to config.toml"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "Live diagnostics OFF{}",
+                if persisted {
+                    " · saved to config.toml"
+                } else {
+                    ""
+                }
+            )
+        };
+        Ok(())
+    }
+    fn diagnostic_badge(&self) -> String {
+        let diags = self.active_diagnostics();
+        if diags.is_empty() {
+            return String::new();
+        }
+        let errors = diags
+            .iter()
+            .filter(|d| d.severity.contains("error"))
+            .count();
+        let warnings = diags
+            .iter()
+            .filter(|d| d.severity.contains("warning"))
+            .count();
+        match (errors, warnings) {
+            (0, 0) => String::new(),
+            (e, 0) => format!(" | {e}E"),
+            (0, w) => format!(" | {w}W"),
+            (e, w) => format!(" | {e}E {w}W"),
+        }
+    }
+    fn diagnostic_at_cursor(&self) -> Option<(Role, String)> {
+        let line = self.editor().state().position().ok()?.line + 1;
+        let diags = self.active_diagnostics();
+        let best = diags.iter().filter(|d| d.line == line).min_by_key(|d| {
+            if d.severity.contains("error") {
+                0u8
+            } else if d.severity.contains("warning") {
+                1
+            } else {
+                2
+            }
+        })?;
+        let (role, tag) = if best.severity.contains("error") {
+            (Role::Error, "E")
+        } else if best.severity.contains("warning") {
+            (Role::Warning, "W")
+        } else {
+            (Role::Muted, "I")
+        };
+        Some((role, format!("{tag}: {}", best.message)))
+    }
+    /// Annotate visible editor rows with gutter error/warning markers (`E`/`W`) and inline
+    /// end-of-line diagnostic text without modifying the document buffer or cursor.
+    fn annotate_diagnostics(&self, frame: &mut Frame, width: usize) {
+        let diags = self.active_diagnostics();
+        if diags.is_empty() || width < 8 {
+            return;
+        }
+        let top = self.documents[self.active].viewport().top;
+        let digits = self.editor().state().line_count().to_string().len();
+        let gutter = if width > digits + 3 { digits + 2 } else { 0 };
+        let body = frame.rows.len().saturating_sub(2);
+        let mut by_line: BTreeMap<usize, Vec<&Diagnostic>> = BTreeMap::new();
+        for d in diags {
+            by_line.entry(d.line).or_default().push(d);
+        }
+        for (screen_y, row) in frame.rows.iter_mut().take(body).enumerate() {
+            let line_no = top + screen_y + 1;
+            let Some(list) = by_line.get(&line_no) else {
+                continue;
+            };
+            let primary = list
+                .iter()
+                .copied()
+                .min_by_key(|d| {
+                    if d.severity.contains("error") {
+                        0u8
+                    } else if d.severity.contains("warning") {
+                        1
+                    } else {
+                        2
+                    }
+                })
+                .expect("nonempty");
+            let is_error = primary.severity.contains("error");
+            let is_warning = primary.severity.contains("warning");
+            let role = if is_error {
+                Role::Error
+            } else if is_warning {
+                Role::Warning
+            } else {
+                Role::Muted
+            };
+            let sign = if is_error {
+                'E'
+            } else if is_warning {
+                'W'
+            } else {
+                'i'
+            };
+            // Paint gutter line-number prefix in error/warning colour and replace leading space with E/W.
+            // `Row::push_attrs` may coalesce the unstyled gutter with leading unstyled text on the line,
+            // so split cleanly at the exact `gutter` byte boundary.
+            if gutter > 0 && !row.runs.is_empty() {
+                let first = &row.runs[0];
+                if first.text.len() >= gutter
+                    && first.text.is_char_boundary(gutter)
+                    && first.text.starts_with(' ')
+                    && first.text[..gutter]
+                        .trim()
+                        .bytes()
+                        .all(|b| b.is_ascii_digit())
+                {
+                    let rest = first.text[gutter..].to_string();
+                    let orig_selected = first.selected;
+                    let orig_style = first.style;
+                    let orig_cell = first.cell;
+                    let mut gutter_text = String::with_capacity(gutter);
+                    gutter_text.push(sign);
+                    gutter_text.push_str(&first.text[1..gutter]);
+                    row.runs[0].text = gutter_text;
+                    row.runs[0].style = Some(role.into());
+                    if !rest.is_empty() {
+                        row.runs.insert(
+                            1,
+                            layout::Run {
+                                text: rest,
+                                selected: orig_selected,
+                                style: orig_style,
+                                cell: orig_cell,
+                            },
+                        );
+                    }
+                }
+            }
+            // Append inline virtual diagnostic text after the line content if room remains.
+            let used: usize = row
+                .runs
+                .iter()
+                .map(|r| UnicodeWidthStr::width(r.text.as_str()))
+                .sum();
+            let extra = if list.len() > 1 {
+                format!(" (+{})", list.len() - 1)
+            } else {
+                String::new()
+            };
+            let msg = format!("  ← {sign}: {}{extra}", primary.message);
+            if used + 6 < width {
+                let avail = width - used;
+                let mut out = String::new();
+                let mut w = 0usize;
+                let mut truncated = false;
+                for ch in msg.chars() {
+                    if ch.is_control() {
+                        continue;
+                    }
+                    let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if w + cw > avail {
+                        truncated = true;
+                        break;
+                    }
+                    w += cw;
+                    out.push(ch);
+                }
+                if truncated && avail >= 2 {
+                    while UnicodeWidthStr::width(out.as_str()) + 1 > avail {
+                        if out.pop().is_none() {
+                            break;
+                        }
+                    }
+                    out.push('…');
+                }
+                if !out.is_empty() {
+                    row.push_styled(&out, false, Some(role.into()));
+                }
+            }
+        }
+        // When the cursor sits on a diagnostic line and the editor's bottom hint row is idle,
+        // display the full diagnostic text in colour there so workspace notifications stay intact.
+        if self.editor().input().command_prompt().is_none()
+            && self.documents[self.active].session.message.is_empty()
+        {
+            if let (Some((role, msg)), Some(hint_row)) =
+                (self.diagnostic_at_cursor(), frame.rows.last_mut())
+            {
+                let mut row = layout::label(&msg, width, false);
+                for run in &mut row.runs {
+                    run.style = Some(role.into());
+                }
+                *hint_row = row;
+            }
         }
     }
     /// Show a pending AI completion at the cursor without touching the buffer:
@@ -4297,7 +5260,7 @@ impl Workspace {
             width,
             true,
         )];
-        let tabs: String = self
+        let mut tabs: String = self
             .documents
             .iter()
             .enumerate()
@@ -4307,7 +5270,11 @@ impl Workspace {
             .map(|(i, doc)| {
                 format!(
                     "{}{}{}  ",
-                    if i == self.active { ">" } else { " " },
+                    if !self.binary_active && i == self.active {
+                        ">"
+                    } else {
+                        " "
+                    },
                     doc.editor()
                         .state()
                         .path()
@@ -4321,6 +5288,23 @@ impl Workspace {
                 )
             })
             .collect();
+        if let Some(view) = &self.binary {
+            let bname = view
+                .path()
+                .file_name()
+                .map_or("binary".into(), |n| n.to_string_lossy());
+            let btab = format!(
+                "{}[BIN] {}{}  ",
+                if self.binary_active { ">" } else { " " },
+                bname,
+                if view.file.is_modified() { "*" } else { "" }
+            );
+            if self.binary_active {
+                tabs.insert_str(0, &btab);
+            } else {
+                tabs.push_str(&btab);
+            }
+        }
         rows.push(layout::label(&tabs, width, false));
         let area = height - 3;
         let bottom_focus = matches!(self.focus, Focus::Panel | Focus::Terminal);
@@ -4382,9 +5366,12 @@ impl Workspace {
                     ((editor_width + 1) as u16, editor_height as u16);
                 let mut frame = self.documents[self.active].frame()?;
                 self.ghost_text(&mut frame, editor_width);
-                if let Some(view) = &mut self.binary {
-                    frame.rows = view.rows(editor_width, editor_height);
-                    frame.cursor = None;
+                self.annotate_diagnostics(&mut frame, editor_width);
+                if self.binary_active {
+                    if let Some(view) = &mut self.binary {
+                        frame.rows = view.rows(editor_width, editor_height);
+                        frame.cursor = None;
+                    }
                 }
                 cursor = if self.focus == Focus::Editor {
                     frame.cursor.map(|(x, y)| (x + left as u16, y + 2))
@@ -4586,6 +5573,8 @@ pub fn run_with(
             || app.inventory.is_some()
             || app.assistant.busy()
             || app.terminal.is_some()
+            || app.live_check.busy()
+            || app.auto_save_due.is_some()
         {
             20
         } else {
@@ -4807,6 +5796,9 @@ fn gutter_width(row: &Row) -> usize {
     let text: String = row.runs.iter().map(|r| r.text.as_str()).collect();
     let b = text.as_bytes();
     let mut i = 0;
+    if matches!(b.first(), Some(b'E' | b'W' | b'i')) {
+        i += 1;
+    }
     while i < b.len() && b[i] == b' ' {
         i += 1;
     }
@@ -5149,18 +6141,61 @@ mod tests {
     }
 
     #[test]
-    fn without_release_events_the_hide_chord_is_never_inferred() {
+    fn legacy_terminals_hide_panels_with_alt_digit_delete_and_ignore_intervening_keys() {
         let dir = std::env::temp_dir().join(format!("embed-ws-legacy-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let mut ws = Workspace::open(&dir, 120, 40).unwrap();
         ws.set_keyboard_enhanced(false);
+        // Alt+2 followed immediately by Alt+Delete hides AI panel.
         ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
         ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
-        assert!(ws.assistant_visible, "a held key cannot be observed");
-        ws.command("hide_assistant").unwrap();
-        assert!(!ws.assistant_visible);
+        assert!(!ws.assistant_visible, "Alt+2+Delete must hide AI panel");
+        // Alt+1 followed immediately by Alt+Delete hides Explorer.
+        ws.handle(press(KeyCode::Char('1'), KeyEventKind::Press));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(!ws.explorer_visible, "Alt+1+Delete must hide Explorer");
+        // Alt+3 followed immediately by Alt+Delete hides Terminal / bottom panel.
+        ws.handle(press(KeyCode::Char('3'), KeyEventKind::Press));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(!ws.panel_visible, "Alt+3+Delete must hide Terminal panel");
+        // Reopen AI, type an intervening key, then Alt+Delete must NOT hide it.
+        ws.handle(press(KeyCode::Char('2'), KeyEventKind::Press));
+        assert!(ws.assistant_visible);
+        ws.handle(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )));
+        ws.handle(press(KeyCode::Delete, KeyEventKind::Press));
+        assert!(ws.assistant_visible, "intervening key clears hide chord");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_progress_animation_renders_spinner_bar_and_phases() {
+        let mut st = InstallState::new("zig".into(), 1);
+        let conn = st.compact_status();
+        assert!(conn.contains("Connecting zig"), "{conn}");
+        st.update(
+            1,
+            1,
+            embedide_toolchains::install::Progress {
+                name: "zig".into(),
+                phase: embedide_toolchains::install::Phase::Downloading,
+                downloaded: 25 * 1024 * 1024,
+                total: Some(50 * 1024 * 1024),
+            },
+        );
+        let dl = st.compact_status();
+        assert!(dl.contains("Downloading zig"), "{dl}");
+        assert!(dl.contains("50%"), "{dl}");
+        assert!(dl.contains("█") && dl.contains("░"), "{dl}");
+        let row = st.render_row(80);
+        let rendered: String = row.runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(
+            rendered.contains("Downloading zig") && rendered.contains("50%"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -6069,6 +7104,205 @@ mod tests {
             "{}",
             ws.status_line()
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn colon_q_exits_workspace_immediately_and_explorer_switches_between_binary_and_code() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-qbin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.f90"), "program p\nend program\n").unwrap();
+        fs::write(dir.join("b.f90"), "module m\nend module\n").unwrap();
+        fs::write(dir.join("prog.bin"), [0x7f, b'E', b'L', b'F', 0, 1, 2, 3]).unwrap();
+
+        let mut ws = Workspace::open(&dir, 120, 32).unwrap();
+        ws.open_file(Path::new("a.f90")).unwrap();
+        ws.open_file(Path::new("b.f90")).unwrap();
+        assert_eq!(ws.document_count(), 2);
+
+        // Open binary via Explorer/open_file, edit a byte, switch back to code, then back to binary.
+        ws.open_file(Path::new("prog.bin")).unwrap();
+        assert!(ws.viewing_binary());
+        key(&mut ws, KeyCode::Char('i'), KeyModifiers::NONE);
+        key(&mut ws, KeyCode::Char('f'), KeyModifiers::NONE);
+        key(&mut ws, KeyCode::Char('f'), KeyModifiers::NONE);
+        assert!(ws.binary.as_ref().unwrap().file.is_modified());
+
+        // Switching to a code file from Explorer immediately returns to text editing.
+        ws.open_file(Path::new("a.f90")).unwrap();
+        assert!(!ws.viewing_binary());
+        assert!(ws.editor().state().path().unwrap().ends_with("a.f90"));
+
+        // Re-selecting the edited binary returns to it with unsaved hex edits preserved.
+        ws.open_file(Path::new("prog.bin")).unwrap();
+        assert!(ws.viewing_binary());
+        assert!(ws.binary.as_ref().unwrap().file.is_modified());
+
+        // `:q` on clean code while binary has unsaved edits asks confirmation; Esc keeps doc open.
+        ws.open_file(Path::new("a.f90")).unwrap();
+        type_keys(&mut ws, ":q\r");
+        assert!(!ws.is_closed());
+        assert!(ws.dialog.is_some());
+        key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(ws.dialog.is_none());
+
+        // Discard binary edits, then `:q` with 2 open text tabs exits the whole IDE immediately!
+        ws.open_file(Path::new("prog.bin")).unwrap();
+        ws.command("close_binary").unwrap();
+        key(&mut ws, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert!(ws.binary.is_none());
+        type_keys(&mut ws, ":q\r");
+        assert!(
+            ws.is_closed(),
+            ":q must exit the IDE even with multiple tabs open"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inline_and_gutter_diagnostics_render_on_error_lines_and_status_bar() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-diags-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = "program main\n  implicit none\n  real :: x = 20\n  print *, result\nend program main\n";
+        fs::write(dir.join("main.f90"), src).unwrap();
+
+        let mut ws = Workspace::open(&dir, 140, 32).unwrap();
+        ws.open_file(Path::new("main.f90")).unwrap();
+        // Feed real gfortran multi-line error on indented line 4 (where gutter & leading spaces coalesce).
+        for line in [
+            "main.f90:4:12:",
+            "",
+            "    4 |   print *, result",
+            "      |            1",
+            "Error: Symbol 'result' at (1) has no IMPLICIT type",
+        ] {
+            if let Some(d) = ws.diag_parser.feed(line) {
+                ws.problems.push(d);
+            }
+        }
+        // Also add an LSP warning on line 3.
+        let canon = dir.join("main.f90").canonicalize().unwrap();
+        ws.lsp_diagnostics.insert(
+            canon.clone(),
+            vec![Diagnostic {
+                severity: "warning".into(),
+                message: "Unused variable 'x'".into(),
+                file: Some(canon),
+                line: 3,
+                column: 11,
+                code: None,
+                source: "lsp".into(),
+            }],
+        );
+
+        let frame = ws.frame().unwrap();
+        let rows: Vec<String> = frame
+            .rows
+            .iter()
+            .map(|r| r.runs.iter().map(|run| run.text.as_str()).collect())
+            .collect();
+        // Line 3 has W gutter marker + inline warning; line 4 has E gutter marker + inline error.
+        let line3 = rows.iter().find(|r| r.contains("real :: x = 20")).unwrap();
+        assert!(line3.contains("W3 "), "expected W3 gutter: {line3}");
+        assert!(
+            line3.contains("← W: Unused variable 'x'"),
+            "expected inline warning: {line3}"
+        );
+        let line4 = rows.iter().find(|r| r.contains("print *, result")).unwrap();
+        assert!(line4.contains("E4 "), "expected E4 gutter: {line4}");
+        assert!(
+            line4.contains("← E: Symbol 'result' at (1)"),
+            "expected inline error: {line4}"
+        );
+        assert!(
+            line4.contains('…'),
+            "clipped inline error should end with ellipsis: {line4}"
+        );
+
+        // Status bar shows badge `1E 1W` while keeping workspace notifications intact,
+        // and moving cursor to line 4 shows the full error message on the editor's bottom row.
+        ws.goto_line(4).unwrap();
+        let status = ws.status_line();
+        assert!(status.contains("1E 1W"), "expected badge: {status}");
+        let frame2 = ws.frame().unwrap();
+        let rows2: Vec<String> = frame2
+            .rows
+            .iter()
+            .map(|r| r.runs.iter().map(|run| run.text.as_str()).collect())
+            .collect();
+        assert!(
+            rows2
+                .iter()
+                .any(|r| r.contains("E: Symbol 'result' at (1) has no IMPLICIT type")),
+            "expected full cursor diagnostic on editor bottom row: {rows2:?}"
+        );
+
+        // PROBLEMS panel includes both build and LSP diagnostics.
+        ws.panel = Panel::Problems;
+        let plines = ws.panel_lines();
+        assert_eq!(plines.len(), 2, "{plines:?}");
+        assert!(plines.iter().any(|l| l.contains("Symbol 'result'")));
+        assert!(plines.iter().any(|l| l.contains("Unused variable 'x'")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_diagnostics_and_auto_save_update_without_manual_build() {
+        let dir = std::env::temp_dir().join(format!("embed-ws-live-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("check.sh");
+        fs::write(&script, "if true; then\n  echo hi\n").unwrap();
+
+        let mut ws = Workspace::open(&dir, 140, 32).unwrap();
+        ws.user.editor.live_diagnostics = true;
+        ws.user.editor.live_diagnostics_delay_ms = 100;
+        ws.open_file(Path::new("check.sh")).unwrap();
+
+        // Opening the file immediately schedules live syntax checking without running a build.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while ws.active_diagnostics().is_empty() && Instant::now() < deadline {
+            ws.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !ws.active_diagnostics().is_empty(),
+            "expected live syntax error on incomplete shell script"
+        );
+
+        // Enable auto-save (short delay) and fix the missing `fi` in insert mode.
+        ws.user.editor.auto_save = true;
+        ws.user.editor.auto_save_delay_ms = 200;
+        assert!(ws.status_line().contains("auto-save"));
+        type_keys(&mut ws, "Gofi\x1b");
+        assert!(ws.editor().state().is_modified());
+
+        // Poll until both auto-save writes the fixed file AND live diagnostics clear.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while (ws.editor().state().is_modified() || !ws.active_diagnostics().is_empty())
+            && Instant::now() < deadline
+        {
+            ws.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !ws.editor().state().is_modified(),
+            "auto-save must write modified text buffer"
+        );
+        assert!(
+            ws.active_diagnostics().is_empty(),
+            "live diagnostics must clear once syntax is fixed: {:?}",
+            ws.active_diagnostics()
+        );
+        let on_disk = fs::read_to_string(&script).unwrap();
+        assert!(
+            on_disk.contains("fi"),
+            "saved content missing fix: {on_disk}"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

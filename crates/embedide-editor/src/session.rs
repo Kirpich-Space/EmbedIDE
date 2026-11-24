@@ -59,6 +59,10 @@ impl Editor {
     pub fn state(&self) -> &EditorState {
         &self.state
     }
+    /// Clear the closed flag when the host intercepts `:q` (for example, to confirm other unsaved tabs).
+    pub fn clear_closed(&mut self) {
+        self.state.clear_closed();
+    }
     /// Current mode, command prompt and unfinished parser state.
     pub fn input(&self) -> &VimInput {
         &self.input
