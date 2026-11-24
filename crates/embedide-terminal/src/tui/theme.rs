@@ -85,6 +85,10 @@ pub struct Tokens {
 }
 
 /// Carbon, the dark theme.
+///
+/// Syntax categories use cool blues, teals, greens, golds and purples so every
+/// construct is distinct in both truecolor and 16-color TTYs; red is reserved
+/// exclusively for [`Role::Error`].
 pub const CARBON: Tokens = Tokens {
     surface: (0x0b, 0x0b, 0x0c),
     raised: (0x1c, 0x1c, 0x20),
@@ -96,17 +100,17 @@ pub const CARBON: Tokens = Tokens {
     error: (0xf2, 0x64, 0x5f),
     ai: (0x86, 0xb9, 0xcc),
     syntax: [
-        (0xe0, 0x70, 0x3f), // keyword: syn-keyword
-        (0xe3, 0xb9, 0x8f), // type: syn-type
-        (0xf4, 0xf1, 0xec), // function: ink
-        (0xa6, 0xc4, 0x8e), // string: syn-string
-        (0xe8, 0xc2, 0x7a), // number: syn-number
-        (0x8a, 0x8a, 0x91), // comment: syn-comment
-        (0xe8, 0xc2, 0x7a), // constant: syn-number
-        (0xa8, 0xa6, 0xa2), // operator: ink-muted
-        (0x86, 0xb9, 0xcc), // preprocessor: syn-register
-        (0xf4, 0xf1, 0xec), // variable: ink
-        (0xf3, 0xdc, 0xcb), // branch: ceramic-100 (jumps stand apart from keywords)
+        (0x82, 0xaa, 0xff), // keyword: periwinkle blue (never red)
+        (0x5f, 0xc2, 0xb0), // type: teal
+        (0xe5, 0xc0, 0x7b), // function: warm gold
+        (0x89, 0xc7, 0x7d), // string: sage green
+        (0xd8, 0xa6, 0x57), // number: soft amber
+        (0x88, 0x8e, 0x9a), // comment: slate grey
+        (0xc7, 0x92, 0xea), // constant: soft lavender
+        (0xb0, 0xb4, 0xbc), // operator: light slate
+        (0x66, 0xc2, 0xe0), // preprocessor: cyan-blue
+        (0xf4, 0xf1, 0xec), // variable: warm bone ink
+        (0xf0, 0xc6, 0x74), // branch: bright gold (distinct from keyword)
     ],
 };
 
@@ -122,17 +126,17 @@ pub const BONE: Tokens = Tokens {
     error: (0xb8, 0x30, 0x2c),
     ai: (0x2c, 0x6a, 0x80),
     syntax: [
-        (0xa3, 0x40, 0x1a),
-        (0x8a, 0x5a, 0x22),
-        (0x0b, 0x0b, 0x0c),
-        (0x3f, 0x6b, 0x2a),
-        (0x7a, 0x58, 0x00),
-        (0x63, 0x61, 0x5b),
-        (0x7a, 0x58, 0x00),
-        (0x5c, 0x5a, 0x55),
-        (0x2c, 0x6a, 0x80),
-        (0x0b, 0x0b, 0x0c),
-        (0x8a, 0x35, 0x14), // branch: rust-700
+        (0x1f, 0x4e, 0xa8), // keyword: cobalt blue (never red)
+        (0x0e, 0x6b, 0x63), // type: deep teal
+        (0x7a, 0x4b, 0x00), // function: bronze
+        (0x2a, 0x6b, 0x2f), // string: forest green
+        (0x6b, 0x47, 0x00), // number: dark amber
+        (0x5a, 0x5e, 0x66), // comment: slate grey
+        (0x6c, 0x2d, 0x8f), // constant: deep purple
+        (0x4c, 0x50, 0x58), // operator: dark slate
+        (0x1a, 0x60, 0x7a), // preprocessor: deep cyan
+        (0x0b, 0x0b, 0x0c), // variable: carbon ink
+        (0x85, 0x4a, 0x00), // branch: deep gold-brown
     ],
 };
 
@@ -177,9 +181,118 @@ pub fn paint_rgb(theme: Theme, paint: Paint) -> Rgb {
 }
 
 /// Foreground colour of a paint on this terminal.
+///
+/// 16-colour TTY consoles (such as FreeBSD `vt` and the Linux console) receive
+/// explicit ANSI-16 colours where red is strictly reserved for [`Role::Error`].
 pub fn paint_color(theme: Theme, paint: Paint) -> Color {
+    paint_color_for(theme, paint, truecolor(), colors256())
+}
+
+/// Foreground colour of a paint given explicit terminal colour capabilities.
+pub fn paint_color_for(theme: Theme, paint: Paint, has_truecolor: bool, has_256: bool) -> Color {
+    if !has_truecolor && !has_256 {
+        return ansi16_paint(theme, paint);
+    }
     let (r, g, b) = paint_rgb(theme, paint);
-    rgb(r, g, b)
+    if has_truecolor {
+        Color::Rgb { r, g, b }
+    } else {
+        Color::AnsiValue(ansi256(r, g, b))
+    }
+}
+
+/// Crisp 16-colour TTY mapping: red is used ONLY for [`Role::Error`].
+fn ansi16_paint(theme: Theme, paint: Paint) -> Color {
+    let light = theme == Theme::Light;
+    match paint {
+        Paint::Syntax(Highlight::Keyword) => {
+            if light {
+                Color::DarkBlue
+            } else {
+                Color::Blue
+            }
+        }
+        Paint::Syntax(Highlight::Type) => {
+            if light {
+                Color::DarkCyan
+            } else {
+                Color::Cyan
+            }
+        }
+        Paint::Syntax(Highlight::Function | Highlight::Branch) => {
+            if light {
+                Color::DarkYellow
+            } else {
+                Color::Yellow
+            }
+        }
+        Paint::Syntax(Highlight::String) => {
+            if light {
+                Color::DarkGreen
+            } else {
+                Color::Green
+            }
+        }
+        Paint::Syntax(Highlight::Number | Highlight::Constant) => {
+            if light {
+                Color::DarkMagenta
+            } else {
+                Color::Magenta
+            }
+        }
+        Paint::Syntax(Highlight::Comment) => Color::DarkGrey,
+        Paint::Syntax(Highlight::Operator) => {
+            if light {
+                Color::DarkGrey
+            } else {
+                Color::Grey
+            }
+        }
+        Paint::Syntax(Highlight::Preprocessor) => {
+            if light {
+                Color::DarkCyan
+            } else {
+                Color::Cyan
+            }
+        }
+        Paint::Syntax(Highlight::Variable) => Color::Reset,
+        Paint::Role(Role::Accent) => {
+            if light {
+                Color::DarkYellow
+            } else {
+                Color::Yellow
+            }
+        }
+        Paint::Role(Role::Muted) => Color::DarkGrey,
+        Paint::Role(Role::Success) => {
+            if light {
+                Color::DarkGreen
+            } else {
+                Color::Green
+            }
+        }
+        Paint::Role(Role::Warning) => {
+            if light {
+                Color::DarkYellow
+            } else {
+                Color::Yellow
+            }
+        }
+        Paint::Role(Role::Error) => {
+            if light {
+                Color::DarkRed
+            } else {
+                Color::Red
+            }
+        }
+        Paint::Role(Role::Ai) => {
+            if light {
+                Color::DarkCyan
+            } else {
+                Color::Cyan
+            }
+        }
+    }
 }
 
 /// Foreground/background of a run, and whether it is drawn as "chrome"
@@ -360,5 +473,46 @@ mod tests {
         assert!(!run_colors(Theme::Dark, true, false).1);
         assert!(!run_colors(Theme::Mono, true, true).1);
         assert!(run_colors(Theme::Light, true, true).1);
+    }
+
+    #[test]
+    fn red_is_reserved_for_errors_in_tty_and_truecolor_syntax() {
+        let kinds = [
+            Highlight::Keyword,
+            Highlight::Type,
+            Highlight::Function,
+            Highlight::String,
+            Highlight::Number,
+            Highlight::Comment,
+            Highlight::Constant,
+            Highlight::Operator,
+            Highlight::Preprocessor,
+            Highlight::Variable,
+            Highlight::Branch,
+        ];
+        for theme in [Theme::Dark, Theme::Light] {
+            for kind in kinds {
+                let c16 = paint_color_for(theme, kind.into(), false, false);
+                assert!(
+                    !matches!(c16, Color::Red | Color::DarkRed),
+                    "{theme:?} {kind:?} mapped to red in 16-color TTY: {c16:?}"
+                );
+                let (r, g, b) = paint_rgb(theme, kind.into());
+                // Ensure no syntax token is red-dominant like an error colour.
+                assert!(
+                    !(r > 180 && r > g.saturating_add(70) && r > b.saturating_add(70)),
+                    "{theme:?} {kind:?} looks red: ({r:#x}, {g:#x}, {b:#x})"
+                );
+            }
+            assert!(matches!(
+                paint_color_for(theme, Role::Error.into(), false, false),
+                Color::Red | Color::DarkRed
+            ));
+            // Functions and variables are visually distinct in both themes.
+            assert_ne!(
+                paint_rgb(theme, Highlight::Function.into()),
+                paint_rgb(theme, Highlight::Variable.into())
+            );
+        }
     }
 }

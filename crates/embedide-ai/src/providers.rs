@@ -21,6 +21,8 @@ pub enum ProviderId {
     Moonshot,
     /// xAI — Grok.
     Xai,
+    /// Google Antigravity CLI (`agy`).
+    Antigravity,
 }
 
 /// Wire protocol.
@@ -41,6 +43,8 @@ pub enum Subscription {
     ClaudeCode,
     /// Codex CLI non-interactive mode (`codex exec`).
     Codex,
+    /// Antigravity CLI non-interactive mode (`agy --print`).
+    Antigravity,
     /// No integration in EmbedIDE (with the reason).
     NotIntegrated(&'static str),
 }
@@ -66,7 +70,13 @@ pub struct ProviderInfo {
 
 impl ProviderId {
     /// All providers.
-    pub const ALL: [ProviderId; 4] = [Self::Anthropic, Self::Openai, Self::Moonshot, Self::Xai];
+    pub const ALL: [ProviderId; 5] = [
+        Self::Anthropic,
+        Self::Openai,
+        Self::Moonshot,
+        Self::Xai,
+        Self::Antigravity,
+    ];
 
     /// Configuration id.
     pub fn id(self) -> &'static str {
@@ -94,6 +104,11 @@ impl ProviderId {
                 key_env: "XAI_API_KEY", protocol: Protocol::ChatCompletions,
                 subscription: Subscription::NotIntegrated("no officially documented subscription CLI interface verified; use an API key"),
             },
+            Self::Antigravity => ProviderInfo {
+                id: "antigravity", name: "Antigravity", models_family: "Gemini / Claude", base_url: "",
+                key_env: "", protocol: Protocol::ChatCompletions,
+                subscription: Subscription::Antigravity,
+            },
         }
     }
 }
@@ -112,8 +127,9 @@ impl FromStr for ProviderId {
             "openai" | "gpt" | "codex" => Ok(Self::Openai),
             "moonshot" | "kimi" => Ok(Self::Moonshot),
             "xai" | "grok" => Ok(Self::Xai),
+            "antigravity" | "agy" => Ok(Self::Antigravity),
             _ => Err(format!(
-                "Unknown AI provider '{s}'; expected anthropic, openai, moonshot or xai"
+                "Unknown AI provider '{s}'; expected anthropic, openai, moonshot, xai or antigravity"
             )),
         }
     }

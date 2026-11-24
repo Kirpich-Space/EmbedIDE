@@ -140,13 +140,20 @@ fn providers_lists_four_families_and_never_prints_keys() {
         .iter()
         .map(|p| p["id"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(ids, ["anthropic", "openai", "moonshot", "xai"]);
+    assert_eq!(
+        ids,
+        ["anthropic", "openai", "moonshot", "xai", "antigravity"]
+    );
     let openai = &v["data"]["providers"][1];
     assert_eq!(openai["key"], "environment");
     assert_eq!(openai["auth_modes"]["subscription"], "codex");
     assert_eq!(
         v["data"]["providers"][0]["auth_modes"]["subscription"],
         "claude-code"
+    );
+    assert_eq!(
+        v["data"]["providers"][4]["auth_modes"]["subscription"],
+        "antigravity"
     );
     assert!(v["data"]["providers"][2]["auth_modes"]["subscription"]["not-integrated"].is_string());
     assert!(!out.contains(KEY));

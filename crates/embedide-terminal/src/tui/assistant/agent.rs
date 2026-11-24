@@ -277,7 +277,7 @@ impl Assistant {
                         "Mode: {}",
                         match (self.agent_mode, self.agent_active()) {
                             (true, true) => "agent",
-                            (true, false) => "agent (this backend chats: agent tasks need /provider claude-code or codex-cli)",
+                            (true, false) => "agent (this backend chats: agent tasks need /provider claude-code, codex-cli or antigravity)",
                             _ => "chat",
                         }
                     ),
@@ -349,7 +349,9 @@ impl Assistant {
         let who = self
             .cli_backend()
             .map(|k| k.name().to_string())
-            .unwrap_or_else(|| "no CLI backend (/provider claude-code or codex-cli)".into());
+            .unwrap_or_else(|| {
+                "no CLI backend (/provider claude-code, codex-cli or antigravity)".into()
+            });
         let session = match &self.session {
             Some(s) => format!(
                 "session {} · {} turn(s) · workspace {}",
@@ -405,7 +407,7 @@ impl Assistant {
         let Some(kind) = self.cli_backend() else {
             return self.note(
                 Kind::Error,
-                "Agent mode runs through an official CLI: /provider claude-code or /provider codex-cli",
+                "Agent mode runs through an official CLI: /provider claude-code, codex-cli or antigravity",
             );
         };
         let root = ctx.root.clone();

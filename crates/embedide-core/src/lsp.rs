@@ -45,7 +45,7 @@ const INCOMING: usize = 64;
 /// Completion items kept from one response.
 const MAX_ITEMS: usize = 2000;
 
-/// Built-in server for a language id (`rust`, `c`, `cpp`, `zig`).
+/// Built-in server for a language id (`rust`, `c`, `cpp`, `zig`, `fortran`, `r`).
 ///
 /// rust-analyzer runs with build scripts and procedural macros disabled:
 /// opening a file must not execute project code. Enable them through
@@ -63,6 +63,16 @@ pub fn default_server(language: &str) -> Option<LspServerConfig> {
         ),
         "c" | "cpp" => ("clangd", vec!["--header-insertion=never".to_string()], None),
         "zig" => ("zls", vec![], None),
+        "fortran" => ("fortls", vec![], None),
+        "r" => (
+            "R",
+            vec![
+                "--slave".to_string(),
+                "-e".to_string(),
+                "languageserver::run()".to_string(),
+            ],
+            None,
+        ),
         _ => return None,
     };
     Some(LspServerConfig {

@@ -204,6 +204,11 @@ pub fn backend(
         .unwrap_or_default();
     match mode {
         AuthMode::ApiKey => {
+            if provider == ProviderId::Antigravity {
+                return Err(Error::Config(
+                    "Antigravity uses the official `agy` CLI login rather than an API key; choose `--provider antigravity` (or `/provider agy` in the AI panel)".into(),
+                ));
+            }
             let key = auth::api_key(provider)?.ok_or_else(|| {
                 Error::Config(format!(
                     "No API key for {}. Set {} or run `embed ai login {}` (the key is stored outside your projects)",

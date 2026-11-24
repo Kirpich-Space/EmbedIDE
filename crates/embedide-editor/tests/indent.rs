@@ -287,3 +287,54 @@ fn open_line_below_and_above_use_indentation_rules() {
         "fn f() {\n    first();\n    second();\n    a();\n}"
     );
 }
+
+#[test]
+fn fortran_blocks_and_r_braces_auto_indent() {
+    // Fortran module / function / if-then / do blocks open a level; single-line if and type(foo) do not.
+    let mut e = doc("physics.f90", "module physics");
+    append(&mut e);
+    type_text(&mut e, "\nimplicit none");
+    assert_eq!(text(&e), "module physics\n    implicit none");
+
+    let mut e = doc("physics.f90", "pure real(real64) function norm(x)");
+    append(&mut e);
+    type_text(&mut e, "\nreal(real64) :: norm");
+    assert_eq!(
+        text(&e),
+        "pure real(real64) function norm(x)\n    real(real64) :: norm"
+    );
+
+    let mut e = doc("physics.f90", "if (x > 0) then");
+    append(&mut e);
+    type_text(&mut e, "\ny = 1");
+    assert_eq!(text(&e), "if (x > 0) then\n    y = 1");
+
+    let mut e = doc("physics.f90", "if (x > 0) y = 1");
+    append(&mut e);
+    type_text(&mut e, "\nz = 2");
+    assert_eq!(
+        text(&e),
+        "if (x > 0) y = 1\nz = 2",
+        "single-line if must not open a block"
+    );
+
+    let mut e = doc("physics.f90", "type(vec3) :: v");
+    append(&mut e);
+    type_text(&mut e, "\nv%x = 1.0");
+    assert_eq!(
+        text(&e),
+        "type(vec3) :: v\nv%x = 1.0",
+        "type(...) declaration must not open a block"
+    );
+
+    let mut e = doc("physics.f90", "type, extends(base) :: vec3");
+    append(&mut e);
+    type_text(&mut e, "\nreal :: x");
+    assert_eq!(text(&e), "type, extends(base) :: vec3\n    real :: x");
+
+    // R uses brace indentation.
+    let mut e = doc("model.R", "fit <- function(x) {");
+    append(&mut e);
+    type_text(&mut e, "\nmean(x)\n}");
+    assert_eq!(text(&e), "fit <- function(x) {\n    mean(x)\n}");
+}

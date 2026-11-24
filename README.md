@@ -17,7 +17,7 @@
 EmbedIDE (`embed`) is a full-screen, keyboard-driven IDE for people who build firmware, drivers and
 systems software: a Vim-style editor, a project explorer, a real PTY terminal, builds with jump-to-source
 diagnostics, an ELF/HEX/disassembly view for the binaries you produce, and AI agents that work *inside
-your project* through the Claude Code or Codex CLI you already use — with permissions you control.
+your project* through the Claude Code, Codex or Antigravity (`agy`) CLI you already use — with permissions you control.
 One Rust binary (a fully static build is published). No Electron, no browser, no telemetry, no EmbedIDE account.
 
 You choose the compilers (GCC, Clang, `zig cc`, `arm-none-eabi-gcc`, NASM, …); EmbedIDE detects what is
@@ -42,15 +42,15 @@ never flashes anything on its own.
 
 **Supported systems: Linux and FreeBSD (both verified: tests and terminal checks were run on each).** Windows and macOS are not supported.
 
-## 0.1.0-alpha.1 — first public alpha
+## 0.2.0-alpha.1 — public alpha
 
-An **alpha**: usable for real work in the terminal, with rough edges. What was checked, and how, is in
+An **alpha**: usable for real work in the terminal on Linux and FreeBSD, with rough edges. What was checked, and how, is in
 [Verified and unverified functionality](docs/cli/status.md).
 
 | Status | What |
 |---|---|
-| **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, explorer, search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo) and C + GNU assembly with GCC; ELF inspector, HEX viewer/editor, built-in x86/x86-64 disassembler (`objdump` fallback for other architectures); AI panel with Claude Code as agent (run live) and chat; skills; official Carbon/Bone theme |
-| **Experimental** (implemented, verified only with mocks or not at all) | Codex CLI as agent (mock CLI; the live run was blocked by a broken local Codex install); API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig and Fortran builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (clangd, rust-analyzer, zls); FreeBSD (compiled and linted, never run), Linux musl |
+| **Works** (automated tests + real tools on Linux x86_64) | Terminal IDE `embed`: editor with Vim modes, tabs, FreeBSD-TTY-friendly explorer tree, overhauled syntax highlighting (red reserved for errors only), upgraded workspace/language/LSP completion, portable `Makefile` generator (`:makefile`, `embed project makefile`), search, integrated terminal (PTY), build output and PROBLEMS with jump-to-source; native builds of C, C++, Rust (Cargo), Fortran 2008/2018 (modules + `-cpp`), R (`Rscript` syntax check) and C + GNU assembly with GCC/gfortran; ELF inspector, HEX viewer/editor, built-in x86/x86-64 disassembler (`objdump` fallback for other architectures); AI panel with Claude Code, Codex and Antigravity (`agy`) CLI backends; skills; background toolchain auto-install on IDE open; Carbon/Bone themes |
+| **Experimental** (implemented, verified only with mocks or not at all) | API providers Anthropic/OpenAI/Moonshot/xAI (mock server); Zig builds; cross builds for Cortex-M (`c-cortex-m`, needs `arm-none-eabi-gcc`); serial bridge, OpenOCD/probe-rs/GDB services (no hardware); LSP completion (`clangd`, `rust-analyzer`, `zls`, `fortls`, R `languageserver`); Linux musl |
 | **Planned** | Native Rust GUI (not started — the TUI is the interface of this release); DWARF source mapping in the binary view; warm completion sessions |
 
 Hardware is never touched automatically: flashing and debugging need an explicit target and command.
@@ -60,7 +60,7 @@ Hardware is never touched automatically: flashing and debugging need an explicit
 `embed` opens a full-screen, keyboard-driven IDE in your terminal:
 
 ```
-┌ EmbedIDE 0.1.0-alpha.1 | build status | project | target | profile ──────────────────────────────┐
+┌ EmbedIDE 0.2.0-alpha.1 | build status | project | target | profile ──────────────────────────────┐
 │ EXPLORER (C-A-1) │ editor tabs, Vim modes, syntax highlighting           │ AI (C-A-2)    │
 │                  │                                                        │ chat, context │
 │                  │                                                        │ edits, review │
@@ -70,7 +70,7 @@ Hardware is never touched automatically: flashing and debugging need an explicit
 
 ```sh
 cargo install --path crates/embedide-cli --locked --root ~/.local   # → ~/.local/bin/embed
-command -v embed && embed --version                                  # → embed 0.1.0-alpha.1
+command -v embed && embed --version                                  # → embed 0.2.0-alpha.1
 cd my-project && embed                     # or: embed path/to/project, embed src/main.c
 ```
 
@@ -205,9 +205,9 @@ static and runs on any Linux x86_64; the `-gnu` archive is dynamic (glibc 2.39+)
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing          # verify the download
-tar -xzf embed-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz
-install -m 0755 embed-0.1.0-alpha.1-x86_64-unknown-linux-gnu/embed ~/.local/bin/embed
-embed --version                                    # → embed 0.1.0-alpha.1
+tar -xzf embed-0.2.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz
+install -m 0755 embed-0.2.0-alpha.1-x86_64-unknown-linux-gnu/embed ~/.local/bin/embed
+embed --version                                    # → embed 0.2.0-alpha.1
 embed doctor
 ```
 
@@ -220,7 +220,7 @@ are not supported.
 
 AI is optional. In the AI panel (Alt+2):
 
-- `/provider codex-cli` or `/provider claude-code` — your installed, logged-in official CLI (no API
+- `/provider codex-cli`, `/provider claude-code` or `/provider antigravity` (`agy`) — your installed, logged-in official CLI (no API
   key). **Plain text is then a task for the agent**: "fix the compilation errors", "make me a script
   that …" — it reads, creates and edits files in the project, runs builds and tests, and reports what
   changed. `/mode chat` switches to read-only answers; `/policy` chooses `read-only`,

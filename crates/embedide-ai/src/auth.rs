@@ -122,18 +122,22 @@ fn read_credentials() -> Result<BTreeMap<String, String>> {
 
 /// The API key for a provider, if configured.
 pub fn api_key(p: ProviderId) -> Result<Option<Secret>> {
-    if let Some(k) = std::env::var(p.info().key_env)
-        .ok()
-        .filter(|k| !k.trim().is_empty())
-    {
-        return Ok(Some(Secret::new(k.trim())));
+    let env_name = p.info().key_env;
+    if !env_name.is_empty() {
+        if let Some(k) = std::env::var(env_name)
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+        {
+            return Ok(Some(Secret::new(k.trim())));
+        }
     }
     Ok(read_credentials()?.remove(p.id()).map(Secret::new))
 }
 
 /// Where the key would come from.
 pub fn key_source(p: ProviderId) -> KeySource {
-    if std::env::var(p.info().key_env).is_ok_and(|k| !k.trim().is_empty()) {
+    let env_name = p.info().key_env;
+    if !env_name.is_empty() && std::env::var(env_name).is_ok_and(|k| !k.trim().is_empty()) {
         KeySource::Environment
     } else if read_credentials().is_ok_and(|c| c.contains_key(p.id())) {
         KeySource::CredentialsFile

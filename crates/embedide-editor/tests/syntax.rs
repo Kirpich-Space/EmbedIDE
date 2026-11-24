@@ -516,3 +516,40 @@ fn highlighter_handles_large_documents_and_scrolling() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn r_and_modern_fortran_are_detected_and_highlighted() {
+    assert_eq!(
+        Language::detect(Some(Path::new("analysis.R")), ""),
+        Language::R
+    );
+    assert_eq!(
+        Language::detect(Some(Path::new("report.Rmd")), ""),
+        Language::R
+    );
+    assert_eq!(
+        Language::detect(None, "#!/usr/bin/env Rscript"),
+        Language::R
+    );
+    assert_eq!(Language::R.id(), "r");
+
+    let r_found = tokens(
+        Language::R,
+        "f <- function(x) { if (is.na(x)) return(NULL); mean(x) } # comment",
+    );
+    assert!(has(&r_found, "function", Keyword));
+    assert!(has(&r_found, "if", Keyword));
+    assert!(has(&r_found, "return", Keyword));
+    assert!(has(&r_found, "NULL", Constant));
+    assert!(has(&r_found, "mean", Function));
+    assert!(has(&r_found, "# comment", Comment));
+
+    let f_found = tokens(
+        Language::Fortran,
+        "submodule (parent:anc) child\n  use, intrinsic :: iso_fortran_env, only: real64, output_unit\n  real(real64), contiguous :: x(:)\nend submodule child",
+    );
+    assert!(has(&f_found, "submodule", Keyword));
+    assert!(has(&f_found, "contiguous", Keyword));
+    assert!(has(&f_found, "real64", Type));
+    assert!(has(&f_found, "output_unit", Constant));
+}

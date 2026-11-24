@@ -185,7 +185,9 @@ pub fn toolchains() -> Vec<ToolStatus> {
         "g++",
         "clang",
         "clang++",
+        "gfortran",
         "zig",
+        "Rscript",
         "cmake",
         "make",
         "gmake",
@@ -195,6 +197,8 @@ pub fn toolchains() -> Vec<ToolStatus> {
         "openocd",
         "clangd",
         "rust-analyzer",
+        "zls",
+        "fortls",
     ]
     .into_iter()
     .map(|name| ToolStatus {

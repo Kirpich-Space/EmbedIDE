@@ -11,7 +11,7 @@ body:
     attributes:
       label: Version
       description: Output of `embed --version`
-      placeholder: embed 0.1.0-alpha.1
+      placeholder: embed 0.2.0-alpha.1
     validations:
       required: true
   - type: textarea

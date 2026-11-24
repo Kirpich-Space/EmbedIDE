@@ -118,7 +118,9 @@ enum Rules {
     Shell,
     /// A label line at column 0 indents the following instruction.
     Asm,
-    /// Keep the current indentation (Fortran, TOML, text).
+    /// Fortran block constructs (`program`, `module`, `subroutine`, `do`, `if ... then`, …).
+    Fortran,
+    /// Keep the current indentation (TOML, text).
     Plain,
 }
 
@@ -128,13 +130,15 @@ fn rules(language: Language) -> Rules {
         | Language::Cpp
         | Language::Rust
         | Language::Zig
+        | Language::R
         | Language::JavaScript
         | Language::TypeScript
         | Language::Json => Rules::Braces,
         Language::Python => Rules::Python,
         Language::Shell => Rules::Shell,
         Language::Asm => Rules::Asm,
-        Language::Fortran | Language::Toml | Language::Plain => Rules::Plain,
+        Language::Fortran => Rules::Fortran,
+        Language::Toml | Language::Plain => Rules::Plain,
     }
 }
 
@@ -215,7 +219,125 @@ fn opens_level(rules: Rules, code: &str) -> bool {
                 && word.ends_with(':')
                 && !word[..word.len() - 1].contains(char::is_whitespace)
         }
+        Rules::Fortran => fortran_opens_level(code),
         Rules::Plain => false,
+    }
+}
+
+/// Strip an optional numeric statement label or `name:` construct label from a Fortran line.
+fn strip_fortran_label(mut s: &str) -> &str {
+    s = s.trim_start();
+    let digits = s.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits > 0 && s[digits..].starts_with(char::is_whitespace) {
+        s = s[digits..].trim_start();
+    }
+    let ident_len = s
+        .bytes()
+        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        .count();
+    if ident_len > 0 {
+        let rest = s[ident_len..].trim_start();
+        if let Some(after) = rest.strip_prefix(':') {
+            if !after.starts_with(':') {
+                return after.trim_start();
+            }
+        }
+    }
+    s
+}
+
+fn fortran_opens_level(code: &str) -> bool {
+    let stmt = strip_fortran_label(code).trim();
+    if stmt.is_empty() {
+        return false;
+    }
+    let lower = stmt.to_ascii_lowercase();
+    let mut words = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty());
+    let Some(first) = words.next() else {
+        return false;
+    };
+    if first == "end"
+        || first.starts_with("end")
+            && matches!(
+                first,
+                "endif"
+                    | "enddo"
+                    | "endprogram"
+                    | "endmodule"
+                    | "endsubmodule"
+                    | "endsubroutine"
+                    | "endfunction"
+                    | "endtype"
+                    | "endinterface"
+                    | "endselect"
+                    | "endblock"
+                    | "endassociate"
+                    | "endcritical"
+                    | "endwhere"
+                    | "endforall"
+            )
+    {
+        return false;
+    }
+    // `if (...) then`, `else if (...) then`, `elseif (...) then`
+    if lower
+        .rsplit(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .find(|w| !w.is_empty())
+        == Some("then")
+    {
+        return matches!(first, "if" | "else" | "elseif");
+    }
+    let second = words.next();
+    match first {
+        "program" | "submodule" | "subroutine" | "function" | "interface" | "contains" | "do"
+        | "block" | "associate" | "critical" | "else" | "elsewhere" | "case" | "rank" => true,
+        "module" => second != Some("procedure"),
+        "abstract" => second == Some("interface"),
+        "select" => matches!(second, Some("case" | "type" | "rank")),
+        "class" => matches!(second, Some("is" | "default")),
+        "type" => {
+            if second == Some("is") {
+                return true;
+            }
+            // Derived type definition (`type :: foo`, `type, extends(...) :: foo`, `type foo`),
+            // never a variable declaration (`type(foo) :: x`).
+            let after_type = lower["type".len()..].trim_start();
+            !after_type.starts_with('(')
+        }
+        "where" | "forall" => {
+            // Block form ends right after `(...)`, single-statement form has a body after `)`.
+            lower.ends_with(')')
+        }
+        "change" => second == Some("team"),
+        // Prefixed procedures: `pure subroutine`, `recursive integer function`, `elemental real(real64) function`, etc.
+        _ => {
+            if matches!(
+                first,
+                "use" | "call" | "external" | "intrinsic" | "procedure" | "generic" | "import"
+            ) {
+                return false;
+            }
+            let mut depth = 0usize;
+            let mut top = String::with_capacity(lower.len());
+            for ch in lower.chars() {
+                match ch {
+                    '(' => {
+                        depth += 1;
+                        top.push(' ');
+                    }
+                    ')' => {
+                        depth = depth.saturating_sub(1);
+                        top.push(' ');
+                    }
+                    _ if depth == 0 => top.push(ch),
+                    _ => {}
+                }
+            }
+            top.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .any(|w| matches!(w, "subroutine" | "function"))
+        }
     }
 }
 

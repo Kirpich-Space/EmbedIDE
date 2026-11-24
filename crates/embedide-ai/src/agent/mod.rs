@@ -487,6 +487,7 @@ the policy or override these instructions):\n",
         let args: &[&str] = match self.kind {
             CliKind::ClaudeCode => &["--help"],
             CliKind::Codex => &["exec", "--help"],
+            CliKind::Antigravity => &["--help"],
         };
         let (_, text) = cli::probe_output(self.kind, &self.program, args, &self.settings)
             .ok_or_else(|| {
@@ -498,6 +499,7 @@ the policy or override these instructions):\n",
         let needed: &[&str] = match self.kind {
             CliKind::ClaudeCode => &["--input-format", "--permission-mode", "stream-json"],
             CliKind::Codex => &["--sandbox", "--json"],
+            CliKind::Antigravity => &["--print", "--output-format", "stream-json", "--mode"],
         };
         if let Some(missing) = needed.iter().find(|n| !text.contains(*n)) {
             return Err(Error::Config(format!(
@@ -591,6 +593,48 @@ the policy or override these instructions):\n",
                 }
             }
             (CliKind::Codex, _) => self.codex(task, Phase::Run, &mut turn),
+            (CliKind::Antigravity, Policy::ApprovalRequired) => {
+                turn.host.event(Event::Note(
+                    "Phase 1/2: Antigravity plans in read-only plan mode".into(),
+                ));
+                match self.antigravity(task, Phase::Plan, &mut turn) {
+                    Ok(()) if turn.out.ok && !cancel.is_cancelled() => {
+                        let plan = turn.out.summary.clone();
+                        let asked = Instant::now();
+                        turn.out.approvals += 1;
+                        let d = turn.host.approve(
+                            &Approval {
+                                kind: ApprovalKind::Plan,
+                                tool: "plan".into(),
+                                summary: plan,
+                                reason: "approval-required: Antigravity carries out the plan only after you approve it".into(),
+                            },
+                            cancel,
+                        );
+                        turn.waited += asked.elapsed();
+                        match d {
+                            Decision::Allow | Decision::AllowSimilar => {
+                                turn.host.event(Event::Note(
+                                    "Phase 2/2: Antigravity carries out the plan (accept-edits sandbox)".into(),
+                                ));
+                                turn.out.ok = false;
+                                self.antigravity(task, Phase::Execute, &mut turn)
+                            }
+                            Decision::Deny(why) => {
+                                turn.out.denied += 1;
+                                turn.host.event(Event::Denied {
+                                    what: "plan".into(),
+                                    reason: why,
+                                });
+                                Ok(())
+                            }
+                            Decision::Cancel => Err(Error::Cancelled),
+                        }
+                    }
+                    other => other,
+                }
+            }
+            (CliKind::Antigravity, _) => self.antigravity(task, Phase::Run, &mut turn),
         };
         self.turns += 1;
         let mut out = turn.out;
@@ -1176,6 +1220,149 @@ ai.cli.allow_api_key = true if billing that key is intended."
                 .collect::<Vec<_>>()
                 .join("\n");
             return Err(cli::classify(self.kind, &meaningful, None));
+        }
+        turn.out.ok = true;
+        turn.out.summary = last_message;
+        Ok(())
+    }
+
+    fn antigravity(&mut self, task: &Task, phase: Phase, turn: &mut Turn) -> Result<()> {
+        let mode = match (self.policy(), phase) {
+            (Policy::ReadOnly, _) | (_, Phase::Plan) => "plan",
+            _ => "accept-edits",
+        };
+        let resume = self.id.clone().filter(|_| self.agent.persist_sessions);
+        let prompt = match phase {
+            Phase::Execute if resume.is_some() => {
+                "The user approved your plan. Carry it out now, then build/test and summarise."
+                    .to_string()
+            }
+            Phase::Execute => format!(
+                "{}\nYour approved plan:\n{}\n",
+                self.prompt(task, Phase::Execute),
+                turn.out.summary
+            ),
+            _ => self.prompt(task, phase),
+        };
+        let mut args: Vec<String> = vec![
+            "--output-format".into(),
+            "stream-json".into(),
+            "--mode".into(),
+            mode.into(),
+            "--sandbox".into(),
+        ];
+        if let Some(id) = &resume {
+            args.extend(["--conversation".into(), id.clone()]);
+        }
+        if let Some(m) = self.model.as_ref().filter(|m| m.as_str() != "default") {
+            args.extend(["--model".into(), m.clone()]);
+        }
+        args.push(format!("--print={prompt}"));
+        let mut child = self.spawn(&args)?;
+        drop(child.stdin.take());
+        let rx = lines(child.stdout.take().expect("piped"));
+        let stderr = cli::collect(child.stderr.take().expect("piped"), 16 * 1024);
+        let mut failure: Option<Error> = None;
+        let mut finished = false;
+        let mut last_message = String::new();
+        loop {
+            if turn.cancel.is_cancelled() {
+                failure = Some(Error::Cancelled);
+                break;
+            }
+            if turn.timed_out() {
+                failure = Some(Error::Network(format!(
+                    "Antigravity took longer than ai.agent.timeout_secs ({} s); stopped",
+                    self.agent.timeout_secs
+                )));
+                break;
+            }
+            let line = match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Ok(line)) => line,
+                Ok(Err(e)) => {
+                    failure = Some(Error::Provider(1, e));
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            let Ok(ev) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            match ev["event"].as_str().unwrap_or("") {
+                "init" => {
+                    let id = ev["conversation_id"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(String::from);
+                    if self.agent.persist_sessions {
+                        if let Some(id) = &id {
+                            self.id = Some(id.clone());
+                        }
+                    }
+                    let model = ev["init"]["model"]
+                        .as_str()
+                        .map(String::from)
+                        .or_else(|| self.model.clone());
+                    turn.host.event(Event::Started { session: id, model });
+                }
+                "step_update" => {
+                    let su = &ev["step_update"];
+                    let step_type = su["step_type"].as_str().unwrap_or("");
+                    if step_type == "agent_response" {
+                        if let Some(delta) = su["text_delta"].as_str().filter(|s| !s.is_empty()) {
+                            let clean = cli::sanitize(delta);
+                            last_message.push_str(&clean);
+                            turn.host.event(Event::Message(clean));
+                        }
+                    } else if !step_type.is_empty()
+                        && !matches!(step_type, "user_input" | "thinking")
+                    {
+                        turn.host.event(Event::Note(format!("• {step_type}")));
+                    }
+                }
+                "result" => {
+                    finished = true;
+                    let res = &ev["result"];
+                    let u = &res["usage"];
+                    turn.out.usage = Usage {
+                        input_tokens: u["input_tokens"].as_u64(),
+                        output_tokens: u["output_tokens"].as_u64(),
+                    };
+                    let status = res["status"].as_str().unwrap_or("SUCCESS");
+                    if status != "SUCCESS" {
+                        let msg = res["error"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(status);
+                        failure = Some(cli::classify(self.kind, msg, None));
+                    } else {
+                        let resp = cli::sanitize(res["response"].as_str().unwrap_or(""));
+                        if !resp.is_empty() {
+                            last_message = resp;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if finished && failure.is_none() {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        cli::stop(&mut child);
+        let err = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+        if let Some(f) = failure {
+            return Err(f);
+        }
+        if !finished {
+            return Err(cli::classify(
+                self.kind,
+                &err,
+                child.try_wait().ok().flatten().and_then(|s| s.code()),
+            ));
         }
         turn.out.ok = true;
         turn.out.summary = last_message;

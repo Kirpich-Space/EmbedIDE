@@ -10,6 +10,7 @@
 //! Make/CMake/Cargo/Zig projects keep their own build systems.
 
 mod fortran;
+pub mod makefile;
 mod native;
 pub mod select;
 
@@ -237,6 +238,80 @@ pub fn ensure_required(
         installed.push(name.to_string());
     }
     Ok(installed)
+}
+
+/// Missing toolchains discovered when opening a workspace in the IDE.
+#[derive(Debug, Default, Clone)]
+pub struct StartupPlan {
+    /// Pinned downloadable archives (`name`, `spec`) ready for automatic background installation.
+    pub downloadable: Vec<(String, embedide_toolchains::InstallSpec)>,
+    /// Project languages with no installed compiler and no pinned archive spec, paired with the
+    /// host OS package-manager command (if known).
+    pub os_hints: Vec<(embedide_toolchains::Language, Option<String>)>,
+    /// Configuration error in required toolchain specs, if any.
+    pub error: Option<String>,
+}
+
+fn builtin_matches_host(
+    name: &str,
+    user_specs: &BTreeMap<String, embedide_toolchains::InstallSpec>,
+) -> bool {
+    if user_specs.contains_key(name) {
+        return true;
+    }
+    match name {
+        "zig" => cfg!(all(target_os = "linux", target_arch = "x86_64")),
+        _ => true,
+    }
+}
+
+/// Inspect what toolchains are missing at IDE startup (pure filesystem check; never touches the
+/// network or spawns compiler version probes).
+pub fn startup_install_plan(user: &UserConfig, manifest: Option<&Manifest>) -> StartupPlan {
+    let mut plan = StartupPlan::default();
+    let detected = registry(user, false);
+    let ids: Vec<&str> = detected.iter().map(|t| t.id.as_str()).collect();
+    let specs = embedide_toolchains::install::merged(&user.toolchains.install);
+    let explicit = required_names(user, manifest);
+    if !explicit.is_empty() {
+        match embedide_toolchains::install::missing(&explicit, &specs, &ids) {
+            Ok(todo) => {
+                for (name, spec) in todo {
+                    plan.downloadable.push((name.to_string(), spec));
+                }
+            }
+            Err(e) => plan.error = Some(e),
+        }
+    }
+    if let Some(m) = manifest {
+        if let Ok(lang) = m.language() {
+            let have_compiler = detected
+                .iter()
+                .any(|t| t.supports(lang) && t.problem.is_none());
+            if !have_compiler {
+                let candidate = specs.iter().find(|(name, spec)| {
+                    builtin_matches_host(name, &user.toolchains.install)
+                        && !embedide_toolchains::install::is_installed(name, spec)
+                        && spec.provides.iter().any(|p| {
+                            embedide_toolchains::kind(p)
+                                .is_some_and(|k| k.languages.contains(&lang))
+                        })
+                });
+                if let Some((name, spec)) = candidate {
+                    if !plan.downloadable.iter().any(|(n, _)| n == name) {
+                        plan.downloadable.push((name.clone(), spec.clone()));
+                    }
+                } else {
+                    let family = embedide_toolchains::package_family();
+                    let hint = embedide_toolchains::recommend(lang, family)
+                        .into_iter()
+                        .find_map(|r| r.command);
+                    plan.os_hints.push((lang, hint));
+                }
+            }
+        }
+    }
+    plan
 }
 
 /// Outcome of [`run`].
@@ -570,4 +645,35 @@ pub fn plan_clean(root: &Path, manifest: Option<&Manifest>) -> Result<CleanActio
             "Zig projects: remove zig-out/ and .zig-cache/ yourself if needed".into(),
         ),
     })
+}
+
+#[cfg(test)]
+mod startup_install_tests {
+    use super::*;
+
+    #[test]
+    fn startup_plan_queues_missing_configured_spec_and_reports_unknown_names() {
+        let mut user = UserConfig::default();
+        user.toolchains.require = vec!["custom-tc".into()];
+        user.toolchains.install.insert(
+            "custom-tc".into(),
+            embedide_toolchains::InstallSpec {
+                url: "https://example.org/custom-tc.tar.xz".into(),
+                sha256: "a".repeat(64),
+                archive: None,
+                strip: 1,
+                bin: vec!["bin".into()],
+                provides: vec!["nonexistent-compiler-id".into()],
+            },
+        );
+        let plan = startup_install_plan(&user, None);
+        assert!(plan.error.is_none());
+        assert_eq!(plan.downloadable.len(), 1);
+        assert_eq!(plan.downloadable[0].0, "custom-tc");
+
+        let mut bad_user = UserConfig::default();
+        bad_user.toolchains.require = vec!["no-such-spec".into()];
+        let bad_plan = startup_install_plan(&bad_user, None);
+        assert!(bad_plan.error.is_some());
+    }
 }

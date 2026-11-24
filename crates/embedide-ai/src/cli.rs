@@ -71,17 +71,20 @@ pub enum CliKind {
     ClaudeCode,
     /// OpenAI Codex CLI.
     Codex,
+    /// Google Antigravity CLI (`agy`).
+    Antigravity,
 }
 
 impl CliKind {
-    /// Both CLIs.
-    pub const ALL: [CliKind; 2] = [Self::ClaudeCode, Self::Codex];
+    /// All supported official CLIs.
+    pub const ALL: [CliKind; 3] = [Self::ClaudeCode, Self::Codex, Self::Antigravity];
 
     /// Backend id used in the AI panel and configuration.
     pub fn id(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex-cli",
+            Self::Antigravity => "antigravity",
         }
     }
     /// Executable name.
@@ -89,6 +92,7 @@ impl CliKind {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
+            Self::Antigravity => "agy",
         }
     }
     /// Display name.
@@ -96,6 +100,7 @@ impl CliKind {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex CLI",
+            Self::Antigravity => "Antigravity",
         }
     }
     /// Provider family whose models the CLI serves.
@@ -103,6 +108,7 @@ impl CliKind {
         match self {
             Self::ClaudeCode => ProviderId::Anthropic,
             Self::Codex => ProviderId::Openai,
+            Self::Antigravity => ProviderId::Antigravity,
         }
     }
     /// The CLI for a provider, if it has one.
@@ -110,14 +116,16 @@ impl CliKind {
         match provider.info().subscription {
             Subscription::ClaudeCode => Some(Self::ClaudeCode),
             Subscription::Codex => Some(Self::Codex),
+            Subscription::Antigravity => Some(Self::Antigravity),
             Subscription::NotIntegrated(_) => None,
         }
     }
-    /// Parse `claude-code` / `codex-cli` (and `claude`, `codex`).
+    /// Parse `claude-code` / `codex-cli` / `antigravity` (and `claude`, `codex`, `agy`).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "claude-code" | "claude" => Some(Self::ClaudeCode),
             "codex-cli" | "codex" => Some(Self::Codex),
+            "antigravity" | "agy" => Some(Self::Antigravity),
             _ => None,
         }
     }
@@ -128,12 +136,14 @@ impl CliKind {
                 "run `claude` once in a terminal and log in (or `claude auth login`)"
             }
             Self::Codex => "run `codex login` in a terminal",
+            Self::Antigravity => "run `agy` once in a terminal and sign in",
         }
     }
     fn key_vars(self) -> &'static [&'static str] {
         match self {
             Self::ClaudeCode => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
             Self::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
+            Self::Antigravity => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         }
     }
 }
@@ -141,7 +151,7 @@ impl CliKind {
 /// What the installed CLI's `--help` says it supports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Caps {
-    /// Non-interactive mode exists (`claude -p`, `codex exec`).
+    /// Non-interactive mode exists (`claude -p`, `codex exec`, `agy --print`).
     pub headless: bool,
     /// Structured output (`stream-json`, `exec --json`).
     pub structured: bool,
@@ -154,7 +164,7 @@ pub struct Caps {
 }
 
 impl Caps {
-    /// Capabilities from `claude --help` or `codex exec --help` text.
+    /// Capabilities from `claude --help`, `codex exec --help`, or `agy --help` text.
     pub fn from_help(kind: CliKind, help: &str) -> Self {
         let has = |flag: &str| help.contains(flag);
         match kind {
@@ -171,6 +181,13 @@ impl Caps {
                 partial: false,
                 no_tools: false,
                 ephemeral: has("--ephemeral"),
+            },
+            CliKind::Antigravity => Self {
+                headless: has("--print"),
+                structured: has("stream-json") && has("--output-format"),
+                partial: false,
+                no_tools: has("--disable-slash-commands"),
+                ephemeral: false,
             },
         }
     }
@@ -394,6 +411,7 @@ pub fn caps(kind: CliKind, program: &Path, settings: &CliConfig) -> Caps {
     let args: &[&str] = match kind {
         CliKind::ClaudeCode => &["--help"],
         CliKind::Codex => &["exec", "--help"],
+        CliKind::Antigravity => &["--help"],
     };
     let Some((_, help)) = probe_output(kind, program, args, settings) else {
         return Caps::default(); // not cached: the next request probes again
@@ -461,7 +479,62 @@ pub fn parse_auth(kind: CliKind, success: bool, text: &str) -> AuthState {
                 AuthState::Unknown("`codex login status` gave no status".into())
             }
         }
+        CliKind::Antigravity => {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("not logged in")
+                || lower.contains("not authenticated")
+                || lower.contains("unauthenticated")
+                || lower.contains("sign in")
+                || lower.contains("please login")
+            {
+                return AuthState::LoggedOut;
+            }
+            let models = parse_agy_models(text);
+            if success && !models.is_empty() {
+                AuthState::LoggedIn {
+                    method: "Antigravity CLI".into(),
+                    plan: None,
+                }
+            } else if !success {
+                AuthState::LoggedOut
+            } else {
+                AuthState::Unknown("`agy models` gave no status".into())
+            }
+        }
     }
+}
+
+/// Parse lines emitted by `agy models` (stripping carriage-return spinner frames).
+pub(crate) fn parse_agy_models(text: &str) -> Vec<ModelInfo> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.rsplit('\r').next().unwrap_or(raw).trim();
+        let clean = sanitize(line);
+        let trimmed = clean.trim();
+        if trimmed.is_empty() || trimmed.starts_with("Fetching ") || trimmed.starts_with("Error") {
+            continue;
+        }
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let Some(id) = parts.next() else { continue };
+        if id.len() < 3
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            || !id.contains('-')
+        {
+            continue;
+        }
+        let name = parts
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        out.push(ModelInfo {
+            id: id.to_string(),
+            name,
+        });
+    }
+    out
 }
 
 /// Inspect an installed CLI: version, capabilities and login state.
@@ -472,6 +545,7 @@ pub fn inspect(kind: CliKind, program: &Path, settings: &CliConfig) -> CliInfo {
     let args: &[&str] = match kind {
         CliKind::ClaudeCode => &["auth", "status", "--json"],
         CliKind::Codex => &["login", "status"],
+        CliKind::Antigravity => &["models"],
     };
     let auth = match probe_output(kind, program, args, settings) {
         Some((status, text)) => parse_auth(kind, status.success(), &text),
@@ -597,7 +671,7 @@ fn prompt_text(kind: CliKind, req: &Request) -> String {
         s.push_str(sys);
         s.push_str("\n\n");
     }
-    if kind == CliKind::Codex {
+    if matches!(kind, CliKind::Codex | CliKind::Antigravity) {
         s.push_str("Answer in text only. Do not run commands and do not modify files; the user reviews every change in EmbedIDE.\n\n");
     }
     for m in &req.messages {
@@ -703,6 +777,46 @@ fn event(kind: CliKind, line: &[u8], out: &mut Outcome) -> Option<String> {
             }
             _ => None,
         },
+        CliKind::Antigravity => match value["event"].as_str()? {
+            "init" => {
+                out.model = value["init"]["model"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or(out.model.take());
+                None
+            }
+            "step_update" => {
+                let su = &value["step_update"];
+                if su["step_type"] == "agent_response" {
+                    let delta = su["text_delta"].as_str()?;
+                    if !delta.is_empty() {
+                        let text = sanitize(delta);
+                        out.text.push_str(&text);
+                        out.streamed = true;
+                        return Some(text);
+                    }
+                }
+                None
+            }
+            "result" => {
+                let res = &value["result"];
+                out.usage = usage(&res["usage"]);
+                let status = res["status"].as_str().unwrap_or("SUCCESS");
+                if status != "SUCCESS" {
+                    let msg = res["error"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(status);
+                    out.error = Some(msg.to_string());
+                } else if out.text.is_empty() {
+                    let text = sanitize(res["response"].as_str().unwrap_or(""));
+                    out.text.push_str(&text);
+                    return Some(text);
+                }
+                None
+            }
+            _ => None,
+        },
     }
 }
 
@@ -735,7 +849,7 @@ pub(crate) fn backend(
 }
 
 impl CliBackend {
-    fn args(&self, caps: Caps, req: &Request, work: &Path) -> Result<Vec<String>> {
+    fn args(&self, caps: Caps, req: &Request, work: &Path, prompt: &str) -> Result<Vec<String>> {
         if req.model.starts_with('-') {
             return Err(Error::Config("Model id cannot start with '-'".into()));
         }
@@ -785,6 +899,24 @@ impl CliBackend {
                     args.extend(["-m".into(), m]);
                 }
                 args.push("-".into());
+            }
+            CliKind::Antigravity => {
+                args.extend([
+                    "--output-format".into(),
+                    if caps.structured {
+                        "stream-json".into()
+                    } else {
+                        "text".into()
+                    },
+                    "--sandbox".into(),
+                ]);
+                if caps.no_tools {
+                    args.push("--disable-slash-commands".into());
+                }
+                if let Some(m) = model {
+                    args.extend(["--model".into(), m]);
+                }
+                args.push(format!("--print={prompt}"));
             }
         }
         Ok(args)
@@ -854,7 +986,8 @@ impl Backend for CliBackend {
             )));
         }
         let work = WorkDir::new()?;
-        let args = self.args(caps, req, &work.0)?;
+        let prompt = prompt_text(self.kind, req);
+        let args = self.args(caps, req, &work.0, &prompt)?;
         let mut cmd = command(self.kind, &self.program, &self.settings);
         cmd.args(&args)
             .current_dir(&work.0)
@@ -863,11 +996,13 @@ impl Backend for CliBackend {
             .stderr(Stdio::piped());
         let mut child = spawn(&mut cmd)
             .map_err(|e| Error::Config(format!("Cannot run {}: {e}", self.program.display())))?;
-        let prompt = prompt_text(self.kind, req);
         let mut stdin = child.stdin.take().expect("piped stdin");
+        let send_stdin = self.kind != CliKind::Antigravity;
         // A CLI that exits early closes the pipe: a broken pipe is not an error here.
         let writer = thread::spawn(move || {
-            let _ = stdin.write_all(prompt.as_bytes());
+            if send_stdin {
+                let _ = stdin.write_all(prompt.as_bytes());
+            }
         });
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
@@ -982,7 +1117,9 @@ impl Backend for CliBackend {
                     .ok()
                     .filter(|t| !t.trim().is_empty())
                     .unwrap_or_else(|| String::from_utf8_lossy(&plain).into_owned()),
-                CliKind::ClaudeCode => String::from_utf8_lossy(&plain).into_owned(),
+                CliKind::ClaudeCode | CliKind::Antigravity => {
+                    String::from_utf8_lossy(&plain).into_owned()
+                }
             };
             out.text = sanitize(text.trim());
             if status.success() && !out.text.is_empty() {
@@ -1012,6 +1149,25 @@ impl Backend for CliBackend {
     }
 
     fn models(&self) -> Result<Vec<ModelInfo>> {
+        if self.kind == CliKind::Antigravity {
+            if crate::offline() {
+                return Err(Error::Offline);
+            }
+            let (status, text) =
+                probe_output(self.kind, &self.program, &["models"], &self.settings)
+                    .ok_or_else(|| Error::Network("Antigravity `agy models` timed out".into()))?;
+            if !status.success() {
+                return Err(classify(self.kind, &text, status.code()));
+            }
+            let models = parse_agy_models(&text);
+            if models.is_empty() {
+                return Err(Error::Provider(
+                    1,
+                    "Antigravity `agy models` returned no models".into(),
+                ));
+            }
+            return Ok(models);
+        }
         Err(Error::Config(format!(
             "{} chooses its own default model; pass one it accepts with /model <id> (EmbedIDE does not list them)",
             self.kind.name()

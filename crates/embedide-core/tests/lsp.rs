@@ -282,6 +282,13 @@ fn missing_servers_name_the_setting_and_configuration_selects_servers() {
     );
     assert_eq!(lsp::server_for("cpp", &config).unwrap().command, "clangd");
     assert_eq!(lsp::server_for("zig", &config).unwrap().command, "zls");
+    assert_eq!(
+        lsp::server_for("fortran", &config).unwrap().command,
+        "fortls"
+    );
+    let r_lsp = lsp::server_for("r", &config).unwrap();
+    assert_eq!(r_lsp.command, "R");
+    assert!(r_lsp.args.iter().any(|a| a.contains("languageserver::run")));
     assert!(lsp::server_for("asm", &config).is_none());
     let ra = lsp::server_for("rust", &config).unwrap();
     assert_eq!(

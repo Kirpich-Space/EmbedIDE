@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub enum ToolchainCmd {
     /// List installed and configured toolchains with versions and targets.
     List {
-        /// Only toolchains for this language (c, cpp, rust, zig, asm, fortran).
+        /// Only toolchains for this language (c, cpp, rust, zig, asm, fortran, r).
         #[arg(long)]
         language: Option<Language>,
         /// Do not run version queries (path lookup only).
@@ -25,7 +25,7 @@ pub enum ToolchainCmd {
     Add {
         /// Your id for it, e.g. gcc-13 or my-arm-gcc.
         id: String,
-        /// Kind: gcc, g++, clang, clang++, zig-cc, zig-c++, rustc, cargo, zig, gas, nasm, gfortran, flang, lfortran.
+        /// Kind: gcc, g++, clang, clang++, zig-cc, zig-c++, rustc, cargo, zig, gas, nasm, gfortran, flang, lfortran, rscript.
         #[arg(long)]
         kind: String,
         /// Absolute executable path.

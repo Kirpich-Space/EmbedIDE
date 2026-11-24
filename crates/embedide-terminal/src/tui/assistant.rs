@@ -176,12 +176,12 @@ pub struct Assistant {
     attention: Option<String>,
 }
 
-const HELP: &str = "Type here (this panel) and press Enter. Start with: /provider claude-code  or  /provider codex-cli \
-(your installed, logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
+const HELP: &str = "Type here (this panel) and press Enter. Start with: /provider claude-code, /provider codex-cli, or /provider antigravity (agy) \
+(your logged-in official CLI; no API key) — or /provider anthropic | openai | moonshot | xai with an API key. \
 Chat: /status · /file (attach this file; /file a.c b.h) · /selection · /explain · /edit what to change · /diff · \
 /apply · /reject · /complete · /model name · /history · /cancel · /clear · /providers. \
-Agent (default with claude-code / codex-cli: plain text is a task the agent carries out in the project; /mode chat for read-only answers): /agent <what to do> · /mode agent|chat · /policy read-only|workspace-write|approval-required \
-· y / a / n answer approvals · /changes · /review [file] · /revert file|all · /fix [command] · /new · \
+Agent (default with CLI backends: plain text is a project task; /mode chat for read-only): /agent <task> · /mode agent|chat · /policy read-only|workspace-write|approval-required \
+· y / a / n approvals · /changes · /review [file] · /revert file|all · /fix [command] · /new · \
 /skills · /skill name · /skill off name. Nothing is sent until Enter.";
 
 impl Assistant {
@@ -250,7 +250,7 @@ impl Assistant {
         let start = match a.cli_backend() {
             Some(kind) => format!("Backend {} ({}). Type a message and press Enter; /help lists commands.", kind.id(), kind.name()),
             None if a.provider.is_some() => format!("Backend {}. Type a message and press Enter; /help lists commands.", a.provider_label()),
-            None => "Choose a backend: /provider claude-code or /provider codex-cli (your logged-in CLI, no API key), \
+            None => "Choose a backend: /provider claude-code, /provider codex-cli, or /provider antigravity (agy) (your logged-in CLI, no API key), \
 or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands."
                 .into(),
         };
@@ -446,6 +446,9 @@ or /provider anthropic|openai|moonshot|xai with an API key. /help lists commands
             "/providers" | "/backends" => {
                 let mut lines = vec!["AI backends (select with /provider <id>):".to_string()];
                 for p in ProviderId::ALL {
+                    if p.info().key_env.is_empty() {
+                        continue;
+                    }
                     let key = match embedide_ai::auth::key_source(p) {
                         embedide_ai::auth::KeySource::Missing => "no API key",
                         _ => "API key available",

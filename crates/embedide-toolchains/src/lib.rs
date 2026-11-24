@@ -38,17 +38,20 @@ pub enum Language {
     Asm,
     /// Fortran
     Fortran,
+    /// R (Rscript / R)
+    R,
 }
 
 impl Language {
     /// All supported languages.
-    pub const ALL: [Language; 6] = [
+    pub const ALL: [Language; 7] = [
         Language::C,
         Language::Cpp,
         Language::Rust,
         Language::Zig,
         Language::Asm,
         Language::Fortran,
+        Language::R,
     ];
     /// Stable identifier used in configuration files.
     pub fn id(self) -> &'static str {
@@ -59,6 +62,7 @@ impl Language {
             Self::Zig => "zig",
             Self::Asm => "asm",
             Self::Fortran => "fortran",
+            Self::R => "r",
         }
     }
 }
@@ -79,8 +83,9 @@ impl FromStr for Language {
             "zig" => Ok(Self::Zig),
             "asm" | "assembly" => Ok(Self::Asm),
             "fortran" | "f90" => Ok(Self::Fortran),
+            "r" | "rscript" => Ok(Self::R),
             _ => Err(format!(
-                "Unknown language '{s}'; expected c, cpp, rust, zig, asm or fortran"
+                "Unknown language '{s}'; expected c, cpp, rust, zig, asm, fortran or r"
             )),
         }
     }
@@ -106,6 +111,8 @@ pub enum Family {
     Nasm,
     /// LFortran.
     Lfortran,
+    /// R / Rscript interpreter.
+    R,
 }
 
 /// A kind of toolchain EmbedIDE knows how to drive.
@@ -268,6 +275,16 @@ pub const KINDS: &[Kind] = &[
         family: Family::Lfortran,
         languages: &[L::Fortran],
         programs: &["lfortran"],
+        prefix_args: &[],
+        version_args: &["--version"],
+        dump_machine: false,
+        cross_suffix: None,
+    },
+    Kind {
+        id: "rscript",
+        family: Family::R,
+        languages: &[L::R],
+        programs: &["Rscript", "R"],
         prefix_args: &[],
         version_args: &["--version"],
         dump_machine: false,
@@ -787,6 +804,14 @@ pub fn recommend(language: Language, family: &str) -> Vec<Recommendation> {
                 "LFortran (lfortran.org)",
             ),
         ],
+        Language::R => vec![pkg(
+            "rscript",
+            "r",
+            "r-base",
+            "R-core",
+            "R",
+            "R statistical computing environment (Rscript / R); install.packages('languageserver') for LSP",
+        )],
     }
 }
 

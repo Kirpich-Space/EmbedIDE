@@ -1,5 +1,22 @@
 # Changelog
 
+## `embed` 0.2.0-alpha.1 — 2026-11-24
+
+### Added
+- **R language support:** syntax highlighting (`.R`, `.r`, `.Rmd`, `.qmd`, `.Rprofile`, `Rscript`/`R` shebangs), brace auto-indentation, `rscript` toolchain discovery and Linux/FreeBSD package hints, `embed project init --language r` template, native syntax-checking builds via `Rscript --vanilla`, and default LSP wiring (`R --slave -e "languageserver::run()"`).
+- **Extended Fortran support:** Fortran 2008/2018 keywords, intrinsics, `iso_fortran_env`/`iso_c_binding`/`ieee_arithmetic`/`omp_lib` highlighting, block-aware auto-indentation (`Rules::Fortran`), automatic `-cpp` for preprocessed uppercase extensions (`.F`, `.F90`+, `.fpp`, `.f18`), multi-module `fortran` project template, and default `fortls` LSP wiring.
+- **Portable `Makefile` generation:** `embed project makefile [--out Makefile] [--profile debug] [--force]` and TUI `:makefile` / `:makefile!` (plus `Ctrl+K` palette) generate POSIX/BSD/GNU-compatible Makefiles from `embedide.toml` or detected sources for C, C++, Assembly, Fortran (with topological `.mod` dependency edges), Rust, Zig, and R, without overwriting existing files unless forced.
+- **Antigravity (`agy`) AI provider:** first-class subscription CLI backend (`--provider antigravity` / `--provider agy`, TUI `/provider antigravity` / `/provider agy`) with `stream-json` streaming, `agy models` discovery and auth checks, and agent mode (`read-only`, `workspace-write`, and two-phase `approval-required` with `--conversation` resume).
+- **Automatic background toolchain installation on IDE open:** `Workspace::open` checks missing required or project-language toolchains in the background when `toolchains.auto_install = true` (respecting `EMBEDIDE_OFFLINE=1` and `auto_install = false`), downloads/verifies SHA-256-pinned archives without blocking the UI, shows OS package hints when no pinned archive applies, and adds `:install_toolchains`.
+- **Upgraded code completion:** cross-file workspace symbols (other open tabs and sibling project source/header files), built-in language keyword/type/intrinsic catalogs (Rust, C, C++, Zig, Fortran, R, Python, Shell, JS/TS), `snake_case`/`camelCase` boundary and initials ranking, and member triggers for Fortran (`%`) and R (`$`/`@`).
+
+### Changed
+- **Syntax highlighting overhaul:** reworked `CARBON` and `BONE` palettes so keywords are cool cobalt/periwinkle, functions are distinct from variables, and **red is strictly reserved for errors (`Role::Error`)** in both truecolor and 16-color TTY consoles (including FreeBSD `vt`).
+- **FreeBSD TTY file explorer:** replaced flat monochrome indentation with ASCII tree connectors (`| `, `|-`, `` `- ``), `[+]`/`[-]` directory markers, trailing `/`, semantic colours, active-file `*`, modified `[M]`, symlink `->`, and reverse-video cursor row.
+
+### Fixed
+- **Code completion bugs:** deleting a word back to empty with Backspace now closes the automatic popup instead of listing every word; manual `Ctrl+Space` selection is preserved across asynchronous LSP responses; clamped completion replacement ranges against cursor bounds.
+
 ## `embed` 0.1.0-alpha.1 — update of 2026-11-22 (same version, rebuilt archives)
 
 The `0.1.0-alpha.1` release was updated in place: its archives were rebuilt with the changes below. The

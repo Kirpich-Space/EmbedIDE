@@ -8,6 +8,7 @@ use super::{
     normalize_key,
     screen::{Screen, Theme},
     term::{self, TerminalPane},
+    theme::{Paint, Role},
     TuiEditor,
 };
 use crate::FrontendError;
@@ -32,6 +33,7 @@ use embedide_core::{
 use embedide_editor::completion::{self, Candidate};
 use embedide_editor::indent::IndentStyle;
 use embedide_editor::{
+    syntax::Highlight,
     vim::{IdeAction, Keymap, Mode, SelectionKind},
     Editor,
 };
@@ -86,6 +88,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("close_binary", "Close Binary View"),
     ("build", "Build Project"),
+    ("makefile", "Generate Portable Makefile (GNU/BSD make)"),
     ("check", "Check Project (Cargo)"),
     ("clean", "Clean Project"),
     ("cancel", "Cancel Current Task"),
@@ -128,6 +131,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("registers", "Debug Registers"),
     ("settings", "Show Settings"),
     ("compilers", "Show Compilers Selected for This Project"),
+    ("install_toolchains", "Install Missing Required Toolchains"),
     ("edit_project_config", "Edit Project Config (embedide.toml)"),
     ("edit_user_config", "Edit User Config (config.toml)"),
     ("reload", "Reload Settings"),
@@ -146,13 +150,15 @@ enum LspSlot {
     Failed,
 }
 
-/// Language-server language id of a document (`rust`, `c`, `cpp`, `zig`).
+/// Language-server language id of a document (`rust`, `c`, `cpp`, `zig`, `fortran`, `r`).
 fn lsp_language(path: Option<&Path>) -> Option<&'static str> {
     match language_of(path) {
         "rust" => Some("rust"),
         "c" => Some("c"),
         "cpp" => Some("cpp"),
         "zig" => Some("zig"),
+        "fortran" => Some("fortran"),
+        "r" => Some("r"),
         _ => None,
     }
 }
@@ -363,6 +369,8 @@ pub struct Workspace {
     problems: Vec<Diagnostic>,
     /// A build being prepared on a background thread (progress and the final plan).
     installer: Option<std::sync::mpsc::Receiver<PrepMsg>>,
+    /// Automatic toolchain installer started when the workspace opens.
+    startup_installer: Option<std::sync::mpsc::Receiver<StartupInstallMsg>>,
     /// Reads multi-line compiler diagnostics (gfortran) across output lines.
     diag_parser: core::diagnostics::Parser,
     build_log: Log,
@@ -411,6 +419,11 @@ pub struct Workspace {
 enum PrepMsg {
     Line(String),
     Done(Result<Box<embedide_build::Prepared>, String>),
+}
+/// Progress and result of automatic toolchain installation started on workspace open.
+enum StartupInstallMsg {
+    Line(String),
+    Done(Result<Vec<String>, String>),
 }
 
 fn service_error(error: impl std::fmt::Display) -> FrontendError {
@@ -482,6 +495,7 @@ impl Workspace {
             operation: None,
             problems: Vec::new(),
             installer: None,
+            startup_installer: None,
             diag_parser: core::diagnostics::Parser::default(),
             build_log: Log::default(),
             task_log: Log::default(),
@@ -523,8 +537,96 @@ impl Workspace {
         workspace.select_compilers();
         if let Some(note) = workspace.config_notes.first() {
             workspace.notification = format!("Error: {note} (see :settings)");
+        } else {
+            workspace.start_startup_toolchain_check(false);
         }
         Ok(workspace)
+    }
+    /// Check for missing required/project toolchains and install pinned archives in the background
+    /// when `toolchains.auto_install` is enabled (or `manual` is true). Never blocks the UI and
+    /// honours `EMBEDIDE_OFFLINE=1`.
+    fn start_startup_toolchain_check(&mut self, manual: bool) {
+        if self.startup_installer.is_some() {
+            if manual {
+                self.notification = "Toolchain installation is already running".into();
+            }
+            return;
+        }
+        let offline =
+            std::env::var_os("EMBEDIDE_OFFLINE").is_some_and(|v| !v.is_empty() && v != "0");
+        let plan = embedide_build::startup_install_plan(&self.user, self.manifest.as_ref());
+        if let Some(err) = plan.error {
+            self.tools_log
+                .push(&format!("Toolchain config note: {err}"));
+            if manual {
+                self.notification = err;
+            }
+            return;
+        }
+        for (lang, hint) in &plan.os_hints {
+            let msg = match hint {
+                Some(cmd) => format!("No {lang} compiler found; install with: {cmd}"),
+                None => format!("No {lang} compiler found; run `embed toolchain recommend {lang}`"),
+            };
+            self.tools_log.push(&msg);
+            if plan.downloadable.is_empty() {
+                self.notification = msg;
+            }
+        }
+        if plan.downloadable.is_empty() {
+            if manual && plan.os_hints.is_empty() {
+                self.notification = "All required toolchains are already installed".into();
+            }
+            return;
+        }
+        let names: Vec<String> = plan
+            .downloadable
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        if offline {
+            let msg = format!(
+                "Missing toolchains ({}) skipped: EMBEDIDE_OFFLINE is set",
+                names.join(", ")
+            );
+            self.tools_log.push(&msg);
+            if manual {
+                self.notification = msg;
+            }
+            return;
+        }
+        if !manual && !self.user.toolchains.auto_install {
+            let msg = format!(
+                "Missing toolchains: {}. Run :install_toolchains or `embed toolchain install` (toolchains.auto_install = false)",
+                names.join(", ")
+            );
+            self.tools_log.push(&msg);
+            self.notification = msg;
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let todo = plan.downloadable;
+        self.tools_log.push(&format!(
+            "Auto-installing missing toolchains: {}…",
+            names.join(", ")
+        ));
+        self.notification = format!("Installing toolchains: {}…", names.join(", "));
+        thread::spawn(move || {
+            let mut installed = Vec::new();
+            for (name, spec) in todo {
+                match embedide_toolchains::install::install(&name, &spec, &mut |line| {
+                    let _ = tx.send(StartupInstallMsg::Line(line.to_string()));
+                }) {
+                    Ok(_) => installed.push(name),
+                    Err(err) => {
+                        let _ = tx.send(StartupInstallMsg::Done(Err(err)));
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(StartupInstallMsg::Done(Ok(installed)));
+        });
+        self.startup_installer = Some(rx);
     }
     fn new_document(&self, mut editor: Editor) -> TuiEditor {
         let mut keymap = Keymap::default();
@@ -781,6 +883,14 @@ impl Workspace {
                 self.binary_mode(name);
                 Ok(())
             }
+            "makefile" | "makefile!" => {
+                let output = if arg.is_empty() {
+                    PathBuf::from("Makefile")
+                } else {
+                    PathBuf::from(arg)
+                };
+                self.generate_makefile(output, name == "makefile!")
+            }
             line if !line.is_empty()
                 && line.bytes().all(|b| b.is_ascii_digit())
                 && arg.is_empty() =>
@@ -801,6 +911,32 @@ impl Workspace {
             ))),
         }
     }
+    /// Generate a portable Makefile from `embedide.toml` or detected project sources,
+    /// refresh the explorer, and open the generated file.
+    fn generate_makefile(&mut self, output: PathBuf, force: bool) -> Result<(), FrontendError> {
+        let opts = embedide_build::makefile::MakefileOptions {
+            profile: self.profile.clone(),
+            output: output.clone(),
+            force,
+        };
+        let generated = embedide_build::makefile::write(&self.root, self.manifest.as_ref(), &opts)
+            .map_err(|e| service_error(e.0))?;
+        let _ = self.refresh();
+        self.open_file(&output)?;
+        self.notification = format!(
+            "{} {} ({}, {} source file(s))",
+            if generated.overwritten {
+                "Updated"
+            } else {
+                "Generated"
+            },
+            output.display(),
+            generated.language,
+            generated.sources.len()
+        );
+        Ok(())
+    }
+
     /// `:w <file>` / `:saveas <file>`: write the active document to a new
     /// file (relative to the project) and keep editing it there. An existing
     /// file is never overwritten.
@@ -1430,6 +1566,7 @@ impl Workspace {
                     self.notification = "AI request cancelled".into();
                 }
             }
+            "makefile" => self.generate_makefile(PathBuf::from("Makefile"), false)?,
             "focus_explorer" | "focus_assistant" | "focus_terminal" => self.toggle_focus(id)?,
             "suggest" => self.suggest(true, None)?,
             "ai_suggest" => {
@@ -1530,7 +1667,11 @@ impl Workspace {
                 for note in &self.config_notes {
                     self.tools_log.push(note);
                 }
-                self.tools_log.push("Choose compilers in embedide.toml [toolchain] / [profiles.<name>.toolchain] or user config.toml [toolchains.defaults]. Nothing is installed automatically.");
+                self.tools_log.push("Choose compilers in embedide.toml [toolchain] / [profiles.<name>.toolchain] or user config.toml [toolchains.defaults]. Pinned toolchains in [toolchains.install.*] auto-install on startup when toolchains.auto_install = true.");
+                self.show_panel(Panel::Tools);
+            }
+            "install_toolchains" => {
+                self.start_startup_toolchain_check(true);
                 self.show_panel(Panel::Tools);
             }
             "edit_project_config" => {
@@ -2565,7 +2706,9 @@ impl Workspace {
         let range = candidate
             .range
             .filter(|r| line.start <= r.start && r.start <= cursor && r.end <= line.end)
-            .map_or(popup.start..cursor, |r| r.start..r.end.max(cursor));
+            .map_or(popup.start.min(cursor)..cursor, |r| {
+                r.start..r.end.max(cursor)
+            });
         editor.replace(range, &candidate.insert)?;
         self.after_editor_input();
         Ok(())
@@ -2614,7 +2757,11 @@ impl Workspace {
                 client.trigger_characters().iter().any(|t| t.ends_with(ch))
             }
             Some(_) => false,
-            None => matches!(ch, '.' | ':' | '>'),
+            None => match language {
+                "fortran" => ch == '%',
+                "r" => matches!(ch, '$' | '@' | ':'),
+                _ => matches!(ch, '.' | ':' | '>'),
+            },
         }
     }
     /// Close the popup when its document, focus, mode or word changed.
@@ -2652,13 +2799,16 @@ impl Workspace {
             .as_ref()
             .is_some_and(|p| p.doc == doc && p.start == word.start);
         let enough = query.chars().count() >= self.config.completion.min_chars;
-        if !manual && trigger.is_none() && !enough && !same {
+        if !manual && trigger.is_none() && (query.is_empty() || (!enough && !same)) {
             self.popup = None;
             return Ok(());
         }
         let mut ask = manual;
         if same {
             let popup = self.popup.as_mut().expect("open popup");
+            if manual {
+                popup.manual = true;
+            }
             popup.refilter(&query);
             if manual && popup.selected.is_none() && !popup.is_empty() {
                 popup.selected = Some(0);
@@ -2666,17 +2816,16 @@ impl Workspace {
             ask |= popup.semantic && popup.incomplete && popup.request.is_none();
         } else {
             // Member completion has no word yet: only the server can answer.
-            let words = if trigger.is_some() {
-                Vec::new()
-            } else {
-                completion::document_words(state)
+            let (items, source) = if trigger.is_some() {
+                (Vec::new(), "words")
+            } else if let Some(dialect) = self.asm_dialect() {
+                let words = completion::document_words(state)
                     .iter()
                     .map(|w| Candidate::word(w))
-                    .collect()
-            };
-            let (items, source) = match self.asm_dialect().filter(|_| trigger.is_none()) {
-                Some(dialect) => (asm_candidates(dialect, self.asm_labels(), words), "asm"),
-                None => (words, "words"),
+                    .collect();
+                (asm_candidates(dialect, self.asm_labels(), words), "asm")
+            } else {
+                self.local_candidates(doc)
             };
             self.popup = Some(Popup::new(doc, word.start, items, source, &query, manual));
             ask = true;
@@ -2692,6 +2841,129 @@ impl Workspace {
             }
         }
         Ok(())
+    }
+    /// Collect local completion candidates: current document words (`sort="0"`),
+    /// symbols from other open tabs & sibling project files (`sort="1"`), and
+    /// language keywords/types/builtins (`sort="2"`).
+    fn local_candidates(&self, doc: usize) -> (Vec<Candidate>, &'static str) {
+        let state = self.documents[doc].editor().state();
+        let active_path = state.path().map(Path::to_path_buf);
+        let first_line = state
+            .line_range(0)
+            .and_then(|r| state.buffer().slice(r.start..r.end.min(r.start + 128)).ok())
+            .unwrap_or_default();
+        let syntax_lang =
+            embedide_editor::syntax::Language::detect(active_path.as_deref(), &first_line);
+        let current_words: Vec<Candidate> = completion::document_words(state)
+            .into_iter()
+            .map(|w| Candidate {
+                sort: "0".into(),
+                ..Candidate::word(&w)
+            })
+            .collect();
+        let mut extra: Vec<Candidate> = Vec::new();
+        let mut scanned_paths: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        if let Some(p) = &active_path {
+            scanned_paths.insert(p.clone());
+        }
+        // 1. Other open buffers in the workspace.
+        for (idx, other) in self.documents.iter().enumerate() {
+            if idx == doc {
+                continue;
+            }
+            let other_state = other.editor().state();
+            if let Some(p) = other_state.path() {
+                scanned_paths.insert(p.to_path_buf());
+            }
+            let label_file = other_state
+                .path()
+                .and_then(Path::file_name)
+                .and_then(|n| n.to_str())
+                .unwrap_or("open");
+            let buf = other_state.buffer();
+            let mut end = buf.byte_len().min(64 * 1024);
+            while end > 0 && buf.char_at(end).is_err() {
+                end -= 1;
+            }
+            if let Ok(text) = buf.slice(0..end) {
+                for w in completion::words_in_text(&text, 400) {
+                    extra.push(Candidate {
+                        label: w.clone(),
+                        insert: w.clone(),
+                        kind: "workspace".into(),
+                        detail: label_file.into(),
+                        filter: w,
+                        sort: "1".into(),
+                        range: None,
+                    });
+                }
+            }
+        }
+        // 2. Bounded scan of sibling project files for the same language family
+        // (skip for Plain text so prose notes stay scoped to the current buffer).
+        if syntax_lang != embedide_editor::syntax::Language::Plain {
+            let mut file_budget = 24usize;
+            for row in &self.tree {
+                let entry = &row.entry;
+                if file_budget == 0 || entry.directory {
+                    continue;
+                }
+                if scanned_paths.contains(&entry.path) {
+                    continue;
+                }
+                let entry_lang = embedide_editor::syntax::Language::detect(Some(&entry.path), "");
+                let same_family = entry_lang == syntax_lang
+                    || matches!(
+                        (syntax_lang, entry_lang),
+                        (
+                            embedide_editor::syntax::Language::C,
+                            embedide_editor::syntax::Language::Cpp
+                        ) | (
+                            embedide_editor::syntax::Language::Cpp,
+                            embedide_editor::syntax::Language::C
+                        )
+                    );
+                if !same_family {
+                    continue;
+                }
+                let Ok(meta) = fs::metadata(&entry.path) else {
+                    continue;
+                };
+                if meta.len() > 64 * 1024 {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(&entry.path) else {
+                    continue;
+                };
+                file_budget -= 1;
+                scanned_paths.insert(entry.path.clone());
+                let detail = entry
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                for w in completion::words_in_text(&text, 250) {
+                    extra.push(Candidate {
+                        label: w.clone(),
+                        insert: w.clone(),
+                        kind: "workspace".into(),
+                        detail: detail.clone(),
+                        filter: w,
+                        sort: "1".into(),
+                        range: None,
+                    });
+                }
+            }
+        }
+        // 3. Language keywords, types and builtins.
+        let lang_items = completion::language_candidates(syntax_lang);
+        let has_extra = !extra.is_empty() || !lang_items.is_empty();
+        extra.extend(lang_items);
+        let merged = completion::merge_candidates(current_words, extra);
+        let source = if has_extra { "project" } else { "words" };
+        (merged, source)
     }
     /// The popup's language server is still initializing (it is asked as
     /// soon as it is ready).
@@ -3281,6 +3553,36 @@ impl Workspace {
                 }
             }
         }
+        let mut startup_done = None;
+        if let Some(rx) = &self.startup_installer {
+            while let Ok(msg) = rx.try_recv() {
+                changed = true;
+                match msg {
+                    StartupInstallMsg::Line(line) => {
+                        self.tools_log.push(&line);
+                        self.notification = line;
+                    }
+                    StartupInstallMsg::Done(result) => startup_done = Some(result),
+                }
+            }
+        }
+        if let Some(result) = startup_done {
+            self.startup_installer = None;
+            match result {
+                Ok(installed) if !installed.is_empty() => {
+                    self.select_compilers();
+                    let msg = format!("Installed toolchains: {} (ready)", installed.join(", "));
+                    self.tools_log.push(&msg);
+                    self.notification = msg;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    let msg = format!("Toolchain auto-install failed: {err}");
+                    self.tools_log.push(&msg);
+                    self.notification = msg;
+                }
+            }
+        }
         if self.focus != Focus::Editor {
             // No suggestion requests for an editor the user is not typing in.
             self.assistant.pause_requests();
@@ -3733,29 +4035,119 @@ impl Workspace {
         if self.selected >= self.tree_top + count {
             self.tree_top = self.selected.saturating_sub(count.saturating_sub(1));
         }
-        for (i, row) in self.tree.iter().enumerate().skip(self.tree_top).take(count) {
-            let name = row
+        let active_path = self.editor().state().path().map(Path::to_path_buf);
+        let modified_paths: std::collections::HashSet<&Path> = self
+            .documents
+            .iter()
+            .filter(|d| d.editor().state().is_modified())
+            .filter_map(|d| d.editor().state().path())
+            .collect();
+        let has_sibling_after = |idx: usize, depth: usize| -> bool {
+            for next in &self.tree[idx + 1..] {
+                if next.depth < depth {
+                    return false;
+                }
+                if next.depth == depth {
+                    return true;
+                }
+            }
+            false
+        };
+        for (i, node) in self.tree.iter().enumerate().skip(self.tree_top).take(count) {
+            let selected = i == self.selected;
+            let name = node
                 .entry
                 .path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy();
-            let text = format!(
-                "{}{} {}{}",
-                "  ".repeat(row.depth.min(32)),
-                if row.entry.directory {
-                    if row.expanded {
-                        "v"
-                    } else {
-                        ">"
-                    }
+            let mut prefix = String::new();
+            let depth = node.depth.min(16);
+            if depth > 0 {
+                for d in 1..depth {
+                    prefix.push_str(if has_sibling_after(i, d) { "| " } else { "  " });
+                }
+                prefix.push_str(if has_sibling_after(i, depth) {
+                    "|-"
                 } else {
-                    " "
+                    "`-"
+                });
+            }
+            let mut r = Row::default();
+            let cursor_mark = if selected && self.focus == Focus::Explorer {
+                ">"
+            } else {
+                " "
+            };
+            let mut used = 0usize;
+            let mut push_clipped = |text: &str, style: Option<Paint>| {
+                if used >= width {
+                    return;
+                }
+                let mut out = String::new();
+                for ch in text.chars() {
+                    if ch.is_control() {
+                        continue;
+                    }
+                    let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if used + w > width {
+                        break;
+                    }
+                    used += w;
+                    out.push(ch);
+                }
+                if !out.is_empty() {
+                    r.push_styled(&out, selected, style);
+                }
+            };
+            push_clipped(
+                cursor_mark,
+                if selected {
+                    Some(Role::Accent.into())
+                } else {
+                    None
                 },
-                name,
-                if row.entry.symlink { " [link]" } else { "" }
             );
-            rows.push(layout::label(&text, width, i == self.selected));
+            if !prefix.is_empty() {
+                push_clipped(&prefix, Some(Role::Muted.into()));
+            }
+            if node.entry.directory {
+                let tag = if node.expanded { "[-] " } else { "[+] " };
+                push_clipped(tag, Some(Role::Ai.into()));
+                push_clipped(&format!("{name}/"), Some(Highlight::Type.into()));
+            } else {
+                let is_active = active_path
+                    .as_deref()
+                    .is_some_and(|p| p == node.entry.path.as_path());
+                let is_modified = modified_paths.contains(node.entry.path.as_path());
+                let mark = if is_active { "* " } else { "  " };
+                push_clipped(
+                    mark,
+                    if is_active {
+                        Some(Role::Accent.into())
+                    } else {
+                        Some(Role::Muted.into())
+                    },
+                );
+                let style = if is_modified {
+                    Some(Role::Warning.into())
+                } else if is_active {
+                    Some(Highlight::Function.into())
+                } else {
+                    None
+                };
+                push_clipped(&name, style);
+                if is_modified {
+                    push_clipped(" [M]", Some(Role::Warning.into()));
+                }
+            }
+            if node.entry.symlink {
+                push_clipped(" ->", Some(Role::Muted.into()));
+            }
+            if used < width {
+                r.push(&" ".repeat(width - used), selected);
+            }
+            rows.push(r);
         }
         rows.resize_with(height, Row::default);
         rows
@@ -4367,9 +4759,9 @@ fn language_of(path: Option<&Path>) -> &'static str {
         "rs" => "rust",
         "zig" => "zig",
         "s" | "S" | "sx" | "asm" | "nasm" | "inc" => "asm",
-        "f" | "F" | "f90" | "F90" | "f95" | "F95" | "f03" | "F03" | "f08" | "F08" | "for" => {
-            "fortran"
-        }
+        "f" | "F" | "for" | "FOR" | "ftn" | "FTN" | "f90" | "F90" | "f95" | "F95" | "f03"
+        | "F03" | "f08" | "F08" | "f18" | "F18" | "fpp" | "FPP" => "fortran",
+        "r" | "R" | "rmd" | "Rmd" | "qmd" => "r",
         "toml" => "toml",
         "json" => "json",
         "md" => "markdown",
@@ -4563,7 +4955,7 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "COMPLETE While typing (2+ letters) a popup lists words or language-server items; nothing is selected:",
         "        Down/Ctrl+N, Up/Ctrl+P select, then Tab or Enter accept. Without a selection Tab and Enter work as usual",
         "        Ctrl+Space asks explicitly and selects the first item; Esc closes it and leaves Insert mode",
-        "        Servers: rust-analyzer (Rust), clangd (C/C++), zls (Zig) when installed; otherwise words of this file",
+        "        Servers: rust-analyzer (Rust), clangd (C/C++), zls (Zig), fortls (Fortran), R languageserver when installed; otherwise project/language completion",
         "        Ctrl+S save | Ctrl+W close document | F10 next document | Ctrl+P find file | Ctrl+Q quit",
         "BUILD   F5 build | F7 cargo check | F8 cancel | F3 problems: j/k select, Enter jumps to the source line",
         "        Compilers come from embedide.toml and config.toml (Settings panel); compilers are downloaded only if your config.toml requires them",
@@ -4573,7 +4965,7 @@ fn help_lines(keys: &BTreeMap<String, String>, keyboard_enhanced: bool) -> Vec<S
         "MOUSE   On by default; :mouse toggles it (or \"mouse\": false in embedide.json native). Click focuses a panel,",
         "        places the cursor, selects / opens explorer rows; the wheel scrolls. Drag in the AI panel selects and copies",
         "        only its text; Shift+drag is the terminal's own selection. AI input: arrows, Home/End, Delete, Up/Down history",
-        "AI      Alt+2, then /provider claude-code or /provider codex-cli; type a message, Enter sends (only then)",
+        "AI      Alt+2, then /provider claude-code, codex-cli or antigravity (agy); type a message, Enter sends (only then)",
         "        /file /selection /explain /edit what to change /diff /apply /reject /cancel /help",
         "        Alt+\\ (Insert mode), :complete or /complete: AI suggestion at the cursor; Tab accepts, Esc rejects",
         "AGENT   /agent <task>: Claude Code / Codex CLI edit files and run builds in the project under /policy;",
@@ -5163,9 +5555,62 @@ mod tests {
         });
         key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
         type_keys(&mut ws, "a pri");
-        assert_eq!(shown(&ws), ["primary"]);
+        assert_eq!(shown(&ws).first().map(String::as_str), Some("primary"));
         assert!(!ws.popup.as_ref().unwrap().semantic);
         let _ = fs::remove_file(&log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upgraded_completion_covers_workspace_symbols_language_builtins_boundary_match_and_backspace()
+    {
+        let (mut ws, dir) = completion_workspace(
+            "upgraded-completion",
+            &[
+                (
+                    "math_mod.f90",
+                    "module math_mod\ncontains\n  function compute_trajectory(x)\n  end function\nend module\n",
+                ),
+                ("main.f90", "program main\n  implicit none\n\nend program\n"),
+                ("stats.R", "# stats\n"),
+            ],
+            r#"{"completion": {"lsp": false}}"#,
+        );
+        ws.open_file(Path::new("main.f90")).unwrap();
+        type_keys(&mut ws, "2jo  ");
+        // Boundary/initials match (`ct` or `traj`) finds symbol from sibling Fortran file `math_mod.f90`!
+        type_keys(&mut ws, "traj");
+        let list = shown(&ws);
+        assert!(
+            list.contains(&"compute_trajectory".to_string()),
+            "sibling Fortran module symbol must appear: {list:?}"
+        );
+        // Backspace back to empty closes the auto-popup instead of dumping every symbol.
+        for _ in 0..4 {
+            key(&mut ws, KeyCode::Backspace, KeyModifiers::NONE);
+        }
+        assert!(
+            ws.popup.is_none(),
+            "deleting word to empty must close auto-popup"
+        );
+        // Fortran language builtins appear even without LSP.
+        type_keys(&mut ws, "matm");
+        assert!(
+            shown(&ws).contains(&"matmul".to_string()),
+            "Fortran builtin matmul expected: {:?}",
+            shown(&ws)
+        );
+        key(&mut ws, KeyCode::Esc, KeyModifiers::NONE);
+
+        // R language builtins appear in .R files.
+        ws.open_file(Path::new("stats.R")).unwrap();
+        type_keys(&mut ws, "Go");
+        type_keys(&mut ws, "read");
+        let r_list = shown(&ws);
+        assert!(
+            r_list.contains(&"read.csv".to_string()),
+            "R builtin read.csv expected: {r_list:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

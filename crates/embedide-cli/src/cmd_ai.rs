@@ -316,7 +316,9 @@ fn language_of(p: &Path) -> String {
         "rs" => "rust",
         "zig" => "zig",
         "s" | "S" | "asm" => "asm",
-        "f" | "f90" | "f95" | "f03" | "f08" | "F90" => "fortran",
+        "f" | "F" | "for" | "FOR" | "ftn" | "FTN" | "f90" | "F90" | "f95" | "F95" | "f03"
+        | "F03" | "f08" | "F08" | "f18" | "F18" | "fpp" | "FPP" => "fortran",
+        "r" | "R" | "rmd" | "Rmd" | "qmd" => "r",
         other => other,
     }
     .to_string()
@@ -342,12 +344,17 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
                 let sub = match i.subscription {
                     Subscription::ClaudeCode => "claude-code".to_string(),
                     Subscription::Codex => "codex".to_string(),
+                    Subscription::Antigravity => "antigravity (agy)".to_string(),
                     Subscription::NotIntegrated(_) => "not integrated".to_string(),
                 };
-                let key = match src {
-                    KeySource::Environment => format!("set ({})", i.key_env),
-                    KeySource::CredentialsFile => "stored".into(),
-                    KeySource::Missing => format!("missing ({})", i.key_env),
+                let key = if i.key_env.is_empty() {
+                    "CLI login only".into()
+                } else {
+                    match src {
+                        KeySource::Environment => format!("set ({})", i.key_env),
+                        KeySource::CredentialsFile => "stored".into(),
+                        KeySource::Missing => format!("missing ({})", i.key_env),
+                    }
                 };
                 out.line(&format!(
                     "{:<10} {:<12} {:<20} {:<16} {}",
@@ -380,7 +387,12 @@ pub fn run(cmd: AiCmd, out: &Out) -> CliResult<(Value, u8)> {
                 "→ {}: listing models (one request)",
                 p.info().name
             ));
-            let b = embedide_ai::backend(p, AuthMode::ApiKey, &cfg.ai).map_err(to_err)?;
+            let mode = if p == ProviderId::Antigravity {
+                AuthMode::Subscription
+            } else {
+                AuthMode::ApiKey
+            };
+            let b = embedide_ai::backend(p, mode, &cfg.ai).map_err(to_err)?;
             let list = b.models().map_err(to_err)?;
             for m in &list {
                 out.line(&format!(
@@ -828,10 +840,12 @@ fn agent_task(
         .provider
         .clone()
         .or(cfg.ai.provider.clone())
-        .ok_or_else(|| fail("Choose --provider claude-code or --provider codex-cli".into()))?;
+        .ok_or_else(|| {
+            fail("Choose --provider claude-code, codex-cli or antigravity (agy)".into())
+        })?;
     let kind = embedide_ai::cli::CliKind::parse(&id).ok_or_else(|| {
         fail(format!(
-            "Agent mode runs through an official CLI: --provider claude-code or codex-cli (not '{id}')"
+            "Agent mode runs through an official CLI: --provider claude-code, codex-cli or antigravity (not '{id}')"
         ))
     })?;
     let policy: agent::Policy = a

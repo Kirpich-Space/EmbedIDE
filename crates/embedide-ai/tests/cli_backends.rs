@@ -385,3 +385,61 @@ fn discovery_versions_and_login_state_never_show_personal_data() {
     );
     assert_eq!(cli::sanitize("a\x1b]0;title\x07b\x1b[2Jc\x07"), "abc");
 }
+
+#[test]
+fn antigravity_cli_streams_lists_models_and_checks_auth() {
+    let mock = Mock::new("agy", "ok");
+    let info = cli::inspect(CliKind::Antigravity, &mock.program, &CliConfig::default());
+    assert_eq!(info.version.as_deref(), Some("1.5.14"));
+    assert!(info.caps.headless && info.caps.structured && info.supported());
+    assert_eq!(
+        info.auth,
+        AuthState::LoggedIn {
+            method: "Antigravity CLI".into(),
+            plan: None
+        }
+    );
+
+    let logged_out = Mock::new("agy", "loggedout");
+    let info_out = cli::inspect(
+        CliKind::Antigravity,
+        &logged_out.program,
+        &CliConfig::default(),
+    );
+    assert_eq!(info_out.auth, AuthState::LoggedOut);
+
+    let (res, streamed) = send(
+        &mock,
+        ProviderId::Antigravity,
+        CliConfig::default(),
+        "AGY-1",
+    );
+    let resp = res.unwrap();
+    assert_eq!(resp.text, "agy answer for AGY-1");
+    assert_eq!(streamed, "agy answer for AGY-1");
+    assert_eq!(resp.model.as_deref(), Some("gemini-4-neon-high"));
+    assert_eq!(resp.usage.input_tokens, Some(19));
+    assert_eq!(resp.usage.output_tokens, Some(6));
+
+    // Model discovery through `agy models`.
+    let mut cfg = AiConfig::default();
+    cfg.providers.insert(
+        "antigravity".into(),
+        ProviderConfig {
+            cli: Some(mock.program.clone()),
+            ..Default::default()
+        },
+    );
+    let b = backend(ProviderId::Antigravity, AuthMode::Subscription, &cfg).unwrap();
+    let models = b.models().unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0].id, "gemini-4-neon-high");
+    assert_eq!(models[1].id, "claude-sonnet-5-5-medium");
+
+    // ApiKey mode is refused with a helpful hint to use subscription/`agy`.
+    let err = backend(ProviderId::Antigravity, AuthMode::ApiKey, &cfg)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("agy"), "{err}");
+}

@@ -102,6 +102,11 @@ pub fn resolve(
             Family::Lfortran => {
                 return Err(Error(format!("LFortran cross-compilation is not supported by EmbedIDE; target {triple} needs gfortran or flang")));
             }
+            Family::R => {
+                return Err(Error(format!(
+                    "R scripts are interpreted and do not support cross target '{triple}'"
+                )));
+            }
             Family::Nasm | Family::Clang | Family::ZigCc | Family::Rust | Family::Zig => {}
         }
     }
@@ -125,6 +130,7 @@ const HOST_PREFERENCE: &[(Language, &[&str])] = &[
     (Language::Fortran, &["gfortran", "flang", "lfortran"]),
     (Language::Zig, &["zig"]),
     (Language::Rust, &["rustc"]),
+    (Language::R, &["rscript"]),
 ];
 
 /// A board project needs a cross GCC; a host GCC would only fail later on -mcpu.

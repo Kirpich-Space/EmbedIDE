@@ -21,7 +21,7 @@ pub enum ProjectCmd {
         /// Project name (defaults to the directory name).
         #[arg(long)]
         name: Option<String>,
-        /// Primary language: c, cpp, rust, zig, asm, fortran.
+        /// Primary language: c, cpp, rust, zig, asm, fortran, r.
         #[arg(long)]
         language: Option<Language>,
         /// Template (see `embed project templates`).
@@ -44,6 +44,21 @@ pub enum ProjectCmd {
     },
     /// List project templates.
     Templates,
+    /// Generate a portable Makefile (GNU/BSD make) from embedide.toml or detected sources.
+    Makefile {
+        /// Project directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Profile whose flags and defines seed Makefile defaults.
+        #[arg(long, default_value = "debug")]
+        profile: String,
+        /// Output filename relative to the project root.
+        #[arg(long, default_value = "Makefile")]
+        out: PathBuf,
+        /// Overwrite an existing Makefile.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -225,6 +240,36 @@ pub fn project(cmd: ProjectCmd, out: &Out) -> CliResult<Value> {
             Ok(
                 json!({"root": root, "manifest": m, "profile": profile, "toolchains": selection, "problems": problems, "warnings": m.warnings()}),
             )
+        }
+        ProjectCmd::Makefile {
+            path,
+            profile,
+            out: output,
+            force,
+        } => {
+            let root = path
+                .canonicalize()
+                .map_err(|e| fail(format!("Cannot open {}: {e}", path.display())))?;
+            let manifest = Manifest::load(&root).map_err(|e| fail(e.0))?;
+            let opts = build::makefile::MakefileOptions {
+                profile,
+                output,
+                force,
+            };
+            let generated =
+                build::makefile::write(&root, manifest.as_ref(), &opts).map_err(|e| fail(e.0))?;
+            out.line(&format!(
+                "{} {} ({}, {} source file(s))",
+                if generated.overwritten {
+                    "Updated"
+                } else {
+                    "Generated"
+                },
+                generated.path.display(),
+                generated.language,
+                generated.sources.len()
+            ));
+            Ok(serde_json::to_value(&generated).unwrap_or_default())
         }
     }
 }

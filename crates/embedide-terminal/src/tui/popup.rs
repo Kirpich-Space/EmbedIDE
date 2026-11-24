@@ -37,6 +37,8 @@ pub struct Popup {
     pub incomplete: bool,
     /// Key of the language server asked for this session.
     pub server: Option<String>,
+    /// Opened explicitly via Ctrl+Space (keeps first item selected across LSP updates).
+    pub manual: bool,
     query: String,
 }
 
@@ -61,6 +63,7 @@ impl Popup {
             request: None,
             incomplete: false,
             server: None,
+            manual,
             query: String::new(),
         };
         popup.refilter(query);
@@ -85,11 +88,15 @@ impl Popup {
 
     /// Replace the candidates (e.g. when the language server answers).
     pub fn replace(&mut self, items: Vec<Candidate>, source: &str, semantic: bool) {
+        let keep_selection = self.selected.is_some() || self.manual;
         self.items = items;
         self.source = source.into();
         self.semantic = semantic;
         let query = std::mem::take(&mut self.query);
         self.refilter(&query);
+        if keep_selection && self.selected.is_none() && !self.shown.is_empty() {
+            self.selected = Some(0);
+        }
     }
 
     /// The text typed since the word start.
@@ -167,6 +174,8 @@ impl Popup {
             self.source.clone()
         } else if self.source == "asm" {
             "asm: labels, mnemonics, registers (local)".into()
+        } else if self.source == "project" {
+            "project + lang (local)".into()
         } else {
             "words (local, no types)".into()
         };

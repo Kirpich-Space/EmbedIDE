@@ -28,9 +28,8 @@ fn classify(path: &Path) -> Option<SourceKind> {
         "cpp" | "cc" | "cxx" | "c++" | "C" => SourceKind::Cpp,
         "S" | "s" | "sx" => SourceKind::Gas,
         "asm" | "nasm" => SourceKind::Nasm,
-        "f" | "for" | "f90" | "f95" | "f03" | "f08" | "F" | "F90" | "F95" | "F03" | "F08" => {
-            SourceKind::Fortran
-        }
+        "f" | "for" | "ftn" | "f90" | "f95" | "f03" | "f08" | "f18" | "fpp" | "F" | "FOR"
+        | "FTN" | "F90" | "F95" | "F03" | "F08" | "F18" | "FPP" => SourceKind::Fortran,
         _ => return None,
     })
 }
@@ -234,6 +233,83 @@ pub(crate) fn prepare(
         .unwrap_or_else(|| m.project.name.clone());
     let artifact = out.join(&default_name);
 
+    // Interpreted R projects: syntax-check every .R/.r file via Rscript/R without executing side effects.
+    if lang == Language::R {
+        let sel = select::choose(m, user, req, toolchains, Language::R)?;
+        let mut files = Vec::new();
+        for d in &m.build.sources {
+            let dir = root.join(d);
+            if !dir.is_dir() {
+                return Err(Error(format!(
+                    "Source directory {} does not exist",
+                    dir.display()
+                )));
+            }
+            collect(&dir, &output_root, &mut files)?;
+        }
+        let r_files: Vec<PathBuf> = files
+            .into_iter()
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("r"))
+            })
+            .collect();
+        if r_files.is_empty() {
+            return Err(Error(format!(
+                "No R (.R/.r) sources under {}",
+                m.build.sources.join(", ")
+            )));
+        }
+        let is_plain_r = sel
+            .program
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "R");
+        let mut steps = Vec::with_capacity(r_files.len());
+        for src in &r_files {
+            let mut args = sel.prefix_args.clone();
+            args.push("--vanilla".into());
+            if is_plain_r {
+                args.push("--slave".into());
+            }
+            args.extend(s(&m.build.flags));
+            args.extend(s(&profile.flags));
+            args.extend([
+                "-e".into(),
+                "invisible(parse(file=commandArgs(trailingOnly=TRUE)[1]))".into(),
+                "--args".into(),
+                src.to_string_lossy().into_owned(),
+            ]);
+            steps.push(ProcessSpec {
+                program: sel.program.to_string_lossy().into_owned(),
+                args,
+            });
+        }
+        let entry = r_files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("main.r"))
+            })
+            .cloned()
+            .or_else(|| (r_files.len() == 1).then(|| r_files[0].clone()));
+        return Ok(Prepared {
+            root: root.to_path_buf(),
+            system: BuildKind::Native,
+            profile: req.profile.clone(),
+            toolchains: vec![sel],
+            steps,
+            env: m.env.clone(),
+            artifact: entry,
+            up_to_date: 0,
+            stamps: Vec::new(),
+            output_root: Some(output_root),
+            dirs: Vec::new(),
+        });
+    }
+
     // Single-invocation languages
     if matches!(lang, Language::Zig | Language::Rust) {
         let sel = select::choose(m, user, req, toolchains, lang)?;
@@ -432,6 +508,10 @@ pub(crate) fn prepare(
                 args.extend(includes.iter().cloned());
                 args.extend(defines.iter().cloned());
                 if *kind == SourceKind::Fortran {
+                    let has_cpp_flag = args.iter().any(|a| a == "-cpp" || a == "-fpp");
+                    if fortran::needs_cpp(src) && !has_cpp_flag {
+                        args.push("-cpp".into());
+                    }
                     match t.kind {
                         "gfortran" => {
                             args.extend(["-J".into(), mod_dir.to_string_lossy().into_owned()])
@@ -590,7 +670,80 @@ mod tests {
         assert_eq!(classify(Path::new("a.S")), Some(SourceKind::Gas));
         assert_eq!(classify(Path::new("a.asm")), Some(SourceKind::Nasm));
         assert_eq!(classify(Path::new("a.F90")), Some(SourceKind::Fortran));
+        assert_eq!(classify(Path::new("a.f18")), Some(SourceKind::Fortran));
+        assert_eq!(classify(Path::new("a.fpp")), Some(SourceKind::Fortran));
         assert_eq!(classify(Path::new("a.h")), None);
+    }
+
+    #[test]
+    fn fortran_uppercase_passes_cpp_and_r_prepares_syntax_check() {
+        let dir = std::env::temp_dir().join(format!("embedide-fort-r-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.F90"),
+            "#define VAL 42\nprogram p\n  print *, VAL\nend program p\n",
+        )
+        .unwrap();
+        let mut fm = Manifest::new("fort", Language::Fortran, BuildKind::Native);
+        fm.toolchain.insert("fortran".into(), "gfortran".into());
+        let gfortran = Toolchain {
+            id: "gfortran".into(),
+            kind: "gfortran",
+            family: Family::Gcc,
+            languages: vec![Language::Fortran],
+            program: PathBuf::from("/usr/bin/gfortran"),
+            prefix_args: Vec::new(),
+            version: Some("gfortran 14".into()),
+            target: None,
+            cross: false,
+            origin: embedide_toolchains::Origin::Path,
+            problem: None,
+        };
+        let fprep = prepare(
+            &dir,
+            &fm,
+            &UserConfig::default(),
+            std::slice::from_ref(&gfortran),
+            &Request::default(),
+        )
+        .unwrap();
+        assert!(
+            fprep.steps[0].args.iter().any(|a| a == "-cpp"),
+            "uppercase .F90 must pass -cpp: {:?}",
+            fprep.steps[0].args
+        );
+
+        std::fs::write(dir.join("src/main.R"), "x <- mean(c(1, 2, 3))\n").unwrap();
+        let mut rm = Manifest::new("stats", Language::R, BuildKind::Native);
+        rm.toolchain.insert("r".into(), "rscript".into());
+        let rscript = Toolchain {
+            id: "rscript".into(),
+            kind: "rscript",
+            family: Family::R,
+            languages: vec![Language::R],
+            program: PathBuf::from("/usr/bin/Rscript"),
+            prefix_args: Vec::new(),
+            version: Some("Rscript 4.4".into()),
+            target: None,
+            cross: false,
+            origin: embedide_toolchains::Origin::Path,
+            problem: None,
+        };
+        let rprep = prepare(
+            &dir,
+            &rm,
+            &UserConfig::default(),
+            std::slice::from_ref(&rscript),
+            &Request::default(),
+        )
+        .unwrap();
+        assert_eq!(rprep.steps.len(), 1);
+        assert_eq!(rprep.steps[0].program, "/usr/bin/Rscript");
+        assert!(rprep.steps[0].args.iter().any(|a| a == "--vanilla"));
+        assert!(rprep.steps[0].args.iter().any(|a| a.ends_with("main.R")));
+        assert_eq!(rprep.artifact, Some(dir.join("src/main.R")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

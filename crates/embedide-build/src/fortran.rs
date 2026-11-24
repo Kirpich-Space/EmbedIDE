@@ -22,11 +22,19 @@ pub(crate) struct Scan {
     pub includes: Vec<String>,
 }
 
-/// Source form of a file: free-form, or fixed-form (`.f`, `.for` and their upper-case variants).
+/// Source form of a file: free-form, or fixed-form (`.f`, `.for`, `.ftn` and their upper-case variants).
 pub(crate) fn is_fixed_form(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
         Some("f" | "F" | "for" | "FOR" | "ftn" | "FTN")
+    )
+}
+
+/// Whether the extension conventionally enables the C preprocessor in Fortran (`-cpp`).
+pub(crate) fn needs_cpp(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("F" | "FOR" | "FTN" | "F90" | "F95" | "F03" | "F08" | "F18" | "fpp" | "FPP")
     )
 }
 

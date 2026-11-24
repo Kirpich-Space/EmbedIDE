@@ -60,7 +60,8 @@ pub const TEMPLATES: &[(&str, &str)] = &[
         "asm",
         "Host C program calling a GNU assembly function (x86_64/aarch64)",
     ),
-    ("fortran", "Fortran program (native build)"),
+    ("fortran", "Fortran program (multi-module native build)"),
+    ("r", "R statistical computing project (Rscript)"),
     (
         "c-cortex-m",
         "Bare-metal C firmware for an Arm Cortex-M board (needs --board, cross GCC)",
@@ -182,6 +183,7 @@ pub fn create(root: &Path, name: &str, opts: &CreateOptions) -> Result<Created> 
                 Language::Zig => "zig".into(),
                 Language::Asm => "asm".into(),
                 Language::Fortran => "fortran".into(),
+                Language::R => "r".into(),
             });
     if !TEMPLATES.iter().any(|(t, _)| *t == template) {
         let ids: Vec<_> = TEMPLATES.iter().map(|(t, _)| *t).collect();
@@ -229,6 +231,7 @@ pub fn create(root: &Path, name: &str, opts: &CreateOptions) -> Result<Created> 
         "rust" => (Language::Rust, BuildKind::Cargo),
         "zig" => (Language::Zig, BuildKind::Native),
         "asm" => (Language::Asm, BuildKind::Native),
+        "r" => (Language::R, BuildKind::Native),
         _ => (Language::Fortran, BuildKind::Native),
     };
     let mut m = Manifest::new(name, lang, system);
@@ -267,15 +270,36 @@ pub fn create(root: &Path, name: &str, opts: &CreateOptions) -> Result<Created> 
             m.toolchain.entry("asm".into()).or_insert(c_choice);
         }
         "fortran" => {
+            let prog = name.replace(['-', '.'], "_");
+            write_new(
+                root,
+                "src/math_mod.f90",
+                "module math_mod\n  use, intrinsic :: iso_fortran_env, only: real64\n  implicit none\n  private\n  public :: real64, mean_value\ncontains\n  pure real(real64) function mean_value(xs)\n    real(real64), intent(in) :: xs(:)\n    if (size(xs) == 0) then\n      mean_value = 0.0_real64\n    else\n      mean_value = sum(xs) / real(size(xs), real64)\n    end if\n  end function mean_value\nend module math_mod\n",
+                &mut files,
+            )?;
             write_new(
                 root,
                 "src/main.f90",
                 &format!(
-                    "program {}\n  implicit none\n  print *, 'Hello from {name}'\nend program\n",
-                    name.replace(['-', '.'], "_")
+                    "program {prog}\n  use math_mod, only: real64, mean_value\n  implicit none\n  real(real64), parameter :: samples(3) = [1.0_real64, 2.0_real64, 3.0_real64]\n  print '(A,F0.2)', 'Hello from {name}, mean = ', mean_value(samples)\nend program {prog}\n"
                 ),
                 &mut files,
             )?;
+            m.build.flags = vec!["-Wall".into()];
+        }
+        "r" => {
+            write_new(
+                root,
+                "src/main.R",
+                &format!(
+                    "#!/usr/bin/env Rscript\n# {name} — R project created by EmbedIDE\n\nsummarise_vector <- function(x) {{\n  list(\n    n = length(x),\n    mean = mean(x),\n    sd = sd(x)\n  )\n}}\n\nsamples <- c(1.0, 2.0, 3.0, 4.0, 5.0)\nstats <- summarise_vector(samples)\ncat(sprintf(\"Hello from {name}: n=%d mean=%.2f sd=%.2f\\n\", stats$n, stats$mean, stats$sd))\n"
+                ),
+                &mut files,
+            )?;
+            m.profiles.clear();
+            m.profiles.insert("debug".into(), crate::Profile::default());
+            m.profiles
+                .insert("release".into(), crate::Profile::default());
         }
         "c-cortex-m" => {
             let id = opts.board.clone().ok_or_else(|| {

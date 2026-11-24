@@ -18,7 +18,12 @@ def emit(obj):
 
 
 if args == ["--version"]:
-    print("2.1.322 (Claude Code)" if "claude" in kind else "codex-cli 0.163.0")
+    if "claude" in kind:
+        print("2.1.322 (Claude Code)")
+    elif kind == "agy":
+        print("1.5.14")
+    else:
+        print("codex-cli 0.163.0")
     sys.exit(0)
 if args in (["--help"], ["exec", "--help"]):
     if kind == "claude":
@@ -26,8 +31,18 @@ if args in (["--help"], ["exec", "--help"]):
               "  --tools <tools...>\n  --no-session-persistence\n")
     elif kind == "old-claude":
         print("  -p, --print  Print response and exit\n  --output-format text|json\n")
+    elif kind == "agy":
+        print("  --print\n  --output-format (text, json, stream-json)\n  --mode (accept-edits, auto, plan)\n"
+              "  --sandbox\n  --disable-slash-commands\n  --conversation\n")
     else:
         print("  -s, --sandbox <SANDBOX_MODE>\n  --json\n  --ephemeral\n")
+    sys.exit(0)
+if args == ["models"]:
+    if mode == "loggedout":
+        print("Error: not authenticated. Please sign in.", file=sys.stderr)
+        sys.exit(1)
+    print("\r⠋ Fetching available models...\rgemini-4-neon-high   Gemini 4 Neon (High)")
+    print("claude-sonnet-5-5-medium  Claude Sonnet 5.5 (Medium)")
     sys.exit(0)
 if args[:2] == ["auth", "status"]:
     logged = mode != "loggedout"
@@ -50,6 +65,11 @@ with open(os.path.join(logdir, "cwd"), "w") as f:
 if mode == "noread":
     sys.exit(0)
 prompt = sys.stdin.read()
+if kind == "agy" and not prompt:
+    for a in args:
+        if a.startswith("--print="):
+            prompt = a.removeprefix("--print=")
+            break
 with open(os.path.join(logdir, "stdin"), "w") as f:
     f.write(prompt)
 marker = (prompt.strip().splitlines()[-1] if prompt.strip() else "").removeprefix("User: ")
@@ -98,6 +118,18 @@ if kind == "claude":
     emit({"type": "assistant", "message": {"model": "mock-model", "content": [{"type": "text", "text": "".join(parts)}]}})
     emit({"type": "result", "subtype": "success", "is_error": False, "result": "".join(parts),
           "usage": {"input_tokens": 11, "output_tokens": 7}})
+    sys.exit(0)
+if kind == "agy":
+    emit({"event": "init", "conversation_id": "conv-1", "init": {"model": "gemini-4-neon-high"}})
+    if mode == "auth":
+        emit({"event": "result", "result": {"status": "ERROR", "error": "401 Unauthorized: please sign in", "usage": {}}})
+        sys.exit(1)
+    if mode == "limit":
+        emit({"event": "result", "result": {"status": "ERROR", "error": "quota exceeded (429)", "usage": {}}})
+        sys.exit(1)
+    reply = "agy answer for " + marker
+    emit({"event": "step_update", "step_update": {"step_index": 1, "state": "DONE", "step_type": "agent_response", "text_delta": reply}})
+    emit({"event": "result", "result": {"conversation_id": "conv-1", "status": "SUCCESS", "response": reply, "usage": {"input_tokens": 19, "output_tokens": 6}}})
     sys.exit(0)
 # codex
 emit({"type": "thread.started", "thread_id": "t"})
