@@ -15,7 +15,19 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
+
+/// Result of waiting for terminal input without entering `crossterm` on a closed TTY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PollOutcome {
+    /// Input bytes are available on the controlling terminal.
+    Ready,
+    /// Timeout elapsed cleanly with no input.
+    Timeout,
+    /// Terminal hung up (`POLLHUP`/`POLLERR`/`POLLNVAL`) or a termination signal arrived.
+    Disconnected,
+}
 
 pub(super) struct TerminalGuard {
     raw: bool,
@@ -105,6 +117,83 @@ impl TerminalGuard {
     }
     pub fn take_resize(&self) -> bool {
         self.resized.swap(false, Ordering::Relaxed)
+    }
+    /// Non-blocking check for whether the controlling terminal hung up or closed.
+    pub fn stdin_hung_up(&self) -> bool {
+        #[cfg(unix)]
+        {
+            use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+            use std::os::fd::AsFd;
+            let stdin = io::stdin();
+            let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+            match poll(&mut fds, PollTimeout::ZERO) {
+                Ok(0) => false,
+                Ok(_) => fds[0].revents().is_some_and(|r| {
+                    r.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+                }),
+                Err(nix::errno::Errno::EINTR) => self.interrupted(),
+                Err(_) => true,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+    /// Wait up to `timeout` for input, catching `SIGHUP`/`SIGTERM`/`SIGINT` and
+    /// `POLLHUP`/`POLLERR`/`POLLNVAL` before calling into `crossterm` so closing
+    /// a terminal window never leaves the process spinning at 100% CPU.
+    pub fn poll_input(&self, timeout: Duration) -> io::Result<PollOutcome> {
+        if self.interrupted() {
+            return Ok(PollOutcome::Disconnected);
+        }
+        #[cfg(unix)]
+        {
+            use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+            use std::os::fd::AsFd;
+            let stdin = io::stdin();
+            let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+            let poll_timeout =
+                PollTimeout::try_from(timeout).unwrap_or(PollTimeout::from(u16::MAX));
+            match poll(&mut fds, poll_timeout) {
+                Ok(0) => {
+                    if self.interrupted() {
+                        Ok(PollOutcome::Disconnected)
+                    } else {
+                        Ok(PollOutcome::Timeout)
+                    }
+                }
+                Ok(_) => {
+                    let revents = fds[0].revents().unwrap_or(PollFlags::empty());
+                    if revents
+                        .intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+                        || self.interrupted()
+                    {
+                        Ok(PollOutcome::Disconnected)
+                    } else if revents.contains(PollFlags::POLLIN) {
+                        Ok(PollOutcome::Ready)
+                    } else {
+                        Ok(PollOutcome::Timeout)
+                    }
+                }
+                Err(nix::errno::Errno::EINTR) => {
+                    if self.interrupted() {
+                        Ok(PollOutcome::Disconnected)
+                    } else {
+                        Ok(PollOutcome::Timeout)
+                    }
+                }
+                Err(err) => Err(io::Error::from_raw_os_error(err as i32)),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if crossterm::event::poll(timeout)? {
+                Ok(PollOutcome::Ready)
+            } else {
+                Ok(PollOutcome::Timeout)
+            }
+        }
     }
 }
 impl Drop for TerminalGuard {

@@ -1,5 +1,10 @@
 # Changelog
 
+## `embed` 0.2.0-alpha.2 — 2026-11-26
+
+### Fixed
+- **Critical 100% CPU spin & leaked child processes on terminal close (`POLLHUP`/`SIGHUP`):** switched `crossterm` to `use-dev-tty` (`tty.rs`, avoiding `crossterm 0.29`'s `mio.rs` infinite loop on `Ok(0)` EOF / `Err(EIO)`), added a `nix::poll` pre-check in `TerminalGuard::poll_input` that immediately detects `POLLHUP`/`POLLERR`/`POLLNVAL` and `SIGHUP`/`SIGTERM`/`SIGINT` before entering `crossterm`, added `impl Drop for Workspace` and `impl Drop for livecheck::Runner` (with `process_group(0)` + `killpg(..., SIGKILL)`) so every child process (`fish`/`sh`, LSP, builds, `livecheck`, AI CLI) terminates promptly on every exit path, eliminated panic on writing to a closed `stderr`, and added a PTY hangup regression test.
+
 ## `embed` 0.2.0-alpha.1 — 2026-11-24
 
 ### Added

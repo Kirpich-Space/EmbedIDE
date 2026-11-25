@@ -460,7 +460,7 @@ fn main() -> ExitCode {
         Err(CliError { usage, message }) => {
             let kind = if usage { "usage" } else { "operation" };
             if !cli.json {
-                eprintln!("embed: {message}");
+                let _ = writeln!(io::stderr(), "embed: {message}");
                 return ExitCode::from(if usage { 2 } else { 1 });
             }
             (
@@ -477,7 +477,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::from(code),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("embed: cannot write output: {e}");
+            let _ = writeln!(io::stderr(), "embed: cannot write output: {e}");
             ExitCode::from(1)
         }
     }

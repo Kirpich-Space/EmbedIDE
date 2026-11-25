@@ -42,7 +42,7 @@ never flashes anything on its own.
 
 **Supported systems: Linux and FreeBSD (both verified: tests and terminal checks were run on each).** Windows and macOS are not supported.
 
-## 0.2.0-alpha.1 — public alpha
+## 0.2.0-alpha.2 — public alpha
 
 An **alpha**: usable for real work in the terminal on Linux and FreeBSD, with rough edges. What was checked, and how, is in
 [Verified and unverified functionality](docs/cli/status.md).
@@ -60,7 +60,7 @@ Hardware is never touched automatically: flashing and debugging need an explicit
 `embed` opens a full-screen, keyboard-driven IDE in your terminal:
 
 ```
-┌ EmbedIDE 0.2.0-alpha.1 | build status | project | target | profile ──────────────────────────────┐
+┌ EmbedIDE 0.2.0-alpha.2 | build status | project | target | profile ──────────────────────────────┐
 │ EXPLORER (C-A-1) │ editor tabs, Vim modes, syntax highlighting           │ AI (C-A-2)    │
 │                  │                                                        │ chat, context │
 │                  │                                                        │ edits, review │
@@ -70,7 +70,7 @@ Hardware is never touched automatically: flashing and debugging need an explicit
 
 ```sh
 cargo install --path crates/embedide-cli --locked --root ~/.local   # → ~/.local/bin/embed
-command -v embed && embed --version                                  # → embed 0.2.0-alpha.1
+command -v embed && embed --version                                  # → embed 0.2.0-alpha.2
 cd my-project && embed                     # or: embed path/to/project, embed src/main.c
 ```
 
@@ -205,9 +205,9 @@ static and runs on any Linux x86_64; the `-gnu` archive is dynamic (glibc 2.39+)
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing          # verify the download
-tar -xzf embed-0.2.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz
-install -m 0755 embed-0.2.0-alpha.1-x86_64-unknown-linux-gnu/embed ~/.local/bin/embed
-embed --version                                    # → embed 0.2.0-alpha.1
+tar -xzf embed-0.2.0-alpha.2-x86_64-unknown-linux-gnu.tar.gz
+install -m 0755 embed-0.2.0-alpha.2-x86_64-unknown-linux-gnu/embed ~/.local/bin/embed
+embed --version                                    # → embed 0.2.0-alpha.2
 embed doctor
 ```
 

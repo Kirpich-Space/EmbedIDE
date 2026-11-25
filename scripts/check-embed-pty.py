@@ -1462,6 +1462,46 @@ class EmbedContracts(unittest.TestCase):
         self.assertIn("exit 0\n", saved)
         self.assertIn("echo done", saved)
 
+    def test_closing_terminal_exits_promptly_without_cpu_spin_or_leaked_shell(self):
+        """Closing the outer terminal PTY (POLLHUP/SIGHUP) must stop embed and its
+        integrated shell immediately rather than spinning at 100% CPU."""
+        self.env["SHELL"] = "/bin/sh"
+        ide = Ide(self.root, self.env)
+        try:
+            ide.keys(ide.esc)
+            ide.panel("3")
+            ide.until(b"> TERMINAL | /bin/sh")
+            tag = f"4444{os.getpid()}"
+            ide.type(f"sleep {tag} &\r")
+            time.sleep(0.3)
+            # Close the master PTY without sending :q (simulates closing the terminal window).
+            os.close(ide.master)
+            ide.master = -1
+            deadline = time.monotonic() + 3.0
+            while ide.process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            rc = ide.process.poll()
+            self.assertIsNotNone(rc, "embed kept running (CPU spin) after terminal closed")
+            self.assertNotEqual(rc, 101, "embed panicked on closed terminal")
+            deadline = time.monotonic() + 3.0
+            alive = b""
+            while time.monotonic() < deadline:
+                alive = subprocess.run(["pgrep", "-f", f"sleep {tag}"], capture_output=True).stdout
+                if not alive:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(alive, b"", "child job survived terminal hangup")
+        finally:
+            if ide.process.poll() is None:
+                ide.process.kill()
+                ide.process.wait(timeout=5)
+            for fd in (ide.master, ide.slave):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)

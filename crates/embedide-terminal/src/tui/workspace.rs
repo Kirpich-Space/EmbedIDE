@@ -5547,60 +5547,93 @@ pub fn run_with(
     app.set_keyboard_enhanced(guard.keyboard_enhanced());
     let mut screen = Screen::default();
     let mut dirty = true;
-    while !app.closed {
-        if guard.interrupted() {
-            return Err(FrontendError::Interrupted);
-        }
-        if guard.take_resize() {
-            let (width, height) = terminal::size()?;
-            app.handle(Event::Resize(width, height));
-            dirty = true;
-        }
-        dirty |= app.tick();
-        guard.set_mouse(app.mouse)?;
-        if dirty {
-            screen.set_theme(match app.config.theme.as_str() {
-                "dark" => Theme::Dark,
-                "light" => Theme::Light,
-                _ => Theme::Mono,
-            });
-            screen.draw(&app.frame()?, &mut io::stdout())?;
-            dirty = false;
-        }
-        let interval = if app.operation.is_some()
-            || app.debug.is_some()
-            || app.serial.is_some()
-            || app.inventory.is_some()
-            || app.assistant.busy()
-            || app.terminal.is_some()
-            || app.live_check.busy()
-            || app.auto_save_due.is_some()
-        {
-            20
-        } else {
-            // The Unix resize flag may be the only SIGWINCH path. Keep its
-            // latency below a visibly sluggish quarter-second idle poll.
-            50
-        };
-        if event::poll(Duration::from_millis(interval))? {
-            dirty |= app.handle(event::read()?);
-            if let Some(text) = app.take_clipboard() {
-                use std::io::Write;
-                // OSC 52 asks the terminal to put the text on the clipboard.
-                let mut out = io::stdout();
-                out.write_all(osc52(&text.chars().take(100_000).collect::<String>()).as_bytes())?;
-                out.flush()?;
+    let outcome: Result<(), FrontendError> = (|| {
+        while !app.closed {
+            if guard.interrupted() {
+                return Err(FrontendError::Interrupted);
+            }
+            if guard.take_resize() {
+                let (width, height) = terminal::size()?;
+                app.handle(Event::Resize(width, height));
+                dirty = true;
+            }
+            dirty |= app.tick();
+            guard.set_mouse(app.mouse)?;
+            if dirty {
+                screen.set_theme(match app.config.theme.as_str() {
+                    "dark" => Theme::Dark,
+                    "light" => Theme::Light,
+                    _ => Theme::Mono,
+                });
+                screen.draw(&app.frame()?, &mut io::stdout())?;
+                dirty = false;
+            }
+            let interval = if app.operation.is_some()
+                || app.debug.is_some()
+                || app.serial.is_some()
+                || app.inventory.is_some()
+                || app.assistant.busy()
+                || app.terminal.is_some()
+                || app.live_check.busy()
+                || app.auto_save_due.is_some()
+            {
+                20
+            } else {
+                // The Unix resize flag may be the only SIGWINCH path. Keep its
+                // latency below a visibly sluggish quarter-second idle poll.
+                50
+            };
+            match guard.poll_input(Duration::from_millis(interval))? {
+                guard::PollOutcome::Disconnected => return Err(FrontendError::Interrupted),
+                guard::PollOutcome::Timeout => {}
+                guard::PollOutcome::Ready => {
+                    // `crossterm`'s `use-dev-tty` source treats `Duration::ZERO` as an already-expired
+                    // timeout without reading `stdin`; 1 ms enters `read()` immediately when bytes are ready
+                    // and drains any remaining buffered events from its parser.
+                    while !app.closed
+                        && !guard.interrupted()
+                        && !guard.stdin_hung_up()
+                        && event::poll(Duration::from_millis(1))?
+                    {
+                        dirty |= app.handle(event::read()?);
+                        if let Some(text) = app.take_clipboard() {
+                            use std::io::Write;
+                            // OSC 52 asks the terminal to put the text on the clipboard.
+                            let mut out = io::stdout();
+                            out.write_all(
+                                osc52(&text.chars().take(100_000).collect::<String>()).as_bytes(),
+                            )?;
+                            out.flush()?;
+                        }
+                    }
+                }
             }
         }
+        Ok(())
+    })();
+    // Always stop every owned service/child process while the terminal guard is still active,
+    // including on SIGHUP/SIGTERM/POLLHUP or I/O errors when the terminal window closes.
+    app.shutdown_services();
+    outcome
+}
+
+impl Workspace {
+    /// Terminate every background process and service owned by this workspace.
+    fn shutdown_services(&mut self) {
+        self.live_check.cancel();
+        self.lsp.clear();
+        self.operation = None;
+        self.serial = None;
+        self.debug = None;
+        self.terminal = None;
+        self.assistant.shutdown();
     }
-    // Drop service owners while the terminal guard is still active.
-    app.lsp.clear();
-    app.operation = None;
-    app.serial = None;
-    app.debug = None;
-    app.terminal = None;
-    app.assistant.shutdown();
-    Ok(())
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        self.shutdown_services();
+    }
 }
 
 /// Draw the popup under the cursor (above it when there is more room),

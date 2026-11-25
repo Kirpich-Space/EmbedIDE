@@ -225,6 +225,7 @@ checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
 dependencies = [
  "bitflags 2.13.2",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix",
@@ -283,7 +284,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "embedide-ai"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "embedide-workspace",
  "nix 0.30.1",
@@ -295,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-build"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "embedide-core",
  "embedide-toolchains",
@@ -306,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-cli"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "clap",
  "ctrlc",
@@ -322,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "embedide-editor",
  "embedide-project",
@@ -335,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-editor"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "unicode-segmentation",
  "unicode-width",
@@ -343,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-project"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -351,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-terminal"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "crossterm",
  "embedide-ai",
@@ -371,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-toolchains"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "flate2",
  "lzma-rs",
@@ -383,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "embedide-workspace"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "embedide-toolchains",
  "serde",

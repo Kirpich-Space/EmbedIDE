@@ -14,8 +14,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -66,6 +66,7 @@ pub(crate) struct Runner {
     generation: u64,
     pending: Option<Pending>,
     rx: Option<mpsc::Receiver<LiveResult>>,
+    active_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Runner {
@@ -84,11 +85,14 @@ impl Runner {
         });
     }
 
-    /// Cancel any queued check and ignore any in-flight result.
+    /// Cancel any queued check and signal any in-flight check to terminate immediately.
     pub(crate) fn cancel(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.pending = None;
         self.rx = None;
+        if let Some(flag) = self.active_cancel.take() {
+            flag.store(true, Ordering::Release);
+        }
     }
 
     /// Take the due pending check if its debounce window has elapsed.
@@ -104,14 +108,19 @@ impl Runner {
         Some((self.generation, pending.path, pending.language))
     }
 
-    /// Spawn a background worker for `job`, superseding any previous worker.
+    /// Spawn a background worker for `job`, superseding and cancelling any previous worker.
     pub(crate) fn spawn(&mut self, job: CheckJob) {
+        if let Some(prev) = self.active_cancel.take() {
+            prev.store(true, Ordering::Release);
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.active_cancel = Some(cancel.clone());
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let _ = thread::Builder::new()
             .name("embedide-livecheck".into())
             .spawn(move || {
-                if let Some(items) = run_check(&job) {
+                if let Some(items) = run_check(&job, &cancel) {
                     let _ = tx.send(LiveResult {
                         generation: job.generation,
                         path: job.path,
@@ -127,14 +136,22 @@ impl Runner {
         match rx.try_recv() {
             Ok(result) => {
                 self.rx = None;
+                self.active_cancel = None;
                 (result.generation == self.generation).then_some(result)
             }
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.rx = None;
+                self.active_cancel = None;
                 None
             }
         }
+    }
+}
+
+impl Drop for Runner {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -310,7 +327,10 @@ fn find_in_path(names: &[&str]) -> Option<PathBuf> {
 }
 
 /// Execute the syntax check in an isolated temporary directory and map diagnostics back to `job.path`.
-fn run_check(job: &CheckJob) -> Option<Vec<Diagnostic>> {
+fn run_check(job: &CheckJob, cancelled: &AtomicBool) -> Option<Vec<Diagnostic>> {
+    if cancelled.load(Ordering::Acquire) {
+        return None;
+    }
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp_dir =
         std::env::temp_dir().join(format!("embedide-livecheck-{}-{seq}", std::process::id()));
@@ -334,30 +354,47 @@ fn run_check(job: &CheckJob) -> Option<Vec<Diagnostic>> {
     let out_file = fs::File::create(&out_path).ok()?;
     let err_file = fs::File::create(&err_path).ok()?;
 
-    let mut child = Command::new(&program)
-        .args(&args)
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
         .current_dir(&job.root)
         .stdin(Stdio::null())
         .stdout(Stdio::from(out_file))
-        .stderr(Stdio::from(err_file))
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::from(err_file));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().ok()?;
+
+    let kill_tree = |child: &mut std::process::Child| {
+        #[cfg(unix)]
+        {
+            use nix::{
+                sys::signal::{killpg, Signal},
+                unistd::Pid,
+            };
+            if let Ok(pid) = i32::try_from(child.id()) {
+                let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
 
     let deadline = Instant::now() + CHECK_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
+                    kill_tree(&mut child);
                     return None;
                 }
                 thread::sleep(Duration::from_millis(15));
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 return None;
             }
         }
@@ -522,7 +559,7 @@ Error: Symbol 'result' at (1) has no IMPLICIT type
                 .into(),
             compilers: Vec::new(),
         };
-        let diags = run_check(&job).expect("gfortran check ran");
+        let diags = run_check(&job, &AtomicBool::new(false)).expect("gfortran check ran");
         assert!(
             diags.iter().any(|d| d.line == 3 && d.severity == "error"),
             "expected error on line 3: {diags:?}"

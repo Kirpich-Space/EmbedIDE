@@ -201,13 +201,22 @@ pub fn run(editor: Editor) -> Result<SessionReport, FrontendError> {
             app.handle(Event::Resize(width, height));
             screen.draw(&app.frame()?, &mut io::stdout())?;
         }
-        // A bounded wait is needed to observe handled termination signals.
-        // Timeouts never redraw; ordinary keyboard input wakes immediately.
-        if event::poll(Duration::from_millis(250))?
-            && app.handle(event::read()?)
-            && !app.editor().state().is_closed()
-        {
-            screen.draw(&app.frame()?, &mut io::stdout())?;
+        // A bounded wait is needed to observe handled termination signals and
+        // detect a closed terminal (POLLHUP) without spinning inside crossterm.
+        match guard.poll_input(Duration::from_millis(250))? {
+            guard::PollOutcome::Disconnected => return Err(FrontendError::Interrupted),
+            guard::PollOutcome::Timeout => {}
+            guard::PollOutcome::Ready => {
+                while !app.editor().state().is_closed()
+                    && !guard.interrupted()
+                    && !guard.stdin_hung_up()
+                    && event::poll(Duration::from_millis(1))?
+                {
+                    if app.handle(event::read()?) && !app.editor().state().is_closed() {
+                        screen.draw(&app.frame()?, &mut io::stdout())?;
+                    }
+                }
+            }
         }
     }
     app.session.report()
